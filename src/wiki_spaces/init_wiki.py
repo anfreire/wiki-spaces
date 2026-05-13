@@ -1,0 +1,221 @@
+"""Scaffold a new wiki at the given path and register it as the canonical wiki.
+
+Always writes the spec-required `index.md`. Optional files via --with:
+  --with log.md _meta/taxonomy.md .manifest.json _template.md hot.md
+
+Optional top-level categorical folders via --folders (plain directories, no
+`index.md` — they become spaces only if the user later adds one):
+  --folders concepts entities projects
+
+After scaffolding, writes `wiki = <path>` to ~/.config/wiki-spaces/config so
+all skills can locate it. Pass --no-config for tests / dry workflows where
+you don't want to clobber the config. (Scaffolding spaces inside an existing
+wiki is out of scope for this script — the parent's `## Spaces` would also
+need updating; do that mount via references/MOUNT.md instead.)
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+from ._common import CONFIG_PATH, write_config
+
+OPTIONAL = {"log.md", "hot.md", "_template.md", "_meta/taxonomy.md", ".manifest.json"}
+
+INDEX_MD = """# {name}
+
+## What this space is
+
+{description}
+"""
+
+DEFAULT_DESCRIPTION = "<one paragraph describing this wiki>"
+
+LOG_MD = "# Log\n"
+HOT_MD = "# Hot\n\n_Currently active work._\n"
+TEMPLATE_MD = """---
+title: >-
+  {{ title }}
+category:
+tags: []
+aliases: []
+sources: []
+summary: >-
+  ≤200 chars
+created: {{ now }}
+updated: {{ now }}
+---
+
+# {{ title }}
+
+One-paragraph summary.
+
+## Key Ideas
+
+## Open Questions
+"""
+TAXONOMY_MD = """# Tag Taxonomy
+
+Canonical tag vocabulary. Max 5 tags per page; lowercase/hyphenated.
+
+## Domain Tags
+
+| Tag | Purpose | Aliases |
+|---|---|---|
+
+## Type Tags
+
+| Tag | Purpose |
+|---|---|
+"""
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Scaffold a new wiki-spaces wiki.")
+    parser.add_argument("path", type=Path, help="target directory (created if missing)")
+    parser.add_argument(
+        "--with",
+        dest="extras",
+        nargs="*",
+        default=[],
+        choices=sorted(OPTIONAL),
+        help="optional convention files to include",
+    )
+    parser.add_argument("--name", help="display name (defaults to directory basename)")
+    parser.add_argument(
+        "--description",
+        help="one-paragraph description of this wiki (injected into index.md's "
+        "'What this space is' section; placeholder used if omitted)",
+    )
+    parser.add_argument(
+        "--folders",
+        nargs="+",
+        default=[],
+        metavar="NAME",
+        help="top-level categorical folders to create as plain directories",
+    )
+    parser.add_argument("--force", action="store_true", help="overwrite existing files")
+    parser.add_argument(
+        "--git",
+        action="store_true",
+        help="run 'git init -b main' inside the new wiki after scaffolding",
+    )
+    parser.add_argument(
+        "--no-config",
+        action="store_true",
+        help="do not write wiki=<path> to ~/.config/wiki-spaces/config (default: write)",
+    )
+    args = parser.parse_args(argv)
+
+    root = args.path.resolve()
+    name = args.name or root.name
+    description = (args.description or DEFAULT_DESCRIPTION).strip()
+
+    folders = [f.rstrip("/") for f in args.folders]
+    invalid_folders = []
+    for raw, folder in zip(args.folders, folders):
+        if not folder or "/" in folder or folder.startswith("."):
+            invalid_folders.append(raw)
+            continue
+        try:
+            (root / folder).resolve().relative_to(root)
+        except ValueError:
+            invalid_folders.append(raw)
+    if invalid_folders:
+        bad = ", ".join(repr(f) for f in invalid_folders)
+        print(f"  ! invalid folder name(s): {bad}", file=sys.stderr)
+        print(
+            "    folder names must be non-empty, contain no '/' (a trailing '/' is stripped), not start with '.', and resolve inside the wiki root",
+            file=sys.stderr,
+        )
+        return 2
+
+    root.mkdir(parents=True, exist_ok=True)
+
+    folder_collisions = [f for f in folders if (root / f).exists() and not (root / f).is_dir()]
+    if folder_collisions:
+        bad = ", ".join(repr(f) for f in folder_collisions)
+        print(
+            f"  ! cannot create folder(s) {bad}: a non-directory file exists at that path",
+            file=sys.stderr,
+        )
+        return 2
+
+    written: list[str] = []
+    skipped: list[str] = []
+
+    def write(rel: str, content: str) -> None:
+        f = root / rel
+        if f.exists() and not args.force:
+            skipped.append(rel)
+            return
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(content)
+        written.append(rel)
+
+    write("index.md", INDEX_MD.format(name=name, description=description))
+
+    for opt in args.extras:
+        match opt:
+            case "log.md":
+                write("log.md", LOG_MD)
+            case "hot.md":
+                write("hot.md", HOT_MD)
+            case "_template.md":
+                write("_template.md", TEMPLATE_MD)
+            case "_meta/taxonomy.md":
+                write("_meta/taxonomy.md", TAXONOMY_MD)
+            case ".manifest.json":
+                write(".manifest.json", json.dumps({"projects": {}}, indent=2) + "\n")
+
+    for folder in folders:
+        target = root / folder
+        if target.is_dir():
+            skipped.append(folder + "/")
+            continue
+        target.mkdir()
+        written.append(folder + "/")
+        if args.git:
+            # Empty dirs are invisible to git; drop a .gitkeep so the scaffold
+            # survives clone/checkout. Removed by the user once the folder has
+            # real content.
+            keep = target / ".gitkeep"
+            keep.touch()
+
+    git_failed = False
+    if args.git and not (root / ".git").exists():
+        try:
+            subprocess.run(
+                ["git", "init", "-b", "main"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+            written.append(".git/")
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            print(f"  ! git init failed: {e}", file=sys.stderr)
+            git_failed = True
+    elif args.git:
+        skipped.append(".git/")
+
+    if not args.no_config:
+        write_config({"wiki": str(root)})
+
+    print(f"wiki: {root}")
+    for w in written:
+        print(f"  + {w}")
+    for s in skipped:
+        print(f"  . {s} (exists; --force to overwrite)")
+    if not written:
+        print("  (nothing written)")
+    if not args.no_config:
+        print(f"  → registered as canonical wiki in {CONFIG_PATH}")
+    return 1 if git_failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
