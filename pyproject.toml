@@ -32,6 +32,9 @@ classifiers = [
 ]
 dependencies = []
 
+[dependency-groups]
+test = ["pytest>=8.0"]
+
 [project.scripts]
 wiki-spaces = "wiki_spaces.cli:main"
 
