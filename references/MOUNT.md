@@ -1,6 +1,6 @@
-# Mount an external wiki as a space
+# Mount an external space
 
-Three mechanisms; pick by use case. All produce a space inside the canonical wiki.
+Three mechanisms; pick by use case. The source can be any space — someone's whole wiki, a subtree they extracted, a reference snapshot. From your perspective it lands as a space inside your wiki.
 
 ## Decision
 
@@ -12,10 +12,11 @@ Three mechanisms; pick by use case. All produce a space inside the canonical wik
 
 ## Before mounting (any branch)
 
-- **Trust-scope classification depends on placement.** The heuristic in `CONVENTIONS.md / Owned vs external` marks a space as external only if it's under `<wiki>/shared/`, is a git submodule with a foreign origin, or is a symlink resolving outside the wiki tree. **A plain clone under `<wiki>/projects/<name>/` is classified as *owned* by the heuristic — writes are allowed by default.** If you want the read-only / external semantics, mount under `<wiki>/shared/`.
-- **Parent's tier matters for the `## Spaces` update step.** If the parent `index.md` has a `## Spaces` section (Tier 2 or above), the mount must be listed there (the navigability contract). If the parent is Tier 1 (no `## Spaces`), you have two choices: (a) add a `## Spaces` section now, upgrading the parent to Tier 2 and listing the mount; or (b) leave the parent at Tier 1 and skip the listing — the mount exists on disk but isn't navigable from the parent's index. Ask the user which they want.
+- **Trust-scope classification depends on placement.** The heuristic in `CONVENTIONS.md / Trust Scope` marks a space as external only if it's under `<wiki>/shared/`, is a git submodule with a foreign origin, or is a symlink resolving outside the wiki tree. **A plain clone under `<wiki>/projects/<name>/` is classified as *owned* by the heuristic — writes are allowed by default.** If you want the read-only / external semantics, mount under `<wiki>/shared/`. wiki-spaces stores no per-space ownership metadata; the path-based heuristic is the entire signal, and `git push` permissions are the de facto upstream gate.
+- **Parent's tier matters for the `## Spaces` update step.** If the parent `index.md` has a `## Spaces` section, the mount must be listed there (the navigability contract). If the parent has no `## Spaces`, you have two choices: (a) add `## Spaces` now, upgrading the parent to Tier 2 and listing the mount; or (b) leave the parent at Tier 1 and skip the listing — the mount exists on disk but isn't navigable from the parent's index. Ask the user which they want.
+- **Shortcut for the `## Spaces` update.** After the filesystem step in any branch below, run `wiki-spaces space add <relative-path>` to register the mount with the nearest ancestor. It's idempotent on an existing `index.md` (won't overwrite the mounted content) and walks up to the right ancestor space automatically. When the nearest ancestor is Tier 1 (no `## Spaces` section), the command prints a notice and leaves that ancestor unchanged — pass `--upgrade-parent` to add `## Spaces` there and list the mount in one go.
 
-## Branch A: Git submodule (collaborative shared wiki)
+## Branch A: Git submodule (collaborative shared space)
 
 1. Confirm the canonical wiki is itself a git repo. If not: `cd <wiki>; git init -b main; git add -A; git commit -m "initial"`.
 2. Decide the mount path (typically `<wiki>/shared/<name>/`).

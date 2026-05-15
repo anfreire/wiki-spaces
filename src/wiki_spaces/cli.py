@@ -25,6 +25,7 @@ COMMANDS: dict[str, str] = {
     "init": "wiki_spaces.init_wiki",
     "doctor": "wiki_spaces.doctor",
     "update": "wiki_spaces.update",
+    "space": "wiki_spaces.space",
     "vendor-kepano": "wiki_spaces.vendor_kepano",
 }
 
@@ -38,6 +39,7 @@ def _help_text() -> str:
         "  init            scaffold a new wiki and register it as canonical\n"
         "  doctor          audit config + harness installs + vendored kepano\n"
         "  update          re-vendor (dev) + re-run install\n"
+        "  space           add/remove/audit spaces; maintains ## Spaces contract\n"
         "  vendor-kepano   re-vendor kepano upstream (dev only)\n"
         "\n"
         "Pass --help to any subcommand for its flags."

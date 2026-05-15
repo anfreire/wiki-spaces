@@ -38,10 +38,12 @@ from ._common import (
     Harness,
     data_root,
     harness_present,
+    is_owned_install,
     is_packaged,
     link_or_copy,
     share_dir,
     write_config,
+    write_owned_marker,
 )
 
 
@@ -116,7 +118,7 @@ def _resolve_install_root(*, dry_run: bool) -> tuple[Path, Path]:
 
 
 def install_harness(
-    h: Harness, read_root: Path, write_root: Path, *, dry: bool, copy: bool
+    h: Harness, read_root: Path, write_root: Path, *, dry: bool, copy: bool, force: bool
 ) -> list[str]:
     actions: list[str] = []
     for skill in (*WIKI_SKILLS, *KEPANO_DEPS):
@@ -126,11 +128,19 @@ def install_harness(
             actions.append(f"  {h.key}: ! source missing {src}")
             continue
         dst = h.skills_dir / skill
+        if not force and not is_owned_install(dst, src):
+            actions.append(
+                f"  {h.key}: ! refusing to overwrite unowned {dst} "
+                "(pass --force to replace)"
+            )
+            continue
         if dry:
             future_src = write_root / rel
             actions.append(f"  {h.key}: would link {future_src} -> {dst}")
             continue
         mode = link_or_copy(src, dst, prefer_copy=copy)
+        if mode == "copy":
+            write_owned_marker(dst, src)
         actions.append(f"  {h.key}: {mode} {dst}")
     return actions
 
@@ -141,6 +151,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--copy", action="store_true", help="force copies instead of symlinks")
     parser.add_argument("--harness", action="append", default=[], help="restrict to one harness; repeatable")
     parser.add_argument("--all", action="store_true", help="install for every supported harness")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite existing skill directories that wiki-spaces didn't install",
+    )
     args = parser.parse_args(argv)
 
     _ensure_vendor_dev(dry_run=args.dry_run)
@@ -174,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
 
     for h in selected:
         for line in install_harness(
-            h, read_root, write_root, dry=args.dry_run, copy=args.copy
+            h, read_root, write_root, dry=args.dry_run, copy=args.copy, force=args.force
         ):
             print(line)
 

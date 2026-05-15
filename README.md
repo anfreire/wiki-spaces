@@ -2,38 +2,45 @@
 
 A minimal nestable wiki — a folder with `index.md`, for any use case. Research, recipes, code notes, writing, team docs, a personal life wiki — your shape, your call.
 
-## Install
+Markdown flavor is **Obsidian** — wikilinks, frontmatter, callouts, embeds, comments, Bases. One dialect across the spec, the skills, and the tools.
 
-### Let an AI agent set it up (recommended)
+## Start
 
-Paste this to your AI agent:
+```sh
+mkdir -p ~/Wiki && echo "# My Wiki" > ~/Wiki/index.md
+```
+
+That's a complete wiki. Add files, folders, anything. The whole spec is one page: [`AGENTS.md`](AGENTS.md).
+
+## Optional tooling
+
+For AI agents to find and act on your wiki, install the helper:
+
+```bash
+uvx wiki-spaces install                  # link skills into detected AI harnesses
+uvx wiki-spaces init ~/Wiki              # scaffold + register as default target
+uvx wiki-spaces doctor --no-net          # verify
+```
+
+Or `pip install wiki-spaces` (or `uv tool install wiki-spaces`) and drop the `uvx` prefix.
+
+Also available:
+
+```bash
+uvx wiki-spaces space add projects/foo   # create a space + register it
+uvx wiki-spaces space audit              # report ## Spaces drift
+```
+
+### Let an AI agent do the setup
+
+Paste this to your agent:
 
 ```
 Install and set up wiki-spaces for me by following the instructions here:
 https://raw.githubusercontent.com/anfreire/wiki-spaces/main/references/SETUP.md
 ```
 
-The agent asks what your wiki is for, picks tailored defaults, scaffolds it, links the skills into your harness, and writes the config. Done.
-
-### Just start (no install, no dependencies)
-
-```sh
-mkdir -p ~/Wiki && echo "# My Wiki" > ~/Wiki/index.md
-mkdir -p ~/.config/wiki-spaces
-printf 'wiki = %s/Wiki\n' "$HOME" > ~/.config/wiki-spaces/config
-```
-
-That's a complete wiki. Add files. Install the skills later if you want them.
-
-### Run it yourself
-
-```bash
-uvx wiki-spaces install                  # link skills into detected AI harnesses
-uvx wiki-spaces init ~/Wiki --git        # scaffold a bare wiki
-uvx wiki-spaces doctor --no-net          # verify
-```
-
-Or `pip install wiki-spaces` (or `uv tool install wiki-spaces`) and drop the `uvx` prefix.
+The agent picks tailored defaults, scaffolds, links the skills into your harness, and writes the config.
 
 ## What you get
 
@@ -50,7 +57,7 @@ For Cursor / Windsurf / Copilot / Aider (no skills concept), see [`references/HA
 - [`AGENTS.md`](AGENTS.md) — the spec, one page
 - [`CONVENTIONS.md`](CONVENTIONS.md) — opt-in conventions catalog
 - [`references/EXAMPLES.md`](references/EXAMPLES.md) — topology examples per use case
-- [`references/MOUNT.md`](references/MOUNT.md) — embed external wikis as spaces
+- [`references/MOUNT.md`](references/MOUNT.md) — mount external spaces into your wiki
 
 ## Dependencies
 

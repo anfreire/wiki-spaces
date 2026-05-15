@@ -32,34 +32,43 @@ A folder with `index.md`. Tools can find the wiki, read its `index.md`, and oper
 
 ### Tier 2 — Navigable
 
-`index.md` grows three sections so the wiki maps itself:
+The opt-in marker is the presence of `## Spaces` in `index.md`:
 
-- **`## What this space is`** — opening paragraph in plain prose. The space's own description.
-- **`## Items`** — curated list of files (and plain folders) worth surfacing. Not exhaustive; tools that need every file glob the filesystem.
 - **`## Spaces`** — every space directly inside this one, listed once. **Contract:** this list is exhaustive. Adding a space inside means adding it here in the same change; removing a space means removing the entry. Tools traverse via this list and rely on it being complete.
 
-The opt-in marker is the presence of `## Spaces`. When the marker is present, the contract holds: tools enforce exhaustiveness on writes (add/remove entries automatically) and flag missing entries on audit. When the marker is absent, the wiki is still valid — tools just don't navigate beyond the root `index.md`.
+When `## Spaces` is present, the contract holds: tools enforce exhaustiveness on writes (add/remove entries automatically) and flag missing entries on audit. When the marker is absent, the wiki is still valid — tools just fall back to filesystem discovery beyond the root `index.md`.
+
+Two other `index.md` sections are common but **independent** of the Tier 2 contract — adopt them, or not, without affecting tier:
+
+- **`## What this space is`** — opening paragraph in plain prose. Describes the space.
+- **`## Items`** — curated list of files (and plain folders) worth surfacing. Not exhaustive; tools that need every file glob the filesystem. Hand-managed by the user; tools may remove entries pointing to deleted files but never auto-add.
 
 Each space chooses its own tier independently. A wiki at Tier 2 may contain a space at Tier 1 and another at Tier 3.
 
 Cross-space references go horizontal: `[label](relative/path.md)` or `[[wikilink]]` if surrounding tooling supports it. `index.md` handles parent ↔ child navigation only.
 
-### Tier 3 — Managed
+### Tier 3 — Conventional
 
-Adopts the conventions catalog ([`CONVENTIONS.md`](CONVENTIONS.md)): `log.md`, `_meta/taxonomy.md`, `.manifest.json`, frontmatter schema, the categorical layout, optional `_template.md` and `hot.md`. The three reference skills (`wiki-search`, `wiki-update`, `wiki-tend`) can then fully exercise audit, normalize, cross-link, sync, log, and graph operations.
+A wiki opts into one or more conventions from [`CONVENTIONS.md`](CONVENTIONS.md): `log.md`, `_meta/taxonomy.md`, `.manifest.json`, frontmatter, `_template.md`, `hot.md`, `.obsidian/`, `.git`. Each marker is independent — adopt any subset that fits your wiki. The three reference skills (`wiki-search`, `wiki-update`, `wiki-tend`) read whatever markers are present and degrade where they're not.
 
-Each marker is independent — adopt only what you want. `CONVENTIONS.md` describes what each one enables.
+`CONVENTIONS.md` describes what each marker enables, and groups the four knowledge-capture conventions (frontmatter schema, page template, provenance markers, noise filter) as a separate pack you can opt into when the wiki is a memory aid rather than a content store.
 
 ## Sharing & nesting
 
-Sharing a wiki is sharing its folder. The receiver mounts it however they prefer — subdir, symlink, git submodule, clone, any filesystem mechanism. From their perspective, your wiki becomes a space inside theirs. The same applies at any level: a single space can be extracted and shared, and it lands in the receiver's tree as a space.
+What you share is always a space. Your whole wiki is just the top-most space; a single nested space is the same thing one level down. Sharing a space means sharing its folder — the receiver mounts it however they prefer (subdir, symlink, git submodule, clone, any filesystem mechanism) and it lands as a space inside their tree.
 
-**Trust scope.** Tools distinguish *owned* spaces (the wiki itself and spaces the user created inside it) from *external* spaces (mounts the user doesn't own — by convention, anything under `<wiki>/shared/`, any git submodule pointing at a foreign origin, or any symlink whose realpath resolves outside the wiki tree).
+**Trust scope.** Tools distinguish *owned* spaces (yours — the wiki and spaces you created inside it) from *external* spaces (mounts you don't own — by convention, anything under `<wiki>/shared/`, any git submodule pointing at a foreign origin, or any symlink whose realpath resolves outside the wiki tree).
 
 - **Read operations** (search, audit, status) cross owned spaces by default. External spaces are visited only when the user explicitly names one or asks to include all.
 - **Write operations** stay within the targeted space by default. Other spaces — owned or external — are written to only with explicit instruction.
 
-This makes "audit my wiki" reach project knowledge in `projects/<name>/` automatically (those are yours), while leaving a teammate's wiki at `shared/team-foo/` untouched until you ask for it explicitly.
+This makes "audit my wiki" reach project knowledge in `projects/<name>/` automatically (those are yours), while leaving a teammate's space at `shared/team-foo/` untouched until you ask for it explicitly.
+
+## Markdown flavor
+
+Obsidian-flavored markdown is the wire format. Wikilinks (`[[page]]`), frontmatter, callouts (`> [!note]`), embeds (`![[page]]`), comments (`%% ... %%`), and Bases (`.base` files) all carry Obsidian semantics. Tools and skills assume this dialect; the vendored kepano skills (`obsidian-markdown`, `obsidian-bases`) are the canonical reference for syntax.
+
+Plain CommonMark still works — wiki-spaces never *requires* Obsidian-specific syntax — but anything beyond basic markdown (links, headings, lists, code blocks, tables) lives in Obsidian's vocabulary. Choosing one dialect keeps tools, skills, and human readers speaking the same language.
 
 ## Outside the spec
 

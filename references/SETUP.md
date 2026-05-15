@@ -27,7 +27,7 @@ If the config is missing or `wiki` is unset, the user has not set up yet — dri
 
 ## Preflight (before anything)
 
-This briefing drives the **full installation** (skills + scaffold). For a no-install Tier 1 start — folder + `index.md` + config — see the README's "Just start (no install)" section; no prerequisites needed there beyond a shell to create the files.
+This briefing drives the **full installation** (skills + scaffold). For a no-install Tier 1 start — folder + `index.md` — see the README's `## Start` section. The skills resolve the target wiki via explicit path, CWD ancestor, or the config in that order, so a no-install wiki still works as long as the agent invokes the skills with the wiki path or from inside it.
 
 For the full installation, verify the user's machine has one of:
 - **Recommended:** [`uv`](https://docs.astral.sh/uv/) on PATH (`curl -LsSf https://astral.sh/uv/install.sh | sh` or `brew install uv`). Used for `uvx wiki-spaces …` (no install) or `uv tool install wiki-spaces` (permanent). uv provisions Python automatically.

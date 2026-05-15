@@ -26,14 +26,24 @@ from ._common import CONFIG_PATH, write_config
 
 OPTIONAL = {"log.md", "hot.md", "_template.md", "_meta/taxonomy.md", ".manifest.json"}
 
-INDEX_MD = """# {name}
-
-## What this space is
-
-{description}
-"""
-
 DEFAULT_DESCRIPTION = "<one paragraph describing this wiki>"
+
+
+def build_index_md(name: str, description: str, folders: list[str]) -> str:
+    """Compose the initial index.md.
+
+    Always includes the title and `## What this space is`. When `--folders`
+    were given, also writes `## Items` listing each folder with an empty
+    description placeholder — the user fills these in to give wiki-update
+    routing signal.
+    """
+    parts = [f"# {name}", "", "## What this space is", "", description, ""]
+    if folders:
+        parts.extend(["## Items", ""])
+        for folder in folders:
+            parts.append(f"- [{folder}/]({folder}/) — ")
+        parts.append("")
+    return "\n".join(parts)
 
 LOG_MD = "# Log\n"
 HOT_MD = "# Hot\n\n_Currently active work._\n"
@@ -157,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
         f.write_text(content)
         written.append(rel)
 
-    write("index.md", INDEX_MD.format(name=name, description=description))
+    write("index.md", build_index_md(name, description, folders))
 
     for opt in args.extras:
         match opt:

@@ -1,16 +1,31 @@
 # Conventions
 
-This is the opt-in catalog. Every section is independent. The [spec](AGENTS.md) defines three tiers — Valid (just `index.md`), Navigable (adds `## Items` and `## Spaces`), and Managed (everything below). This catalog is the Managed tier: the markers tools detect by file presence to enable each convention. Adopt only what you want; tools degrade where a marker is absent.
+This is the opt-in catalog. Every section is independent. The [spec](AGENTS.md) defines three tiers — Valid (just `index.md`), Navigable (adds `## Spaces`), and Conventional (any marker from this catalog). Adopt only what you want; tools degrade where a marker is absent.
 
-Wiki-syntax facts (wikilinks, frontmatter parsing, callouts, embeds, base views) are NOT redocumented here. They live in [`vendor/kepano/obsidian-markdown`](vendor/kepano/obsidian-markdown/SKILL.md) and [`vendor/kepano/obsidian-bases`](vendor/kepano/obsidian-bases/SKILL.md). Cite those skills, never restate their contents.
+**Obsidian-flavored markdown is the wire format** — see [`AGENTS.md` / Markdown flavor](AGENTS.md#markdown-flavor). Syntax facts (wikilinks, frontmatter, callouts, embeds, comments, Bases) live in [`vendor/kepano/obsidian-markdown`](vendor/kepano/obsidian-markdown/SKILL.md) and [`vendor/kepano/obsidian-bases`](vendor/kepano/obsidian-bases/SKILL.md). Cite those skills, never restate their contents.
 
 ---
 
-## Recommended Standard Pack
+## Knowledge-capture pack
 
-A new wiki only needs `index.md` (per spec) to be valid. Beyond that, the "Standard Pack" varies by use case — it's whatever set of opt-in markers makes the reference skills useful for your wiki. Example packs:
+A recommended bundle for wikis used as a *memory aid* (research notes, developer notebooks, technical wikis) rather than a *content store* (recipes, journals, runbooks, contact lists, curricula). The four conventions below are designed to compose — they work best together, but each is independently usable; pick any subset.
 
-| Use case | Pack |
+The bundle:
+
+- [Frontmatter schema](#frontmatter-schema) — `title`, `tags`, `summary`, `sources`, etc.
+- [Page template](#page-template) — `## Key Ideas` / `## Open Questions` body shape
+- [Provenance markers](#provenance-markers) — `%%inferred%%` / `%%ambiguous%%` on claims
+- [Noise filter](#noise-filter) — "skip what code answers; capture what took 30 minutes"
+
+Content-store wikis typically skip the whole bundle. Either flavor of wiki can still adopt the rest of the catalog (`log.md`, `_meta/taxonomy.md`, `.manifest.json`, `.obsidian/`, etc.) independently.
+
+---
+
+## Example opt-in bundles
+
+A new wiki only needs `index.md` (per spec) to be valid. Beyond that, the bundle of opt-in markers that's useful varies by use case. Examples — none are required:
+
+| Use case | Suggested bundle |
 |---|---|
 | Developer notebook | `log.md` + `_meta/taxonomy.md` + `.manifest.json` |
 | Research wiki | `log.md` + `_meta/taxonomy.md` |
@@ -19,7 +34,7 @@ A new wiki only needs `index.md` (per spec) to be valid. Beyond that, the "Stand
 | Personal knowledge | (none — pure content) |
 | Team reference | `log.md` + `_meta/taxonomy.md` |
 
-Each opt-in is independent — adopt any combination. Frontmatter (see § Frontmatter schema) is per-page rather than a pack file; mixed adoption is permitted. The catalog below explains what each marker enables; skip any of them and the corresponding tooling step degrades. The scaffold command takes any subset: `wiki-spaces init <path> --with log.md _meta/taxonomy.md` (prefix with `uvx` for no-install runs).
+Each opt-in is independent — adopt any combination. Frontmatter (see § Frontmatter schema) is per-page rather than a bundle file; mixed adoption is permitted. The catalog below explains what each marker enables; skip any of them and the corresponding tooling step degrades. The scaffold command takes any subset: `wiki-spaces init <path> --with log.md _meta/taxonomy.md` (prefix with `uvx` for no-install runs).
 
 ---
 
@@ -203,6 +218,8 @@ Aliases are mappings the normalizer uses to rewrite non-canonical tags to canoni
 
 ## Frontmatter schema
 
+*Part of the [Knowledge-capture pack](#knowledge-capture-pack).*
+
 **If used (any content page in the wiki has YAML frontmatter):** The opt-in schema is:
 
 ```yaml
@@ -230,6 +247,8 @@ Timestamps are UTC ISO-8601. `>-` folded scalar avoids YAML quoting issues for `
 
 ## Page template
 
+*Part of the [Knowledge-capture pack](#knowledge-capture-pack).*
+
 **If used:** Body structure for content pages:
 
 ```markdown
@@ -240,8 +259,8 @@ One-paragraph summary.
 ## Key Ideas
 
 - A fact explicitly stated by the source or codebase.
-- A generalization drawn from the source. ^[inferred]
-- A claim where sources disagree. ^[ambiguous]
+- A generalization drawn from the source. %%inferred%%
+- A claim where sources disagree. %%ambiguous%%
 
 ## Open Questions
 
@@ -254,13 +273,17 @@ Unresolved items.
 
 ## Provenance markers
 
-**If used:** Inline markers attached to claims indicate epistemic status.
+*Part of the [Knowledge-capture pack](#knowledge-capture-pack).*
+
+**If used:** Inline markers attached to claims indicate epistemic status. The syntax is Obsidian's comment form — invisible in rendered preview, parseable from raw markdown.
 
 | State | Marker | Meaning |
 |---|---|---|
 | Extracted | *(no marker)* | Stated directly by source, docs, or code |
-| Inferred | `^[inferred]` | Synthesized or implied — not stated directly |
-| Ambiguous | `^[ambiguous]` | Sources disagree or evidence is unclear |
+| Inferred | `%%inferred%%` | Synthesized or implied — not stated directly |
+| Ambiguous | `%%ambiguous%%` | Sources disagree or evidence is unclear |
+
+Place the marker at the end of the claim it qualifies (typically end of sentence or end of list item). Obsidian renders `%% ... %%` as nothing; tools parse it as a trailing tag.
 
 Unmarked claims carry no enforced provenance — the convention treats them as extracted by default, but nothing in the tooling verifies the distinction. `wiki-update` applies markers when capturing; `wiki-tend` does not enforce them.
 
@@ -308,6 +331,18 @@ Cost-tiered lookup table for `wiki-search`. Use the cheapest primitive that answ
 
 Grep-style search is preferred over full reads. Full reads are capped at 3 candidates per query.
 
+### Recommended search backends
+
+For wikis bigger than a few dozen pages, grep alone misses semantic matches and aliases. When the harness has a markdown-aware search tool available, `wiki-search` prefers it over raw grep:
+
+| Backend | When to use | Notes |
+|---|---|---|
+| **[qmd](https://github.com/anteew/qmd) MCP** | Recommended primary. Local search over markdown with BM25 + semantic vectors + HyDE. | Used by Andrej Karpathy's [LLM wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). MCP-installable into Claude Code, Codex, and similar harnesses. |
+| Harness-native search MCP | Use what's already in the harness (e.g., the harness's built-in file search). | Beats grep when it understands markdown headings + frontmatter. |
+| **Ripgrep** (`rg`) or the harness's grep tool | Universal fallback. Always available. | Fast keyword search; misses semantics and aliases. |
+
+`wiki-search` checks for the recommended backends in order and uses the first one it finds; otherwise it falls back to grep. Tools should never *require* a specific backend — the wiki is plain markdown and any retrieval method that reads files works.
+
 ---
 
 ## Linking rules
@@ -322,6 +357,8 @@ Wikilink and markdown-link syntax: see [obsidian-markdown](vendor/kepano/obsidia
 ---
 
 ## Noise filter
+
+*Part of the [Knowledge-capture pack](#knowledge-capture-pack).*
 
 A heuristic for **knowledge-capture use cases** (research notes, technical wikis, developer notebooks) where the goal is "store what was hard to derive." Before writing a page, apply:
 

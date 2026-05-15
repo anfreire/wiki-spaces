@@ -1,0 +1,381 @@
+"""`wiki-spaces space` subcommands: add, remove, audit.
+
+Maintains the `## Spaces` exhaustiveness contract automatically so users
+never edit ancestor `index.md` files by hand to track child spaces.
+
+Operations:
+- `space add <rel-path>`     create a new space; update nearest ancestor's
+                             `## Spaces` if that section exists there.
+- `space remove <rel-path>`  delete a space; remove the entry from its
+                             nearest ancestor's `## Spaces`. Refuses without
+                             `--force` when the space contains content.
+- `space audit`              walk owned spaces; report drift between actual
+                             direct child spaces and listed `## Spaces` entries.
+
+Trust scope: writes stay inside the wiki tree. External spaces (per the
+heuristic in CONVENTIONS.md / Trust Scope) are skipped on traversal.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+from . import _md
+from ._common import nearest_space_root, wiki_path
+
+
+DEFAULT_DESCRIPTION = "<one paragraph describing this space>"
+
+
+# ---------- Helpers ----------
+
+def _resolve_wiki(explicit: Path | None = None) -> Path | None:
+    """Resolve the wiki root: explicit, then config, then nearest CWD ancestor.
+
+    The CWD fallback lets users operate on whatever wiki they're inside
+    without a config first — `wiki-spaces space audit` in any wiki tree
+    just works.
+    """
+    if explicit:
+        p = explicit.expanduser().resolve()
+        return p if (p / "index.md").is_file() else None
+    cfg_wiki = wiki_path()
+    if cfg_wiki is not None:
+        p = cfg_wiki.expanduser().resolve()
+        if (p / "index.md").is_file():
+            return p
+    return nearest_space_root()
+
+
+def _validate_rel_path(rel: str) -> tuple[bool, str | None]:
+    """Validate a user-provided relative path. (ok, error_message)."""
+    rel = rel.strip().rstrip("/")
+    if not rel:
+        return False, "empty path"
+    p = Path(rel)
+    if p.is_absolute():
+        return False, "must be relative to the wiki root"
+    for part in p.parts:
+        if part in ("", ".", ".."):
+            return False, "path may not contain '.', '..', or empty segments"
+        if part.startswith(".") and part not in (".gitkeep",):
+            return False, f"path may not contain hidden segments ({part!r})"
+    return True, None
+
+
+def _is_external(path: Path, wiki_root: Path) -> bool:
+    """Approximate external-space heuristic per CONVENTIONS.md / Trust Scope.
+
+    Catches: under `<wiki>/shared/`, or symlinks whose realpath leaves the
+    wiki tree. Foreign-origin submodule detection is out of scope here.
+    """
+    try:
+        rel = path.resolve().relative_to(wiki_root)
+    except ValueError:
+        return True
+    if rel.parts and rel.parts[0] == "shared":
+        return True
+    if path.is_symlink():
+        target = path.resolve()
+        try:
+            target.relative_to(wiki_root)
+        except ValueError:
+            return True
+    return False
+
+
+def _nearest_ancestor_space(wiki_root: Path, target: Path) -> Path:
+    """Walk up from target.parent until a folder with index.md is found.
+
+    Always terminates at wiki_root (which by definition has index.md).
+    """
+    p = target.parent
+    while True:
+        if (p / "index.md").is_file():
+            return p
+        if p == wiki_root:
+            return wiki_root
+        p = p.parent
+
+
+def _walk_owned_spaces(wiki_root: Path):
+    """Yield every owned space under wiki_root (inclusive). External skipped.
+
+    Tracks resolved realpaths to break symlink cycles; broken symlinks and
+    unreadable directories are skipped silently.
+    """
+    try:
+        root_real = wiki_root.resolve()
+    except OSError:
+        return
+    visited: set[Path] = {root_real}
+    yield wiki_root
+    stack = [wiki_root]
+    while stack:
+        current = stack.pop()
+        try:
+            entries = sorted(current.iterdir())
+        except OSError:
+            continue
+        for child in entries:
+            if not child.is_dir() or child.name.startswith("."):
+                continue
+            if _is_external(child, wiki_root):
+                continue
+            try:
+                child_real = child.resolve()
+            except OSError:
+                continue
+            if child_real in visited:
+                continue
+            visited.add(child_real)
+            if (child / "index.md").is_file():
+                yield child
+            stack.append(child)
+
+
+def _new_index_md(name: str, description: str) -> str:
+    """Minimal Tier-1 index.md body for a freshly created space."""
+    return f"# {name}\n\n## What this space is\n\n{description}\n"
+
+
+# ---------- Subcommands ----------
+
+def cmd_add(args: argparse.Namespace) -> int:
+    wiki_root = _resolve_wiki(args.wiki)
+    if wiki_root is None:
+        print(
+            "  ! no wiki resolved. Pass --wiki <path> or set `wiki` in "
+            "~/.config/wiki-spaces/config.",
+            file=sys.stderr,
+        )
+        return 2
+    ok, err = _validate_rel_path(args.path)
+    if not ok:
+        print(f"  ! invalid path: {err}", file=sys.stderr)
+        return 2
+
+    rel = args.path.strip().rstrip("/")
+    new_space = wiki_root / rel
+
+    # Already exists?
+    already_space = (new_space / "index.md").is_file()
+    if already_space and not args.force_index:
+        print(f"  . {rel}/ already a space; ensuring ancestor entry")
+    else:
+        new_space.mkdir(parents=True, exist_ok=True)
+        display_name = args.name or new_space.name
+        description = (args.description or DEFAULT_DESCRIPTION).strip()
+        (new_space / "index.md").write_text(
+            _new_index_md(display_name, description), encoding="utf-8"
+        )
+        print(f"  + {rel}/index.md")
+
+    # Update nearest ancestor's ## Spaces (or upgrade Tier 1 → Tier 2 when asked)
+    ancestor = _nearest_ancestor_space(wiki_root, new_space)
+    ancestor_index = ancestor / "index.md"
+    text = ancestor_index.read_text(encoding="utf-8")
+    ancestor_rel = ancestor.relative_to(wiki_root)
+    printable = "<wiki>/" if str(ancestor_rel) == "." else f"<wiki>/{ancestor_rel}/"
+    section_present = _md.has_section(text, "Spaces")
+    if not section_present and not args.upgrade_parent:
+        print(
+            f"  . {printable}index.md has no `## Spaces` section — "
+            "leaving its layout unchanged (Tier 1 parent). "
+            "Pass --upgrade-parent to add `## Spaces` there and list this space."
+        )
+        return 0
+
+    rel_from_ancestor = new_space.relative_to(ancestor)
+    label = f"{rel_from_ancestor}/"
+    href = f"{rel_from_ancestor}/index.md"
+    new_text = _md.add_entry(
+        text, "Spaces", label, href, args.description
+    )
+    if new_text == text:
+        print(f"  . entry for {label} already in ancestor's ## Spaces")
+        return 0
+    ancestor_index.write_text(new_text, encoding="utf-8")
+    if not section_present:
+        print(f"  + {printable}index.md ## Spaces (upgraded to Tier 2)")
+    print(f"  ~ {printable}index.md ## Spaces  += [{label}]")
+    return 0
+
+
+def cmd_remove(args: argparse.Namespace) -> int:
+    wiki_root = _resolve_wiki(args.wiki)
+    if wiki_root is None:
+        print(
+            "  ! no wiki resolved. Pass --wiki <path> or set `wiki` in config.",
+            file=sys.stderr,
+        )
+        return 2
+    ok, err = _validate_rel_path(args.path)
+    if not ok:
+        print(f"  ! invalid path: {err}", file=sys.stderr)
+        return 2
+
+    rel = args.path.strip().rstrip("/")
+    target = wiki_root / rel
+    if not (target / "index.md").is_file():
+        print(f"  ! {rel}/ is not a space", file=sys.stderr)
+        return 2
+    if target == wiki_root:
+        print("  ! refusing to remove the wiki root", file=sys.stderr)
+        return 2
+
+    # Check for non-index.md content
+    contents = [
+        p for p in target.iterdir()
+        if not (p.name == "index.md" and p.is_file())
+    ]
+    if contents and not args.force:
+        print(
+            f"  ! {rel}/ contains {len(contents)} item(s) beyond index.md; "
+            "pass --force to remove anyway",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Remove from ancestor's ## Spaces (if section present)
+    ancestor = _nearest_ancestor_space(wiki_root, target)
+    ancestor_index = ancestor / "index.md"
+    text = ancestor_index.read_text(encoding="utf-8")
+    rel_from_ancestor = target.relative_to(ancestor)
+    href = f"{rel_from_ancestor}/index.md"
+    ancestor_rel = ancestor.relative_to(wiki_root)
+    printable = "<wiki>/" if str(ancestor_rel) == "." else f"<wiki>/{ancestor_rel}/"
+    if _md.has_section(text, "Spaces"):
+        new_text = _md.remove_entry(text, "Spaces", href)
+        if new_text != text:
+            if args.dry_run:
+                print(f"  ~ (dry-run) {printable}index.md ## Spaces  -= [{rel_from_ancestor}/]")
+            else:
+                ancestor_index.write_text(new_text, encoding="utf-8")
+                print(f"  ~ {printable}index.md ## Spaces  -= [{rel_from_ancestor}/]")
+
+    if args.dry_run:
+        print(f"  . (dry-run) would remove {rel}/")
+        return 0
+    import shutil
+    shutil.rmtree(target)
+    print(f"  - {rel}/")
+    return 0
+
+
+def cmd_audit(args: argparse.Namespace) -> int:
+    wiki_root = _resolve_wiki(args.wiki)
+    if wiki_root is None:
+        print(
+            "  ! no wiki resolved. Pass --wiki <path> or set `wiki` in config.",
+            file=sys.stderr,
+        )
+        return 2
+
+    issues = 0
+    for space in _walk_owned_spaces(wiki_root):
+        index = space / "index.md"
+        text = index.read_text(encoding="utf-8")
+        if not _md.has_section(text, "Spaces"):
+            continue
+        listed_hrefs: set[str] = set()
+        for entry in _md.parse_section_entries(text, "Spaces"):
+            if entry.href:
+                listed_hrefs.add(entry.href.rstrip("/"))
+        # Direct child spaces on disk
+        actual: dict[str, Path] = {}
+        for child in sorted(space.iterdir()):
+            if not child.is_dir() or child.name.startswith("."):
+                continue
+            if _is_external(child, wiki_root):
+                continue
+            if (child / "index.md").is_file():
+                actual[f"{child.name}/index.md"] = child
+        missing = sorted(set(actual.keys()) - listed_hrefs)
+        # An entry is stale when its href, resolved against the space, has
+        # no index.md.
+        stale: list[str] = []
+        for href in listed_hrefs:
+            target = (space / href).resolve()
+            if href.endswith("/"):
+                target = (space / href / "index.md").resolve()
+            elif not href.endswith("/index.md"):
+                # bare folder reference like `foo/`
+                target = (space / href / "index.md").resolve()
+            if not target.is_file():
+                stale.append(href)
+        if missing or stale:
+            rel = space.relative_to(wiki_root)
+            label = "<wiki>" if str(rel) == "." else f"<wiki>/{rel}"
+            print(f"{label}/index.md:")
+            for m in missing:
+                print(f"  + missing entry for {m}")
+            for s in stale:
+                print(f"  - stale entry {s} (no index.md on disk)")
+            issues += len(missing) + len(stale)
+
+    if issues == 0:
+        print("OK: no `## Spaces` drift")
+        return 0
+    print(f"\n{issues} issue(s) found. Re-run after fixing, or use "
+          "`wiki-spaces space add/remove` to update individual entries.")
+    return 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="wiki-spaces space",
+        description="Manage spaces and the ## Spaces navigation contract.",
+    )
+    parser.add_argument(
+        "--wiki",
+        type=Path,
+        help="explicit wiki root (defaults to the configured wiki)",
+    )
+    sub = parser.add_subparsers(dest="op", required=True)
+
+    p_add = sub.add_parser("add", help="create a space and register it with the nearest ancestor")
+    p_add.add_argument("path", help="path relative to the wiki root (e.g. projects/acme)")
+    p_add.add_argument("--name", help="display name (default: directory basename)")
+    p_add.add_argument(
+        "--description",
+        help="one-paragraph description for the new space's index.md",
+    )
+    p_add.add_argument(
+        "--force-index",
+        action="store_true",
+        help="overwrite an existing index.md at the target",
+    )
+    p_add.add_argument(
+        "--upgrade-parent",
+        action="store_true",
+        help="when the nearest ancestor is Tier 1 (no ## Spaces), add ## Spaces "
+        "and list this entry instead of leaving the parent unchanged",
+    )
+    p_add.set_defaults(func=cmd_add)
+
+    p_remove = sub.add_parser("remove", help="delete a space and unregister it")
+    p_remove.add_argument("path", help="path relative to the wiki root")
+    p_remove.add_argument(
+        "--force",
+        action="store_true",
+        help="remove even when the space contains files other than index.md",
+    )
+    p_remove.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the plan; touch nothing",
+    )
+    p_remove.set_defaults(func=cmd_remove)
+
+    p_audit = sub.add_parser("audit", help="report ## Spaces drift across the wiki")
+    p_audit.set_defaults(func=cmd_audit)
+
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -15,7 +15,13 @@ One-shot maintenance for the user's canonical wiki: status, audit (read-only), n
 
 ## Procedure
 
-1. **Read the config.** Open `${XDG_CONFIG_HOME:-~/.config}/wiki-spaces/config`. Get the `wiki` path. If the config is missing, the `wiki` key is unset, or the path has no `index.md`, tell the user setup is needed and point them at the SETUP briefing — preferred path `<repo>/references/SETUP.md` if the `repo` key is set; fallback URL https://raw.githubusercontent.com/anfreire/wiki-spaces/main/references/SETUP.md if `repo` is also unknown. Then stop (this skill does not drive setup itself; `wiki-update` does).
+1. **Resolve the target wiki**, in this order:
+   1. Explicit path or named space from the user's request.
+   2. The `wiki` value in `${XDG_CONFIG_HOME:-~/.config}/wiki-spaces/config`, if that path has `index.md`.
+   3. **CWD discovery** — the nearest ancestor of the current working directory containing `index.md`. This makes Tier 1 no-install wikis work without a config.
+   4. If none of the above resolves to a folder with `index.md`, tell the user setup is needed and point at the SETUP briefing — preferred path `<repo>/references/SETUP.md` if the `repo` key is set; fallback URL https://raw.githubusercontent.com/anfreire/wiki-spaces/main/references/SETUP.md if `repo` is also unknown. Then stop (this skill does not drive setup itself; `wiki-update` does).
+
+   When CWD discovery was the source used (config missing), say so once in the report.
 2. **Detect adopted conventions at the SCOPE root** (the canonical wiki for default operation; the targeted space if the user named one): `log.md`, `_meta/taxonomy.md`, `.manifest.json`, frontmatter (scan content pages until one with frontmatter is found, or confirm none), categorical layout, `.obsidian/`. Spaces are autonomous — never inherit detection from a parent. Skip every mode whose required marker is absent.
 3. **Mode detection.**
    | User says | Mode |

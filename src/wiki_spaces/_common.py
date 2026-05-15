@@ -183,6 +183,26 @@ def repo_path() -> Path | None:
     return Path(cfg["repo"]) if "repo" in cfg else None
 
 
+def nearest_space_root(start: Path | None = None) -> Path | None:
+    """Walk up from `start` (or CWD) returning the nearest folder with index.md.
+
+    Used as the CWD-based fallback when the config has no `wiki` key: lets
+    the agent operate on whatever wiki it's currently inside without forcing
+    a setup step first.
+    """
+    p = (start if start is not None else Path.cwd())
+    if p.is_file():
+        p = p.parent
+    try:
+        p = p.resolve()
+    except OSError:
+        p = p.absolute()
+    for candidate in (p, *p.parents):
+        if (candidate / "index.md").is_file():
+            return candidate
+    return None
+
+
 # ---------- Filesystem ----------
 
 def link_or_copy(src: Path, dst: Path, *, prefer_copy: bool = False) -> str:
@@ -249,3 +269,40 @@ def installed_state(dst: Path, src: Path) -> str:
             target = (dst.parent / target).resolve()
         return "symlink-ok" if target == src.resolve() and src.exists() else "symlink-broken"
     return "copy-current" if _max_mtime(dst) >= _max_mtime(src) else "copy-stale"
+
+
+OWNED_MARKER = ".installed-by-wiki-spaces"
+
+
+def is_owned_install(dst: Path, src: Path) -> bool:
+    """True when dst is safe for wiki-spaces to overwrite.
+
+    Ownership signals:
+    - dst does not exist (nothing to overwrite).
+    - dst is any symlink (we make symlinks by default; treat as ours).
+    - dst is a directory containing the OWNED_MARKER file.
+
+    A plain directory or file at dst without the marker is treated as
+    user-owned content; install must refuse without --force.
+    """
+    if not dst.exists() and not dst.is_symlink():
+        return True
+    if dst.is_symlink():
+        return True
+    if dst.is_dir() and (dst / OWNED_MARKER).is_file():
+        return True
+    return False
+
+
+def write_owned_marker(dst: Path, src: Path) -> None:
+    """Drop the OWNED_MARKER inside a freshly installed skill directory.
+
+    Recorded source helps `doctor` and future installs identify provenance.
+    """
+    if not dst.is_dir():
+        return
+    (dst / OWNED_MARKER).write_text(
+        f"# Installed by wiki-spaces. Safe to overwrite on re-install.\n"
+        f"source = {src.resolve()}\n",
+        encoding="utf-8",
+    )
