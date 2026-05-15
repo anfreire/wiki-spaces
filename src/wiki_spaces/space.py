@@ -65,17 +65,74 @@ def _validate_rel_path(rel: str) -> tuple[bool, str | None]:
     return True, None
 
 
-def _is_external(path: Path, wiki_root: Path) -> bool:
-    """Approximate external-space heuristic per CONVENTIONS.md / Trust Scope.
+def _wiki_origin_url(wiki_root: Path) -> str | None:
+    """Return the wiki's origin remote URL from .git/config, or None.
 
-    Catches: under `<wiki>/shared/`, or symlinks whose realpath leaves the
-    wiki tree. Foreign-origin submodule detection is out of scope here.
+    Best-effort regex parse — no subprocess. Handles the common case of a
+    `[remote "origin"]` section with `url = …`.
+    """
+    git_dir = wiki_root / ".git"
+    config = git_dir / "config" if git_dir.is_dir() else None
+    if config is None or not config.is_file():
+        return None
+    import re
+    text = config.read_text(encoding="utf-8")
+    m = re.search(
+        r'\[remote\s+"origin"\][^\[]*?url\s*=\s*(\S+)',
+        text,
+        re.DOTALL,
+    )
+    return m.group(1).strip() if m else None
+
+
+def _is_foreign_submodule(path: Path, wiki_root: Path) -> bool:
+    """True when path is registered as a git submodule with a foreign origin.
+
+    Reads `<wiki>/.gitmodules` and compares each submodule's `url =` to the
+    wiki's own origin from `<wiki>/.git/config`. When either is unreadable,
+    returns False (callers fall back to the other heuristics).
+    """
+    gitmodules = wiki_root / ".gitmodules"
+    if not gitmodules.is_file():
+        return False
+    try:
+        rel = path.resolve().relative_to(wiki_root).as_posix()
+    except (ValueError, OSError):
+        return False
+    import re
+    text = gitmodules.read_text(encoding="utf-8")
+    sections = re.split(r"(?=^\[submodule )", text, flags=re.MULTILINE)
+    for section in sections:
+        m_path = re.search(r"^\s*path\s*=\s*(.+)$", section, re.MULTILINE)
+        if not m_path or m_path.group(1).strip() != rel:
+            continue
+        m_url = re.search(r"^\s*url\s*=\s*(\S+)", section, re.MULTILINE)
+        if not m_url:
+            return False
+        sub_url = m_url.group(1).strip()
+        wiki_url = _wiki_origin_url(wiki_root)
+        if wiki_url is None:
+            # We can't tell whether it's foreign without our own origin;
+            # default to "foreign" to be safe (write protection > recall).
+            return True
+        return sub_url != wiki_url
+    return False
+
+
+def _is_external(path: Path, wiki_root: Path) -> bool:
+    """External-space heuristic per CONVENTIONS.md / Trust Scope.
+
+    Catches: under `<wiki>/shared/`, foreign-origin git submodules (parsed
+    from `.gitmodules` vs the wiki's `.git/config` origin), or symlinks
+    whose realpath leaves the wiki tree.
     """
     try:
         rel = path.resolve().relative_to(wiki_root)
     except ValueError:
         return True
     if rel.parts and rel.parts[0] == "shared":
+        return True
+    if _is_foreign_submodule(path, wiki_root):
         return True
     if path.is_symlink():
         target = path.resolve()

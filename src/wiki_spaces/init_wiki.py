@@ -3,9 +3,11 @@
 Always writes the spec-required `index.md`. Optional files via --with:
   --with log.md _meta/taxonomy.md .manifest.json _template.md hot.md
 
-Optional top-level categorical folders via --folders (plain directories, no
-`index.md` — they become spaces only if the user later adds one):
-  --folders concepts entities projects
+Optional folders via --folders (plain directories, no `index.md` — they
+become spaces only if the user later adds one). Nested paths like
+`projects/foo` are accepted; bare hidden names (`.archive`) are allowed;
+`.git` is reserved:
+  --folders concepts entities projects/acme
 
 After scaffolding, writes `wiki = <path>` to ~/.config/wiki-spaces/config so
 all skills can locate it. Pass --no-config for tests / dry workflows where
@@ -105,8 +107,9 @@ def main(argv: list[str] | None = None) -> int:
         "--folders",
         nargs="+",
         default=[],
-        metavar="NAME",
-        help="top-level categorical folders to create as plain directories",
+        metavar="PATH",
+        help="folders to create as plain directories; nested paths like "
+        "'projects/foo' are accepted",
     )
     parser.add_argument("--force", action="store_true", help="overwrite existing files")
     parser.add_argument(
@@ -125,28 +128,60 @@ def main(argv: list[str] | None = None) -> int:
     name = args.name or root.name
     description = (args.description or DEFAULT_DESCRIPTION).strip()
 
-    folders = [f.rstrip("/") for f in args.folders]
-    invalid_folders = []
-    for raw, folder in zip(args.folders, folders):
-        if not folder or "/" in folder or folder.startswith("."):
+    folders: list[str] = []
+    invalid_folders: list[str] = []
+    seen: set[str] = set()
+    for raw in args.folders:
+        folder = raw.strip().rstrip("/")
+        if not folder:
+            invalid_folders.append(raw)
+            continue
+        rel = Path(folder)
+        if rel.is_absolute():
+            invalid_folders.append(raw)
+            continue
+        bad_part = False
+        for part in rel.parts:
+            if part in ("", ".", "..") or part == ".git":
+                bad_part = True
+                break
+        if bad_part:
             invalid_folders.append(raw)
             continue
         try:
-            (root / folder).resolve().relative_to(root)
+            normalized = (root / rel).resolve().relative_to(root)
         except ValueError:
             invalid_folders.append(raw)
+            continue
+        normalized_str = normalized.as_posix()
+        if normalized_str not in seen:
+            folders.append(normalized_str)
+            seen.add(normalized_str)
     if invalid_folders:
         bad = ", ".join(repr(f) for f in invalid_folders)
         print(f"  ! invalid folder name(s): {bad}", file=sys.stderr)
         print(
-            "    folder names must be non-empty, contain no '/' (a trailing '/' is stripped), not start with '.', and resolve inside the wiki root",
+            "    folder paths must be relative, stay inside the wiki root, "
+            "and have no '.', '..', or '.git' segments. Nested paths like "
+            "'projects/foo' are accepted.",
             file=sys.stderr,
         )
         return 2
 
     root.mkdir(parents=True, exist_ok=True)
 
-    folder_collisions = [f for f in folders if (root / f).exists() and not (root / f).is_dir()]
+    folder_collisions: list[str] = []
+    for folder in folders:
+        target = root / folder
+        if target.exists() and not target.is_dir():
+            folder_collisions.append(folder)
+            continue
+        for parent in target.parents:
+            if parent == root or root not in parent.parents:
+                break
+            if parent.exists() and not parent.is_dir():
+                folder_collisions.append(folder)
+                break
     if folder_collisions:
         bad = ", ".join(repr(f) for f in folder_collisions)
         print(
@@ -187,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
         if target.is_dir():
             skipped.append(folder + "/")
             continue
-        target.mkdir()
+        target.mkdir(parents=True)
         written.append(folder + "/")
         if args.git:
             # Empty dirs are invisible to git; drop a .gitkeep so the scaffold

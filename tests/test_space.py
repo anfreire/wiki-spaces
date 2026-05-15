@@ -195,3 +195,71 @@ def test_walk_owned_spaces_breaks_symlink_cycle(tmp_path):
     spaces = list(space._walk_owned_spaces(wiki))
     assert wiki in spaces
     assert sub in spaces
+
+
+# ---------- .gitmodules foreign-origin check ----------
+
+def _make_git_config(wiki: Path, origin_url: str) -> None:
+    """Write a minimal .git/config with origin remote."""
+    git_dir = wiki / ".git"
+    git_dir.mkdir(exist_ok=True)
+    (git_dir / "config").write_text(
+        f'[remote "origin"]\n\turl = {origin_url}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n'
+    )
+
+
+def test_wiki_origin_url_returns_url(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    _make_git_config(wiki, "https://github.com/me/mywiki.git")
+    assert space._wiki_origin_url(wiki) == "https://github.com/me/mywiki.git"
+
+
+def test_wiki_origin_url_returns_none_without_config(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    assert space._wiki_origin_url(wiki) is None
+
+
+def test_is_foreign_submodule_no_gitmodules(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    (wiki / "projects" / "foo").mkdir(parents=True)
+    assert space._is_foreign_submodule(wiki / "projects" / "foo", wiki) is False
+
+
+def test_is_foreign_submodule_different_origin(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    _make_git_config(wiki, "https://github.com/me/mywiki.git")
+    sub = wiki / "projects" / "external"
+    sub.mkdir(parents=True)
+    (wiki / ".gitmodules").write_text(
+        '[submodule "external"]\n'
+        "\tpath = projects/external\n"
+        "\turl = https://github.com/someone-else/their-wiki.git\n"
+    )
+    assert space._is_foreign_submodule(sub, wiki) is True
+
+
+def test_is_foreign_submodule_same_origin(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    _make_git_config(wiki, "https://github.com/me/mywiki.git")
+    sub = wiki / "projects" / "self-mirror"
+    sub.mkdir(parents=True)
+    (wiki / ".gitmodules").write_text(
+        '[submodule "self-mirror"]\n'
+        "\tpath = projects/self-mirror\n"
+        "\turl = https://github.com/me/mywiki.git\n"
+    )
+    assert space._is_foreign_submodule(sub, wiki) is False
+
+
+def test_is_external_marks_foreign_submodule(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    _make_git_config(wiki, "https://github.com/me/mywiki.git")
+    sub = wiki / "projects" / "foreign"
+    sub.mkdir(parents=True)
+    (sub / "index.md").write_text("# foreign")
+    (wiki / ".gitmodules").write_text(
+        '[submodule "foreign"]\n'
+        "\tpath = projects/foreign\n"
+        "\turl = https://github.com/other/wiki.git\n"
+    )
+    assert space._is_external(sub, wiki) is True

@@ -49,10 +49,13 @@ def test_init_rejects_absolute(monkeypatch, tmp_path):
     assert rc == 2
 
 
-def test_init_rejects_hidden_leading_dot(monkeypatch, tmp_path):
+def test_init_accepts_hidden_non_git_segment(monkeypatch, tmp_path):
+    # Only `.git` is reserved; other hidden names (`.archive`, `.config`, etc.)
+    # are allowed.
     monkeypatch.setattr(_common, "CONFIG_PATH", tmp_path / "absent-config")
-    rc, _, err = _run([str(tmp_path / "wiki"), "--folders", ".hidden", "--no-config"])
-    assert rc == 2
+    rc, _, _ = _run([str(tmp_path / "wiki"), "--folders", ".archive", "--no-config"])
+    assert rc == 0
+    assert (tmp_path / "wiki" / ".archive").is_dir()
 
 
 def test_init_accepts_trailing_slash(monkeypatch, tmp_path):
@@ -102,3 +105,32 @@ def test_init_registers_default_when_no_no_config_flag(monkeypatch, tmp_path):
     rc, _, _ = _run([str(tmp_path / "wiki"), "--description", "x"])
     assert rc == 0
     assert _common.read_config()["wiki"] == str((tmp_path / "wiki").resolve())
+
+
+# ---------- nested --folders ----------
+
+def test_init_accepts_nested_folder(monkeypatch, tmp_path):
+    monkeypatch.setattr(_common, "CONFIG_PATH", tmp_path / "absent-config")
+    rc, _, _ = _run([str(tmp_path / "wiki"), "--folders", "projects/foo", "--no-config"])
+    assert rc == 0
+    assert (tmp_path / "wiki" / "projects" / "foo").is_dir()
+
+
+def test_init_rejects_dotgit_segment(monkeypatch, tmp_path):
+    monkeypatch.setattr(_common, "CONFIG_PATH", tmp_path / "absent-config")
+    rc, _, _ = _run([str(tmp_path / "wiki"), "--folders", "projects/.git", "--no-config"])
+    assert rc == 2
+
+
+def test_init_rejects_double_dot_segment(monkeypatch, tmp_path):
+    monkeypatch.setattr(_common, "CONFIG_PATH", tmp_path / "absent-config")
+    rc, _, _ = _run([str(tmp_path / "wiki"), "--folders", "projects/../escape", "--no-config"])
+    assert rc == 2
+
+
+def test_init_deduplicates_normalized_folders(monkeypatch, tmp_path):
+    monkeypatch.setattr(_common, "CONFIG_PATH", tmp_path / "absent-config")
+    # Two args that normalize to the same path
+    rc, _, _ = _run([str(tmp_path / "wiki"), "--folders", "concepts", "concepts/", "--no-config"])
+    assert rc == 0
+    assert (tmp_path / "wiki" / "concepts").is_dir()
