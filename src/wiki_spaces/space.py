@@ -50,7 +50,11 @@ def _resolve_wiki(explicit: Path | None = None) -> Path | None:
 
 
 def _validate_rel_path(rel: str) -> tuple[bool, str | None]:
-    """Validate a user-provided relative path. (ok, error_message)."""
+    """Validate a user-provided relative path. (ok, error_message).
+
+    Same rule as `init --folders`: reject empty, `.`, `..`, and `.git`
+    segments. Other hidden names (`.archive`, `.config`, etc.) are allowed.
+    """
     rel = rel.strip().rstrip("/")
     if not rel:
         return False, "empty path"
@@ -60,8 +64,8 @@ def _validate_rel_path(rel: str) -> tuple[bool, str | None]:
     for part in p.parts:
         if part in ("", ".", ".."):
             return False, "path may not contain '.', '..', or empty segments"
-        if part.startswith(".") and part not in (".gitkeep",):
-            return False, f"path may not contain hidden segments ({part!r})"
+        if part == ".git":
+            return False, "path may not contain '.git' segments"
     return True, None
 
 

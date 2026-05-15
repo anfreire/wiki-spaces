@@ -2,6 +2,8 @@
 
 This is the opt-in catalog. Every section is independent. The [spec](AGENTS.md) defines three tiers — Valid (just `index.md`), Navigable (adds `## Spaces`), and Conventional (any marker from this catalog). Adopt only what you want; tools degrade where a marker is absent.
 
+**"Tools" in this catalog** means the three reference skills (`wiki-search`, `wiki-update`, `wiki-tend`) — LLM-driven procedures that read these markers and degrade gracefully. The `wiki-spaces` CLI handles `install` / `init` / `doctor` / `space` / `vendor-kepano` only; runtime knowledge operations (search, capture, audit, normalize, colorize) live in the skills.
+
 **Obsidian-flavored markdown is the wire format** — see [`AGENTS.md` / Markdown flavor](AGENTS.md#markdown-flavor). Syntax facts (wikilinks, frontmatter, callouts, embeds, comments, Bases) live in [`vendor/kepano/obsidian-markdown`](vendor/kepano/obsidian-markdown/SKILL.md) and [`vendor/kepano/obsidian-bases`](vendor/kepano/obsidian-bases/SKILL.md). Cite those skills, never restate their contents.
 
 ---

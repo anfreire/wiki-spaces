@@ -27,7 +27,7 @@ If the config is missing or `wiki` is unset, the user has not set up yet — dri
 
 ## Preflight (before anything)
 
-This briefing drives the **full installation** (skills + scaffold). For a no-install Tier 1 start — folder + `index.md` — see the README's `## Start` section. The skills resolve the target wiki via explicit path, CWD ancestor, or the config in that order, so a no-install wiki still works as long as the agent invokes the skills with the wiki path or from inside it.
+This briefing drives the **full installation** (skills + scaffold). For a no-install Tier 1 start — folder + `index.md` — see the README's `## Start` section. The skills resolve the target wiki via **explicit path → config → CWD ancestor**, so a no-install wiki still works as long as the agent invokes the skills with the wiki path or from inside it.
 
 For the full installation, verify the user's machine has one of:
 - **Recommended:** [`uv`](https://docs.astral.sh/uv/) on PATH (`curl -LsSf https://astral.sh/uv/install.sh | sh` or `brew install uv`). Used for `uvx wiki-spaces …` (no install) or `uv tool install wiki-spaces` (permanent). uv provisions Python automatically.
@@ -47,9 +47,9 @@ The commands below show the recommended `uvx` form (no install). If the user has
 
 2. **Ask what the wiki is for, in the user's own words.** A one- or two-sentence description: *"I'll keep recipes I'm tweaking, plus notes on techniques and ingredient substitutions."* or *"Notes for my homeschool curriculum across four kids."* Don't show a menu — the user describes, you infer the layout.
 
-   Use the patterns below as **internal priors**, never as a user-facing list. When the description matches a pattern (cleanly or partially), propose that pattern's folders, Standard Pack opt-ins, and git default. When it doesn't map (e.g., *"game design notes," "law firm casebook"*), derive 3-6 folder names from the recurring kinds of content the user mentioned, default to no Standard Pack (still offer the opt-ins), and default git to "ask."
+   Use the patterns below as **internal priors**, never as a user-facing list. When the description matches a pattern (cleanly or partially), propose that pattern's folders, opt-in bundle, and git default. When it doesn't map (e.g., *"game design notes," "law firm casebook"*), derive 3-6 folder names from the recurring kinds of content the user mentioned, default to no opt-in bundle (still offer the opt-ins), and default git to "ask."
 
-   | Pattern | Suggested layout | Standard Pack | Git |
+   | Pattern | Suggested layout | Opt-in bundle | Git |
    |---|---|---|---|
    | **Developer notebook** | `concepts/`, `entities/`, `skills/`, `projects/` | `log.md` + `_meta/taxonomy.md` + `.manifest.json` | yes |
    | **Research wiki** | `papers/`, `topics/`, `methods/`, `datasets/`, `projects/` | `log.md` + `_meta/taxonomy.md` | yes |
@@ -62,7 +62,7 @@ The commands below show the recommended `uvx` form (no install). If the user has
 
 3. **Ask where the wiki should live.** Default: `~/Wiki/`. Confirm absolute path. While here, also ask the display name (shown in `index.md`) if the user wants something other than the directory basename.
 
-4. **Present the inferred proposal and accept adjustments in natural language.** Show the user a summary derived from their description: *"Based on what you described, I'll scaffold `<folders>`, set up `<Standard Pack files in plain terms — e.g. 'tag vocabulary and an audit log'>`, and `<initialize git / skip git>`. Sound right, or do you want to adjust?"* Don't enumerate internal opt-in files as menu items — the user shouldn't need to know what `log.md` or `.manifest.json` is. Take adjustments in the user's own words (*"rename recipes to desserts"*, *"skip git"*, *"don't bother with tags yet"*) and re-present until confirmed. If they ask what an opt-in is for (*"what's the audit log?"*), answer in 1-2 sentences and continue. Flat wikis (no folders at all) are fully valid; the proposal can be just `index.md` when the description warrants it.
+4. **Present the inferred proposal and accept adjustments in natural language.** Show the user a summary derived from their description: *"Based on what you described, I'll scaffold `<folders>`, set up `<opt-in bundle files in plain terms — e.g. 'tag vocabulary and an audit log'>`, and `<initialize git / skip git>`. Sound right, or do you want to adjust?"* Don't enumerate internal opt-in files as menu items — the user shouldn't need to know what `log.md` or `.manifest.json` is. Take adjustments in the user's own words (*"rename recipes to desserts"*, *"skip git"*, *"don't bother with tags yet"*) and re-present until confirmed. If they ask what an opt-in is for (*"what's the audit log?"*), answer in 1-2 sentences and continue. Flat wikis (no folders at all) are fully valid; the proposal can be just `index.md` when the description warrants it.
 
 5. **Scaffold the wiki.** Run `uvx wiki-spaces init <wiki-path> [--name <display-name>] [--description "<one-sentence purpose>"] [--with <opt-ins>] [--folders <names>] [--git]`. Pass the user's one-sentence purpose (from step 2) as `--description` so it lands in `index.md`'s "What this space is" section verbatim, instead of leaving the placeholder. `init` creates `index.md`, writes any `--with` opt-in files, creates each `--folders` directory at the wiki root (with a `.gitkeep` placeholder when `--git` is set, so the empty dirs survive commit/clone), runs `git init -b main` when `--git` is set, and writes `wiki = <wiki-path>` to the config. Omit `--folders` for a flat wiki. Verify it printed "registered as canonical wiki in ...".
 
@@ -87,7 +87,7 @@ See [`MOUNT.md`](MOUNT.md). Quick summary:
 - **Wiki path exists but no `index.md`.** Same — re-scaffold or restore.
 - **`repo` key in config but path doesn't exist.** Re-run `uvx wiki-spaces install --all` (or `wiki-spaces install --all`) to refresh the share dir and rewrite `repo`. For dev-from-source users, ensure the clone is back at the recorded path then run `scripts/install.py --all`.
 - **`wiki-spaces install` (default detection) reports "No harnesses selected".** The user has none of the 5 supported harnesses on disk. Either ask whether to pre-position skills via `--all` (creates skill dirs for every supported harness), or — if they only use Cursor / Windsurf / GitHub Copilot / Aider — point them at [`HARNESS_INTEGRATION.md`](HARNESS_INTEGRATION.md) for manual snippets and skip the skills install entirely.
-- **Description doesn't cleanly match a canonical pattern.** Don't force the user into one. Identify the recurring kinds of content they mentioned and translate those into 3-6 folder names directly. Default to no Standard Pack opt-ins (offer them, but let the user opt in later as the wiki grows). Default git to "ask."
+- **Description doesn't cleanly match a canonical pattern.** Don't force the user into one. Identify the recurring kinds of content they mentioned and translate those into 3-6 folder names directly. Default to no opt-in bundle (offer them, but let the user opt in later as the wiki grows). Default git to "ask."
 - **User wants a flat wiki (no folders).** Omit `--folders` from the `wiki-spaces init` invocation. `wiki-update` will write pages at the wiki root or ask where to place. Fully valid; `index.md` is the only required file.
 - **User gives a description so short it doesn't suggest folders** (e.g., *"general notes"*). Ask one follow-up: "What recurring kinds of content do you expect — even a rough list?" If still vague, propose a flat wiki and offer to grow folders later.
 - **User wants to work from a source checkout (dev).** They `git clone https://github.com/anfreire/wiki-spaces.git ~/src/wiki-spaces`, then use `~/src/wiki-spaces/scripts/install.py`, `…/init_wiki.py`, `…/doctor.py` (same code path as the console script; reads/writes from the checkout instead of `~/.local/share/wiki-spaces/`).
@@ -101,7 +101,7 @@ The user can invoke skills via their AI coding harness:
 
 Skills always read the config first; they always know which wiki to operate on.
 
-CWD informs *placement* (project-scoped vs global), never *discovery*. A user in `~/Documents/Projects/foo/` who asks "save this concept about Python" will have it routed to a global folder (e.g., `<wiki>/concepts/` for a developer notebook), not `<wiki>/projects/foo/`, because the content is global. The agent uses the user's words and content to decide placement — CWD is just a hint.
+Discovery resolution is **explicit path → config → CWD ancestor**. Once the wiki is resolved, CWD informs *placement* (project-scoped vs global) but doesn't override the resolved target. A user in `~/Documents/Projects/foo/` who asks "save this concept about Python" will have it routed to a global folder (e.g., `<wiki>/concepts/` for a developer notebook), not `<wiki>/projects/foo/`, because the content is global. The agent uses the user's words and content to decide placement — CWD is just a hint there.
 
 ## Reference docs at the wiki-spaces repo
 

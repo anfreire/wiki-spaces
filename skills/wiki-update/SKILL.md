@@ -18,9 +18,9 @@ Extract durable knowledge from the current source (project, conversation, or res
 
 When step 1 of the procedure finds no usable wiki (config missing or wiki path invalid), drive an interactive scaffold before anything else. The full briefing lives in `references/SETUP.md` at the wiki-spaces repo; the short version:
 
-1. **Ask what the wiki is for, in the user's own words.** A one- or two-sentence description. Don't show a menu — infer the layout from what the user describes. Use the patterns below as internal priors; when the description doesn't match cleanly, derive 3-6 folder names from the recurring kinds the user mentioned, default to no Standard Pack opt-ins (still offer them), and default git to "ask."
+1. **Ask what the wiki is for, in the user's own words.** A one- or two-sentence description. Don't show a menu — infer the layout from what the user describes. Use the patterns below as internal priors; when the description doesn't match cleanly, derive 3-6 folder names from the recurring kinds the user mentioned, default to no opt-in bundle (still offer them), and default git to "ask."
 
-   | Pattern | Suggested layout | Standard Pack | Git |
+   | Pattern | Suggested layout | Opt-in bundle | Git |
    |---|---|---|---|
    | Developer notebook | `concepts/`, `entities/`, `skills/`, `projects/` | `log.md` + `_meta/taxonomy.md` + `.manifest.json` | yes |
    | Research wiki | `papers/`, `topics/`, `methods/`, `datasets/`, `projects/` | `log.md` + `_meta/taxonomy.md` | yes |
@@ -33,7 +33,7 @@ When step 1 of the procedure finds no usable wiki (config missing or wiki path i
 
 2. **Ask where the wiki should live.** Absolute path. Default: `~/Wiki/`. Also ask the display name if it differs from the directory basename.
 
-3. **Present the inferred proposal and accept adjustments in natural language.** Show the proposal in one block: folders + Standard Pack opt-ins + git. Don't enumerate internal opt-in files as a menu — the user shouldn't have to know what `log.md` or `.manifest.json` is to set up a wiki. If the user wants changes, take them in their own words (*"rename recipes to desserts"*, *"skip git"*, *"add tag tracking"*) and re-present. If they ask what an opt-in does (*"what's log.md?"*), answer in 1-2 sentences and continue. Flat wikis (no folders) are fully valid; the proposal can include "no folders" when the description warrants it.
+3. **Present the inferred proposal and accept adjustments in natural language.** Show the proposal in one block: folders + opt-in bundle + git. Don't enumerate internal opt-in files as a menu — the user shouldn't have to know what `log.md` or `.manifest.json` is to set up a wiki. If the user wants changes, take them in their own words (*"rename recipes to desserts"*, *"skip git"*, *"add tag tracking"*) and re-present. If they ask what an opt-in does (*"what's log.md?"*), answer in 1-2 sentences and continue. Flat wikis (no folders) are fully valid; the proposal can include "no folders" when the description warrants it.
 
 Then run `uvx wiki-spaces init <wiki-path> [--name <display-name>] [--description <text>] [--with <opt-ins>] [--folders <names>] [--git]` (drop the `uvx` prefix if wiki-spaces was installed permanently via `uv tool install wiki-spaces` or `pip install wiki-spaces`). Pass the user's one-sentence description from step 1 as `--description` so their words land in `index.md`'s "What this space is" section. The command creates `index.md`, writes the opt-in files, creates each `--folders` directory at the wiki root (with a `.gitkeep` placeholder when `--git` is set), runs `git init -b main` when `--git` is set, and writes `wiki = <wiki-path>` to `~/.config/wiki-spaces/config` automatically. Omit `--folders` for a flat wiki. After init, return to step 1 of the Procedure.
 

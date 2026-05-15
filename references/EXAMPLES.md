@@ -34,7 +34,7 @@ The `wiki = /home/<user>/Wiki` entry in `~/.config/wiki-spaces/config` makes thi
         └── index.md
 ```
 
-Cross-project knowledge at the root; project-specific knowledge under `projects/<name>/`. `wiki-update` recognizes this shape and routes content accordingly. The Standard Pack (`log.md`, `_meta/taxonomy.md`, `.manifest.json`) is the recommended add-on for this use case because most of it (project sync state, taxonomy-managed tags, audit log) is dev-leaning.
+Cross-project knowledge at the root; project-specific knowledge under `projects/<name>/`. `wiki-update` recognizes this shape and routes content accordingly. The opt-in bundle (`log.md`, `_meta/taxonomy.md`, `.manifest.json`) is the recommended add-on for this use case because most of it (project sync state, taxonomy-managed tags, audit log) is dev-leaning.
 
 ## Research wiki
 
@@ -83,7 +83,7 @@ For fiction, journalism, or any structured writing project. Tags are usually fre
 └── meal-plans/           ← weekly plans, shopping lists
 ```
 
-Domain-specific layout. Skills work fine — search for "what do I know about pickling," capture a new technique from a conversation, audit for orphaned recipes. No Standard Pack needed; pure content.
+Domain-specific layout. Skills work fine — search for "what do I know about pickling," capture a new technique from a conversation, audit for orphaned recipes. No opt-in bundle needed; pure content.
 
 ## Personal knowledge
 
@@ -98,7 +98,7 @@ Domain-specific layout. Skills work fine — search for "what do I know about pi
 └── archive/              ← retired entries
 ```
 
-A personal life wiki. Privacy matters more here — typically not git-shared, possibly encrypted at the filesystem layer. The reference skills work without any Standard Pack opt-ins.
+A personal life wiki. Privacy matters more here — typically not git-shared, possibly encrypted at the filesystem layer. The reference skills work without any opt-in bundle.
 
 ## Team reference
 

@@ -49,6 +49,17 @@ def test_validate_rel_path_accepts_nested():
     assert ok and err is None
 
 
+def test_validate_rel_path_accepts_hidden_non_git():
+    # Matches `init --folders` policy: only .git is reserved.
+    ok, err = space._validate_rel_path(".archive")
+    assert ok and err is None
+
+
+def test_validate_rel_path_rejects_dot_git():
+    ok, err = space._validate_rel_path("projects/.git")
+    assert not ok
+
+
 # ---------- space add ----------
 
 def test_add_creates_space_and_updates_parent(tmp_path):

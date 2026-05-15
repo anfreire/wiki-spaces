@@ -35,15 +35,15 @@ def build_index_md(name: str, description: str, folders: list[str]) -> str:
     """Compose the initial index.md.
 
     Always includes the title and `## What this space is`. When `--folders`
-    were given, also writes `## Items` listing each folder with an empty
-    description placeholder — the user fills these in to give wiki-update
-    routing signal.
+    were given, also writes `## Items` listing each folder. Descriptions are
+    omitted (no dangling `— `); the user fills them in later to give
+    `wiki-update` routing signal.
     """
     parts = [f"# {name}", "", "## What this space is", "", description, ""]
     if folders:
         parts.extend(["## Items", ""])
         for folder in folders:
-            parts.append(f"- [{folder}/]({folder}/) — ")
+            parts.append(f"- [{folder}/]({folder}/)")
         parts.append("")
     return "\n".join(parts)
 

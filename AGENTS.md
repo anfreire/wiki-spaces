@@ -64,6 +64,8 @@ What you share is always a space. Your whole wiki is just the top-most space; a 
 
 This makes "audit my wiki" reach project knowledge in `projects/<name>/` automatically (those are yours), while leaving a teammate's space at `shared/team-foo/` untouched until you ask for it explicitly.
 
+**Caveat for clones placed outside `shared/`.** The owned/external classification is path-based, not metadata-based. A plain `git clone` placed under `<wiki>/projects/<name>/` (or any path other than `<wiki>/shared/`) is classified as **owned** — writes are allowed by default. If you want read-only / external semantics for a third-party repo, mount it under `<wiki>/shared/` or register it as a foreign-origin git submodule. Push permissions on the upstream remain the de facto upstream-publication gate; trust scope is the local write-time gate.
+
 ## Markdown flavor
 
 Obsidian-flavored markdown is the wire format. Wikilinks (`[[page]]`), frontmatter, callouts (`> [!note]`), embeds (`![[page]]`), comments (`%% ... %%`), and Bases (`.base` files) all carry Obsidian semantics. Tools and skills assume this dialect; the vendored kepano skills (`obsidian-markdown`, `obsidian-bases`) are the canonical reference for syntax.
