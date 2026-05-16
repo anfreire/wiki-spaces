@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "wiki-spaces"
-version = "0.2.0"
+version = "0.3.0"
 description = "Minimal nestable wiki — a folder + index.md, for any use case (notes, research, recipes, writing, team docs). Spec, conventions catalog, and reference skills."
 readme = "README.md"
 license = "MIT"

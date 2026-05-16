@@ -5,4 +5,4 @@ See `wiki_spaces.cli` for the console-script entry point. Each subcommand
 standalone module with a `main()` entry.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
