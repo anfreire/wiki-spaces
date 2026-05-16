@@ -5,6 +5,9 @@ Reads ~/.config/wiki-spaces/config and reports:
 - vendor/kepano/ pin and (if network available) drift vs upstream
 - per-harness skill install state (symlink-ok / symlink-broken / copy-current /
   copy-stale / missing)
+
+Exit status is 0 only when the config exists and both `wiki` and `repo`
+validate OK; otherwise 1 — so `doctor` can gate setup scripts.
 """
 
 from __future__ import annotations
@@ -58,24 +61,34 @@ def _validate_repo(repo: str) -> str:
     return "OK"
 
 
-def check_config() -> None:
+def check_config() -> bool:
+    """Print config state. Return True only when the config exists and both
+    `wiki` and `repo` are set and validate OK."""
     print(f"Config ({CONFIG_PATH}):")
     cfg = read_config()
     if not cfg:
         print("  ! missing — run `wiki-spaces install` and `wiki-spaces init`")
         print()
-        return
+        return False
     wiki = cfg.get("wiki")
     repo = cfg.get("repo")
+    ok = True
     if wiki:
-        print(f"  wiki = {wiki}  ({_validate_wiki(wiki)})")
+        state = _validate_wiki(wiki)
+        print(f"  wiki = {wiki}  ({state})")
+        ok = ok and state == "OK"
     else:
         print("  wiki = (unset — run `wiki-spaces init` to scaffold or set manually)")
+        ok = False
     if repo:
-        print(f"  repo = {repo}  ({_validate_repo(repo)})")
+        state = _validate_repo(repo)
+        print(f"  repo = {repo}  ({state})")
+        ok = ok and state == "OK"
     else:
         print("  repo = (unset — run `wiki-spaces install` to set)")
+        ok = False
     print()
+    return ok
 
 
 def check_vendor(net: bool) -> None:
@@ -130,10 +143,13 @@ def main(argv: list[str] | None = None) -> int:
     if inst_root != src_root:
         print(f"  install target: {inst_root}")
     print()
-    check_config()
+    config_ok = check_config()
     check_vendor(net=not args.no_net)
     for h in HARNESSES:
         check_harness(h)
+    if not config_ok:
+        print("doctor: config incomplete or invalid (see above).")
+        return 1
     return 0
 
 
