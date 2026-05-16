@@ -352,38 +352,45 @@ def cmd_audit(args: argparse.Namespace) -> int:
         )
         return 2
 
+    all_spaces = list(_walk_owned_spaces(wiki_root))
+    # Every owned space should be listed in the `## Spaces` of its nearest
+    # ancestor space. That ancestor can sit across intervening plain folders,
+    # so the entry may be a multi-segment path (e.g. `projects/foo`).
+    expected: dict[Path, set[str]] = {s: set() for s in all_spaces}
+    for s in all_spaces:
+        if s == wiki_root:
+            continue
+        parent = _nearest_ancestor_space(wiki_root, s)
+        if parent in expected:
+            expected[parent].add(s.relative_to(parent).as_posix())
+
     issues = 0
-    for space in _walk_owned_spaces(wiki_root):
-        index = space / "index.md"
-        text = index.read_text(encoding="utf-8")
+    for space in all_spaces:
+        text = (space / "index.md").read_text(encoding="utf-8")
         if not _md.has_section(text, "Spaces"):
             continue
-        # `## Spaces` entries: normalize each href to its child-space dir,
-        # so `foo`, `foo/`, and `foo/index.md` all compare equal.
-        listed_dirs: set[str] = {
+        # `## Spaces` hrefs, normalized so `foo`, `foo/`, `foo/index.md`, and
+        # nested `projects/foo/index.md` all compare as the directory path.
+        listed = {
             _spaces_href_to_dir(e.href)
             for e in _md.parse_section_entries(text, "Spaces")
             if e.href
         }
-        # Direct child spaces actually on disk (owned, carrying index.md).
-        actual_dirs: set[str] = set()
-        for child in sorted(space.iterdir()):
-            if not child.is_dir() or child.name.startswith("."):
-                continue
-            if _is_external(child, wiki_root):
-                continue
-            if (child / "index.md").is_file():
-                actual_dirs.add(child.name)
-        missing = sorted(actual_dirs - listed_dirs)   # on disk, not listed
-        stale = sorted(listed_dirs - actual_dirs)     # listed, no space on disk
+        # Missing: an owned child space whose nearest ancestor is this space,
+        # not listed here. Stale: a listed entry with no index.md on disk
+        # (a deleted space, or an entry pointing at a plain folder).
+        missing = sorted(expected[space] - listed)
+        stale = sorted(
+            d for d in listed if not (space / d / "index.md").is_file()
+        )
         if missing or stale:
             rel = space.relative_to(wiki_root)
             label = "<wiki>" if str(rel) == "." else f"<wiki>/{rel}"
             print(f"{label}/index.md:")
-            for m in missing:
-                print(f"  + missing entry for {m}/")
-            for s in stale:
-                print(f"  - stale entry {s}/ (no index.md on disk)")
+            for entry in missing:
+                print(f"  + missing entry for {entry}/")
+            for entry in stale:
+                print(f"  - stale entry {entry}/ (no index.md on disk)")
             issues += len(missing) + len(stale)
 
     if issues == 0:

@@ -215,6 +215,30 @@ def test_audit_reports_stale_entry(tmp_path):
     assert "ghost" in out and "stale" in out
 
 
+def test_audit_accepts_nested_space_entry(tmp_path):
+    """`space add projects/foo` registers `projects/foo/index.md` in the
+    root's ## Spaces (projects/ is a plain folder). Audit must treat that
+    multi-segment entry as valid, not stale."""
+    wiki = _make_wiki(tmp_path)
+    rc, _, _ = _run(["--wiki", str(wiki), "add", "projects/foo"])
+    assert rc == 0
+    rc, out, _ = _run(["--wiki", str(wiki), "audit"])
+    assert rc == 0, out
+    assert "OK" in out
+
+
+def test_audit_reports_nested_orphan_missing(tmp_path):
+    """A space nested below a plain folder, unregistered, is reported missing
+    against its nearest ancestor space (the wiki root here)."""
+    wiki = _make_wiki(tmp_path)
+    nested = wiki / "projects" / "orphan"
+    nested.mkdir(parents=True)
+    (nested / "index.md").write_text("# orphan")
+    rc, out, _ = _run(["--wiki", str(wiki), "audit"])
+    assert rc != 0
+    assert "projects/orphan" in out
+
+
 # ---------- symlink cycle safety ----------
 
 def test_walk_owned_spaces_breaks_symlink_cycle(tmp_path):
