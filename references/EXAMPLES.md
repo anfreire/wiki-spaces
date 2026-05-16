@@ -135,6 +135,6 @@ See [`MOUNT.md`](MOUNT.md) for the three mount mechanisms (submodule, clone, sym
 
 - The two-key config (`wiki` + `repo`) at `~/.config/wiki-spaces/config` always has exactly one canonical `wiki` entry.
 - `wiki-search`, `wiki-update`, `wiki-tend` operate on that canonical wiki regardless of its shape.
-- CWD is a placement hint; the wiki itself is always the configured one.
+- CWD is a placement hint, never a wiki-switch — it chooses *where* in the resolved wiki content lands. (Resolution order is explicit path → config → CWD ancestor; see `CONVENTIONS.md` / Discovery via config.)
 - Spaces are autonomous; conventions don't propagate from parents to children.
 - Opt-in conventions (`log.md`, `_meta/taxonomy.md`, `.manifest.json`, frontmatter, etc.) work the same regardless of folder layout.

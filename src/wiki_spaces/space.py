@@ -13,7 +13,7 @@ Operations:
                              direct child spaces and listed `## Spaces` entries.
 
 Trust scope: writes stay inside the wiki tree. External spaces (per the
-heuristic in CONVENTIONS.md / Trust Scope) are skipped on traversal.
+heuristic in CONVENTIONS.md / Owned vs external) are skipped on traversal.
 """
 
 from __future__ import annotations
@@ -124,7 +124,7 @@ def _is_foreign_submodule(path: Path, wiki_root: Path) -> bool:
 
 
 def _is_external(path: Path, wiki_root: Path) -> bool:
-    """External-space heuristic per CONVENTIONS.md / Trust Scope.
+    """External-space heuristic per CONVENTIONS.md / Owned vs external.
 
     Catches: under `<wiki>/shared/`, foreign-origin git submodules (parsed
     from `.gitmodules` vs the wiki's `.git/config` origin), or symlinks
