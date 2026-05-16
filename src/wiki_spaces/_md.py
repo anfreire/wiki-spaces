@@ -4,7 +4,7 @@ Pure functions on markdown text. No I/O — callers handle file reads/writes.
 Stdlib only.
 
 Scope:
-- `## Spaces` / `## Items` section parse/edit (add_entry, remove_entry,
+- `## Spaces` section parse/edit (add_entry, remove_entry,
   parse_section_entries, has_section).
 - Minimal frontmatter parse/serialize for the documented schema (scalars,
   inline arrays, folded `>-` scalars).
@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-# ---------- Index sections (## Spaces / ## Items) ----------
+# ---------- Index sections (## Spaces) ----------
 
 ENTRY_RE = re.compile(
     r"^\s*-\s+\[([^\]]+)\]\(([^)]+)\)(?:\s*[—\-]+\s*(.*))?$"
@@ -34,7 +34,7 @@ WIKILINK_ENTRY_RE = re.compile(
 
 @dataclass(frozen=True)
 class IndexEntry:
-    """A bullet under `## Items` / `## Spaces`.
+    """A parsed bullet from a `## <heading>` section (e.g. `## Spaces`).
 
     Either `href` (markdown-link form, e.g. `path/`) or `wikilink`
     (`[[name]]` form) is set; never both. `description` is the optional

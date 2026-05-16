@@ -31,21 +31,16 @@ OPTIONAL = {"log.md", "hot.md", "_template.md", "_meta/taxonomy.md", ".manifest.
 DEFAULT_DESCRIPTION = "<one paragraph describing this wiki>"
 
 
-def build_index_md(name: str, description: str, folders: list[str]) -> str:
-    """Compose the initial index.md.
+def build_index_md(name: str, description: str) -> str:
+    """Compose the initial index.md: title + `## What this space is`.
 
-    Always includes the title and `## What this space is`. When `--folders`
-    were given, also writes `## Items` listing each folder. Descriptions are
-    omitted (no dangling `— `); the user fills them in later to give
-    `wiki-update` routing signal.
+    Folders passed via `--folders` are created on disk but not listed in
+    `index.md`. Tools discover plain folders by globbing the filesystem;
+    `## Spaces` is added by `wiki-spaces space add` once a folder becomes a
+    space. `## Items` is left for the user to add by hand if they want a
+    human-facing landing list.
     """
-    parts = [f"# {name}", "", "## What this space is", "", description, ""]
-    if folders:
-        parts.extend(["## Items", ""])
-        for folder in folders:
-            parts.append(f"- [{folder}/]({folder}/)")
-        parts.append("")
-    return "\n".join(parts)
+    return "\n".join([f"# {name}", "", "## What this space is", "", description, ""])
 
 LOG_MD = "# Log\n"
 HOT_MD = "# Hot\n\n_Currently active work._\n"
@@ -202,7 +197,7 @@ def main(argv: list[str] | None = None) -> int:
         f.write_text(content)
         written.append(rel)
 
-    write("index.md", build_index_md(name, description, folders))
+    write("index.md", build_index_md(name, description))
 
     for opt in args.extras:
         match opt:

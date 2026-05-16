@@ -20,19 +20,25 @@ def _run(args: list[str]) -> tuple[int, str, str]:
 
 # ---------- build_index_md ----------
 
-def test_build_index_md_flat():
-    text = init_wiki.build_index_md("MyWiki", "A description", [])
+def test_build_index_md():
+    text = init_wiki.build_index_md("MyWiki", "A description")
     assert text.startswith("# MyWiki")
     assert "## What this space is" in text
     assert "A description" in text
     assert "## Items" not in text
 
 
-def test_build_index_md_with_folders_emits_items():
-    text = init_wiki.build_index_md("MyWiki", "desc", ["concepts", "projects"])
-    assert "## Items" in text
-    assert "[concepts/](concepts/)" in text
-    assert "[projects/](projects/)" in text
+def test_init_folders_created_but_not_listed_in_index(monkeypatch, tmp_path):
+    """--folders creates directories on disk; index.md gets no `## Items`
+    section — tools discover plain folders via the filesystem."""
+    monkeypatch.setattr(_common, "CONFIG_PATH", tmp_path / "absent-config")
+    rc, _, _ = _run([
+        str(tmp_path / "wiki"), "--folders", "concepts", "projects", "--no-config",
+    ])
+    assert rc == 0
+    wiki = tmp_path / "wiki"
+    assert (wiki / "concepts").is_dir() and (wiki / "projects").is_dir()
+    assert "## Items" not in (wiki / "index.md").read_text()
 
 
 # ---------- folder validation ----------

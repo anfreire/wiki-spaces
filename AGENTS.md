@@ -41,7 +41,7 @@ When `## Spaces` is present, the contract holds: tools enforce exhaustiveness on
 Two other `index.md` sections are common but **independent** of the Tier 2 contract — adopt them, or not, without affecting tier:
 
 - **`## What this space is`** — opening paragraph in plain prose. Describes the space.
-- **`## Items`** — curated list of files (and plain folders) worth surfacing. Not exhaustive; tools that need every file glob the filesystem. Hand-managed by the user; tools may remove entries pointing to deleted files but never auto-add.
+- **`## Items`** — an optional, purely human-facing list of files or folders worth surfacing on the landing page. Hand-maintained; tools never read or write it. (Tools find content through `## Spaces` and the filesystem — a wiki needs no `## Items`.)
 
 Each space chooses its own tier independently. A wiki at Tier 2 may contain a space at Tier 1 and another at Tier 3.
 

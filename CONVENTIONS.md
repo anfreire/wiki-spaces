@@ -119,7 +119,7 @@ For shared or collaborative spaces, the recommended mechanism is **git repositor
 **If present:** This folder is a space (per the [spec](AGENTS.md)). `index.md` typically grows three sections as the space grows:
 
 - **`## What this space is`** — opening paragraph, plain prose. The space's own description; preserved across regenerations.
-- **`## Items`** — curated human navigation. A hand-picked list of files and plain folders worth surfacing — not exhaustive. Tools that need every file glob the filesystem.
+- **`## Items`** — optional, purely human-facing navigation: a hand-picked landing list of files or folders worth surfacing. Tools never read or write it.
 - **`## Spaces`** — the navigation map: every space directly inside this one, listed once. The convention: the parent owns the link entry, the child owns its content. Adding a space inside means adding an entry here in the same change; removing a space means removing the entry. Tools rely on `## Spaces` being complete to traverse the tree.
 
 Entries in `## Items` and `## Spaces` are markdown bullet lists, one per line. Order is the author's choice (typically navigational, not alphabetical):
@@ -127,7 +127,7 @@ Entries in `## Items` and `## Spaces` are markdown bullet lists, one per line. O
 - `## Items` — `[label](relative/path)` or `[[wikilink]]`, with an optional ` — short description`. Files and plain folders (folders without their own `index.md`) both belong here when worth surfacing. Hidden control files (`.manifest.json`, `_meta/...`, `_template.md`) are conventionally omitted unless a human reader needs to navigate to them.
 - `## Spaces` — `[label](sub-folder/index.md)`, with an optional ` — short description`.
 
-`## Items` is curated, so tools don't auto-add entries (only remove ones pointing to deleted files). `## Spaces` is meant to be exhaustive, so tools may flag sub-folders with `index.md` that aren't listed.
+`## Items` carries no contract — it is human-maintained and tools never touch it. `## Spaces` is the opposite: meant to be exhaustive, so tools maintain it and flag sub-folders with `index.md` that aren't listed.
 
 Skip any of these sections and `index.md` still marks the folder as a wiki. Tools that lean on the convention degrade where it isn't followed — your wiki is still your wiki.
 
@@ -316,7 +316,7 @@ Project-scoped content nests inside the wiki's project-grouping folder (commonly
 
 Slugs for new pages are lowercase, hyphen-separated, ≤50 chars, descriptive.
 
-**Self-documenting layouts.** Each top-level folder gets a one-line "what goes here" description in `index.md` — under `## Spaces` if the folder is itself a space (has its own `index.md`), or under `## Items` if it's a plain folder you want surfaced. `wiki-update` reads those descriptions when classifying new content; without descriptions, the bare folder name is the only signal — name folders concretely (`recipes/` not `stuff/`) and routing still works, descriptions just make it more precise.
+**Self-documenting layouts.** A child space (a folder with its own `index.md`) can carry a one-line "what goes here" description in its parent's `## Spaces` entry — `wiki-update` reads those descriptions when classifying new content. Plain folders (no `index.md`) have no such entry and route by folder name alone, so name them concretely (`recipes/` not `stuff/`) and routing still works; a description just makes it more precise. `## Items` is human-only and never consulted for routing.
 
 `wiki-update`'s classification follows folder-name semantics first, then descriptions: a "sourdough recipe" matches `recipes/`, a "character bio" matches `characters/`, a "Python typing pattern" matches `concepts/` (or `notes/`, or whatever your wiki uses). When two folders are equally plausible the skill surfaces both options before writing; when none fit it asks, optionally creating a new folder for content that represents a recurring kind. Project-scoped content (identified by the user's intent — CWD is only a hint that disambiguates *which* project, never the trigger for project-vs-global) lands under whichever folder the wiki uses to group per-project content (`projects/`, `clients/`, `work/`, etc.).
 
