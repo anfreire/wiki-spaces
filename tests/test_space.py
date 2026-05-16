@@ -192,6 +192,29 @@ def test_audit_skips_external_shared(tmp_path):
     assert rc == 0
 
 
+def test_audit_accepts_bare_folder_href(tmp_path):
+    """A `## Spaces` entry written `- [foo/](foo/)` (bare-folder href, no
+    /index.md) must not be reported as a missing entry."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "foo").mkdir()
+    (wiki / "foo" / "index.md").write_text("# foo")
+    idx = wiki / "index.md"
+    idx.write_text(idx.read_text() + "- [foo/](foo/)\n")
+    rc, out, _ = _run(["--wiki", str(wiki), "audit"])
+    assert rc == 0, out
+    assert "OK" in out
+
+
+def test_audit_reports_stale_entry(tmp_path):
+    """A `## Spaces` entry with no space on disk is reported stale."""
+    wiki = _make_wiki(tmp_path)
+    idx = wiki / "index.md"
+    idx.write_text(idx.read_text() + "- [ghost/](ghost/index.md)\n")
+    rc, out, _ = _run(["--wiki", str(wiki), "audit"])
+    assert rc != 0
+    assert "ghost" in out and "stale" in out
+
+
 # ---------- symlink cycle safety ----------
 
 def test_walk_owned_spaces_breaks_symlink_cycle(tmp_path):

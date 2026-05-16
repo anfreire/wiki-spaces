@@ -206,6 +206,19 @@ def _new_index_md(name: str, description: str) -> str:
     return f"# {name}\n\n## What this space is\n\n{description}\n"
 
 
+def _spaces_href_to_dir(href: str) -> str:
+    """Normalize a `## Spaces` entry href to its child-space directory.
+
+    `## Spaces` entries may be written `foo`, `foo/`, or `foo/index.md` (all
+    accepted by `_md`); each identifies the same child space. Audit compares
+    on this normalized form so a bare-folder href is not mistaken for drift.
+    """
+    h = href.strip()
+    if h.endswith("/index.md"):
+        h = h[: -len("/index.md")]
+    return h.rstrip("/")
+
+
 # ---------- Subcommands ----------
 
 def cmd_add(args: argparse.Namespace) -> int:
@@ -345,40 +358,32 @@ def cmd_audit(args: argparse.Namespace) -> int:
         text = index.read_text(encoding="utf-8")
         if not _md.has_section(text, "Spaces"):
             continue
-        listed_hrefs: set[str] = set()
-        for entry in _md.parse_section_entries(text, "Spaces"):
-            if entry.href:
-                listed_hrefs.add(entry.href.rstrip("/"))
-        # Direct child spaces on disk
-        actual: dict[str, Path] = {}
+        # `## Spaces` entries: normalize each href to its child-space dir,
+        # so `foo`, `foo/`, and `foo/index.md` all compare equal.
+        listed_dirs: set[str] = {
+            _spaces_href_to_dir(e.href)
+            for e in _md.parse_section_entries(text, "Spaces")
+            if e.href
+        }
+        # Direct child spaces actually on disk (owned, carrying index.md).
+        actual_dirs: set[str] = set()
         for child in sorted(space.iterdir()):
             if not child.is_dir() or child.name.startswith("."):
                 continue
             if _is_external(child, wiki_root):
                 continue
             if (child / "index.md").is_file():
-                actual[f"{child.name}/index.md"] = child
-        missing = sorted(set(actual.keys()) - listed_hrefs)
-        # An entry is stale when its href, resolved against the space, has
-        # no index.md.
-        stale: list[str] = []
-        for href in listed_hrefs:
-            target = (space / href).resolve()
-            if href.endswith("/"):
-                target = (space / href / "index.md").resolve()
-            elif not href.endswith("/index.md"):
-                # bare folder reference like `foo/`
-                target = (space / href / "index.md").resolve()
-            if not target.is_file():
-                stale.append(href)
+                actual_dirs.add(child.name)
+        missing = sorted(actual_dirs - listed_dirs)   # on disk, not listed
+        stale = sorted(listed_dirs - actual_dirs)     # listed, no space on disk
         if missing or stale:
             rel = space.relative_to(wiki_root)
             label = "<wiki>" if str(rel) == "." else f"<wiki>/{rel}"
             print(f"{label}/index.md:")
             for m in missing:
-                print(f"  + missing entry for {m}")
+                print(f"  + missing entry for {m}/")
             for s in stale:
-                print(f"  - stale entry {s} (no index.md on disk)")
+                print(f"  - stale entry {s}/ (no index.md on disk)")
             issues += len(missing) + len(stale)
 
     if issues == 0:
