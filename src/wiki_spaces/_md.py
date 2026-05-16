@@ -209,29 +209,51 @@ def find_wikilinks(text: str) -> list[str]:
     return out
 
 
+def _path_distance(a: Path, b: Path) -> int:
+    """Directory steps between two absolute paths (0 when equal)."""
+    common = 0
+    for x, y in zip(a.parts, b.parts):
+        if x != y:
+            break
+        common += 1
+    return (len(a.parts) - common) + (len(b.parts) - common)
+
+
 def resolve_wikilink(target: str, base: Path, candidates: set[Path]) -> Path | None:
     """Resolve a wikilink target against a set of candidate page paths.
 
     `target` is the wikilink contents (no `[[ ]]`, no alias, no heading).
-    `base` is the directory of the page doing the linking (for relative
-    resolution).
+    `base` is the directory of the page doing the linking.
     `candidates` is the set of all known page paths in the wiki (absolute).
 
     Resolution order:
-    1. Exact filename match (case-sensitive) anywhere in `candidates`.
-    2. Path-relative match from `base` (allowing `.md` suffix).
+    1. Path-relative match from `base` — the most specific, since it is the
+       linking page's own directory. An implicit `.md` suffix is allowed.
+    2. Filename match anywhere. When several pages share the filename, the
+       one whose directory is closest to `base` wins; any remaining tie
+       breaks on sorted path — so the result never depends on the iteration
+       order of the `candidates` set.
 
     Returns the resolved absolute path, or None when no match.
     """
     # Normalize: target may or may not include `.md`.
     name = target if target.endswith(".md") else f"{target}.md"
-    for c in candidates:
-        if c.name == name:
-            return c
+
+    # 1. Exact path-relative match from the linking page's directory.
     rel = (base / name).resolve()
     if rel in candidates:
         return rel
-    return None
+
+    # 2. Filename match anywhere — deterministic: closest to `base`, then
+    #    sorted path as the final tie-break.
+    matches = [c for c in candidates if c.name == name]
+    if not matches:
+        return None
+    base_resolved = base.resolve()
+    return min(
+        matches,
+        key=lambda c: (_path_distance(base_resolved, c.parent), str(c)),
+    )
 
 
 # ---------- Frontmatter (minimal) ----------

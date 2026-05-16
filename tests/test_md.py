@@ -155,6 +155,44 @@ def test_resolve_wikilink_unknown(tmp_path):
     assert _md.resolve_wikilink("missing", tmp_path, set()) is None
 
 
+def test_resolve_wikilink_prefers_base_relative(tmp_path):
+    """A page in the linking page's own directory wins over a same-named
+    page elsewhere."""
+    here = tmp_path / "projects" / "a" / "index.md"
+    here.parent.mkdir(parents=True)
+    here.write_text("")
+    elsewhere = tmp_path / "projects" / "b" / "index.md"
+    elsewhere.parent.mkdir(parents=True)
+    elsewhere.write_text("")
+    candidates = {here.resolve(), elsewhere.resolve()}
+    base = tmp_path / "projects" / "a"
+    assert _md.resolve_wikilink("index", base, candidates) == here.resolve()
+
+
+def test_resolve_wikilink_duplicate_filenames_deterministic(tmp_path):
+    """Duplicate filenames across spaces resolve deterministically to the
+    candidate closest to the linking page's directory."""
+    near = tmp_path / "projects" / "a" / "notes" / "setup.md"
+    near.parent.mkdir(parents=True)
+    near.write_text("")
+    far = tmp_path / "archive" / "old" / "deep" / "setup.md"
+    far.parent.mkdir(parents=True)
+    far.write_text("")
+    candidates = {near.resolve(), far.resolve()}
+    base = tmp_path / "projects" / "a"
+    for _ in range(5):
+        assert _md.resolve_wikilink("setup", base, candidates) == near.resolve()
+
+
+def test_path_distance():
+    from pathlib import Path
+
+    a = Path("/w/projects/a")
+    assert _md._path_distance(a, a) == 0
+    assert _md._path_distance(a, Path("/w/projects/a/notes")) == 1
+    assert _md._path_distance(a, Path("/w/projects/b")) == 2
+
+
 # ---------- frontmatter ----------
 
 FM_SAMPLE = """---
