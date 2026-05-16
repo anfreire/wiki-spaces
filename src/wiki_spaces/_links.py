@@ -1,13 +1,13 @@
 """Cross-link scoring for wiki-spaces.
 
-Pure functions, stdlib only. This is the authoritative implementation of the
-cross-link scoring policy described in CONVENTIONS.md / Linking rules — kept
-as tested code so the policy has one verifiable definition instead of living
-only in skill prose, where the numbers drift.
+Pure functions, stdlib only. A tested implementation of the cross-link
+scoring policy in CONVENTIONS.md / Linking rules, so the policy has a
+verifiable definition and not only a prose description.
 
-`wiki-tend`'s cross-link pass builds a `LinkCandidate` for each unlinked
-mention of one page found in another, then calls `should_link` to decide
-whether to add the link.
+Intended use: build a `LinkCandidate` for each unlinked mention of one page
+found in another, then call `should_link`. `wiki-tend` applies this policy;
+it can call this module directly wherever the `wiki_spaces` package is
+importable, and otherwise follows the equivalent weights in CONVENTIONS.
 """
 
 from __future__ import annotations

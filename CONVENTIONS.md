@@ -358,7 +358,7 @@ Wikilink and markdown-link syntax: see [obsidian-markdown](vendor/kepano/obsidia
 - Add up to 2 relevant wikilinks per page; never force irrelevant links.
 - Link the first natural mention only. Skip mentions inside code blocks or frontmatter.
 - Use the shortest link that resolves unambiguously.
-- `wiki-tend`'s cross-link pass scores each candidate link: exact name match (+4), partial name match (+1), shared tags ≥2 (+2), same project (+2), cross-category (+2); a link is applied at score ≥3. This policy has one authoritative, tested implementation — `wiki_spaces._links.score_cross_link` / `should_link` — so the weights never drift between prose and behavior.
+- `wiki-tend`'s cross-link pass scores each candidate link: exact name match (+4), partial name match (+1), shared tags ≥2 (+2), same project (+2), cross-category (+2); a link is applied at score ≥3. `wiki_spaces._links` (`score_cross_link` / `should_link`) is a tested implementation of these weights, importable wherever the `wiki_spaces` package is installed.
 
 ---
 
