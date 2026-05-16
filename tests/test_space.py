@@ -274,3 +274,33 @@ def test_is_external_marks_foreign_submodule(tmp_path):
         "\turl = https://github.com/other/wiki.git\n"
     )
     assert space._is_external(sub, wiki) is True
+
+
+# ---------- _is_external: lexical shared/ check ----------
+
+def test_is_external_marks_plain_shared_dir(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    d = wiki / "shared" / "team"
+    d.mkdir(parents=True)
+    assert space._is_external(d, wiki) is True
+
+
+def test_is_external_owned_for_normal_dir(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    d = wiki / "projects" / "mine"
+    d.mkdir(parents=True)
+    assert space._is_external(d, wiki) is False
+
+
+def test_is_external_marks_symlink_under_shared(tmp_path):
+    """A symlink at <wiki>/shared/ is external even when it points back inside
+    the wiki tree — the shared/ test must be lexical, not realpath-based."""
+    wiki = _make_wiki(tmp_path)
+    inside = wiki / "projects" / "real"
+    inside.mkdir(parents=True)
+    (inside / "index.md").write_text("# real")
+    (wiki / "shared").mkdir()
+    import os
+    link = wiki / "shared" / "mirror"
+    os.symlink(inside, link)
+    assert space._is_external(link, wiki) is True

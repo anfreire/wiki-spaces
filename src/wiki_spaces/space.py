@@ -129,9 +129,13 @@ def _is_external(path: Path, wiki_root: Path) -> bool:
     Catches: under `<wiki>/shared/`, foreign-origin git submodules (parsed
     from `.gitmodules` vs the wiki's `.git/config` origin), or symlinks
     whose realpath leaves the wiki tree.
+
+    The `shared/` test uses the lexical (unresolved) path, so a symlink placed
+    at `<wiki>/shared/...` is external regardless of where it resolves to.
+    A symlink whose realpath leaves the tree is caught separately below.
     """
     try:
-        rel = path.resolve().relative_to(wiki_root)
+        rel = path.relative_to(wiki_root)
     except ValueError:
         return True
     if rel.parts and rel.parts[0] == "shared":
