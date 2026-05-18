@@ -52,7 +52,7 @@ wiki = /home/you/Wiki
 repo = /home/you/.local/share/wiki-spaces
 ```
 
-Both keys are absolute paths. `wiki` points to a folder containing `index.md`; `repo` points to the wiki-spaces install — the share dir written by `wiki-spaces install` (PyPI users) or a source checkout (dev users) — so skills can fetch `AGENTS.md`, `CONVENTIONS.md`, and `references/` on demand. If either path doesn't resolve, skills fail soft and tell the user what's missing.
+Both keys are absolute paths. `wiki` points to a folder containing `index.md`; `repo` points to the wiki-spaces install — the share dir written by `wiki-spaces install` (PyPI users) or a source checkout (dev users) — so skills can fetch `AGENTS.md`, `CONVENTIONS.md`, and `references/` on demand. When `wiki` is missing or invalid, skills fall through to the resolution order below (CWD discovery, then inline setup). When `repo` is missing or invalid, skills fail soft on docs-fetching steps only — they fall back to the raw GitHub URL where possible and tell the user `wiki-spaces install` would fix the local path.
 
 **One canonical wiki per user.** wiki-spaces is built around a single wiki you call yours; the tooling assumes that. Users who want to switch between multiple wikis can swap configs manually. The single-wiki model is what makes global capture, cross-linking, and "open in Obsidian" all work coherently.
 
@@ -60,9 +60,7 @@ Bootstrap: `wiki-spaces install` writes the `repo` key automatically; `wiki-spac
 
 **Resolution order.** Skills resolve the target wiki in three steps: (1) an explicit path or named space in the user's request; (2) the `wiki` value in the config, when it points at a folder containing `index.md`; (3) **CWD ancestor** — the nearest ancestor of the current working directory that contains `index.md`. Step 3 lets a no-install Tier 1 wiki (folder + `index.md`, no config) work whenever the agent runs from inside it; skills note once when step 3 was the source and suggest `wiki-spaces init` to register it.
 
-When all three miss — no config *and* the CWD is not inside any wiki:
-- `wiki-update` runs the Initialization flow (see `wiki-update/SKILL.md` § Initialization, which mirrors `references/SETUP.md`).
-- `wiki-search` and `wiki-tend` fail soft: tell the user setup is needed and point them at `references/SETUP.md` (use the raw GitHub URL if the `repo` path is also unknown).
+When all three miss — no config *and* the CWD is not inside any wiki — every skill drives the setup flow inline before doing its own work. `wiki-update` owns the canonical Initialization procedure (`wiki-update/SKILL.md` § Initialization, which mirrors `references/SETUP.md`); `wiki-search` and `wiki-tend` follow the same flow (reading `<repo>/references/SETUP.md` directly when `repo` is set, the raw GitHub URL otherwise) and resume the user's original request once `wiki-spaces init` has registered the wiki.
 
 **CWD informs placement, not wiki choice.** Once a wiki is resolved by any step above, CWD and conversation context decide only *where within that wiki* a write goes — a project space vs global concepts — never which wiki to use. A configured `wiki` is never overridden by CWD; CWD acts as a discovery source only in step 3, the fallback when neither an explicit path nor a config is available.
 
