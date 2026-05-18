@@ -281,10 +281,12 @@ def parse_frontmatter(text: str) -> dict[str, str | list[str]] | None:
     - `key: value` (string scalar)
     - `key: >-\\n  multi-line value` (folded scalar, becomes single string)
     - `key: [item1, item2]` (inline string array)
+    - `key:\\n  - item1\\n  - item2` (YAML block-list — the form kepano's
+      `obsidian-markdown` skill emits for `tags:` and `aliases:`)
 
-    Anything else (block sequences, nested mappings, anchors) is not parsed
-    — those fields will be missing from the returned dict. Callers that need
-    full YAML should not use this helper.
+    Anything else (nested mappings, anchors, multi-line plain scalars) is
+    not parsed — those fields will be missing from the returned dict.
+    Callers that need full YAML should not use this helper.
     """
     fm_text, _ = split_frontmatter(text)
     if fm_text is None:
@@ -303,7 +305,6 @@ def parse_frontmatter(text: str) -> dict[str, str | list[str]] | None:
             continue
         key, value = m.group(1), m.group(2)
         if value.startswith(">-") or value == ">-":
-            # Folded scalar: collect indented continuation.
             parts: list[str] = []
             i += 1
             while i < len(lines) and (lines[i].startswith("  ") or lines[i] == ""):
@@ -321,10 +322,44 @@ def parse_frontmatter(text: str) -> dict[str, str | list[str]] | None:
                 out[key] = [item.strip().strip("'\"") for item in inner.split(",")]
             i += 1
             continue
-        # Plain scalar — strip optional quotes.
+        if not value.strip():
+            items, consumed = _consume_block_list(lines, i + 1)
+            if items is not None:
+                out[key] = items
+                i += 1 + consumed
+                continue
+            out[key] = ""
+            i += 1
+            continue
         out[key] = value.strip().strip("'\"")
         i += 1
     return out
+
+
+_BLOCK_LIST_ITEM_RE = re.compile(r"^(\s+)-\s*(.*)$")
+
+
+def _consume_block_list(lines: list[str], start: int) -> tuple[list[str] | None, int]:
+    """Collect a YAML block-list starting at `lines[start]`.
+
+    Returns (items, consumed). When no `  - item` line is present at start,
+    returns (None, 0) so the caller can fall back to scalar handling.
+    """
+    items: list[str] = []
+    j = start
+    while j < len(lines):
+        candidate = lines[j]
+        if not candidate.strip():
+            j += 1
+            continue
+        m = _BLOCK_LIST_ITEM_RE.match(candidate)
+        if not m:
+            break
+        items.append(m.group(2).strip().strip("'\""))
+        j += 1
+    if not items:
+        return None, 0
+    return items, j - start
 
 
 def update_frontmatter_field(text: str, key: str, value: str) -> str:

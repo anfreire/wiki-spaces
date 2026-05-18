@@ -239,6 +239,67 @@ def test_parse_frontmatter_absent():
     assert _md.parse_frontmatter("no frontmatter here") is None
 
 
+def test_parse_frontmatter_block_list():
+    fm = (
+        "---\n"
+        "title: Page\n"
+        "tags:\n"
+        "  - python\n"
+        "  - typing\n"
+        "aliases:\n"
+        "  - 'quoted alias'\n"
+        "  - \"double quoted\"\n"
+        "summary: short\n"
+        "---\n"
+        "body\n"
+    )
+    parsed = _md.parse_frontmatter(fm)
+    assert parsed is not None
+    assert parsed["tags"] == ["python", "typing"]
+    assert parsed["aliases"] == ["quoted alias", "double quoted"]
+    assert parsed["summary"] == "short"
+    assert parsed["title"] == "Page"
+
+
+def test_parse_frontmatter_block_list_followed_by_scalar():
+    fm = (
+        "---\n"
+        "tags:\n"
+        "  - foo\n"
+        "category: concept\n"
+        "---\n"
+        "body\n"
+    )
+    parsed = _md.parse_frontmatter(fm)
+    assert parsed is not None
+    assert parsed["tags"] == ["foo"]
+    assert parsed["category"] == "concept"
+
+
+def test_parse_frontmatter_empty_key_stays_empty_string():
+    fm = "---\naliases:\ntags: [x]\n---\nbody\n"
+    parsed = _md.parse_frontmatter(fm)
+    assert parsed is not None
+    assert parsed["aliases"] == ""
+    assert parsed["tags"] == ["x"]
+
+
+def test_parse_frontmatter_block_list_preserves_quoted_commas():
+    """Block-list items keep their full post-dash content; commas inside a
+    quoted item must not split it (kepano emits this for multi-word aliases)."""
+    fm = (
+        "---\n"
+        "tags:\n"
+        "  - \"foo, bar\"\n"
+        "  - baz\n"
+        "---\n"
+        "body\n"
+    )
+    parsed = _md.parse_frontmatter(fm)
+    assert parsed is not None
+    assert parsed["tags"] == ["foo, bar", "baz"]
+
+
 def test_update_frontmatter_replaces_existing_key():
     out = _md.update_frontmatter_field(FM_SAMPLE, "summary", "new summary")
     assert _md.parse_frontmatter(out)["summary"] == "new summary"
