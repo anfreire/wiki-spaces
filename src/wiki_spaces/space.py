@@ -69,15 +69,71 @@ def _validate_rel_path(rel: str) -> tuple[bool, str | None]:
     return True, None
 
 
-def _wiki_origin_url(wiki_root: Path) -> str | None:
-    """Return the wiki's origin remote URL from .git/config, or None.
+def _resolve_git_config(wiki_root: Path) -> Path | None:
+    """Locate the git config file for `wiki_root`.
 
-    Best-effort regex parse — no subprocess. Handles the common case of a
-    `[remote "origin"]` section with `url = …`.
+    Two layouts to handle per CONVENTIONS.md / `.git`:
+    - `<wiki>/.git/` is a directory (regular repo) → `<wiki>/.git/config`.
+    - `<wiki>/.git` is a FILE (git worktree or submodule). The file's body
+      is `gitdir: <abs-or-rel-path>` pointing at the real git dir. For
+      worktrees that dir has a `commondir` file pointing at the shared
+      repo, whose `config` is the authoritative origin source.
+
+    Returns the config path when it exists on disk, else None. Pure FS
+    parsing — no subprocess, matching the stdlib-only stance of this module.
     """
-    git_dir = wiki_root / ".git"
-    config = git_dir / "config" if git_dir.is_dir() else None
-    if config is None or not config.is_file():
+    git_entry = wiki_root / ".git"
+    if git_entry.is_dir():
+        config = git_entry / "config"
+        return config if config.is_file() else None
+    if not git_entry.is_file():
+        return None
+    try:
+        body = git_entry.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    gitdir: Path | None = None
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("gitdir:"):
+            target = stripped[len("gitdir:"):].strip()
+            if not target:
+                return None
+            target_path = Path(target)
+            if not target_path.is_absolute():
+                target_path = (git_entry.parent / target_path).resolve()
+            gitdir = target_path
+            break
+    if gitdir is None or not gitdir.is_dir():
+        return None
+    # Worktrees keep per-worktree state under gitdir but share config via
+    # commondir. Submodules embed config directly under gitdir.
+    commondir_file = gitdir / "commondir"
+    if commondir_file.is_file():
+        try:
+            common = commondir_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            common = ""
+        if common:
+            common_path = Path(common)
+            if not common_path.is_absolute():
+                common_path = (gitdir / common_path).resolve()
+            shared_config = common_path / "config"
+            if shared_config.is_file():
+                return shared_config
+    config = gitdir / "config"
+    return config if config.is_file() else None
+
+
+def _wiki_origin_url(wiki_root: Path) -> str | None:
+    """Return the wiki's origin remote URL from its git config, or None.
+
+    Resolves `.git/` (directory) and `.git` (file — worktree or submodule)
+    via `_resolve_git_config`. Best-effort regex parse — no subprocess.
+    Handles the common case of a `[remote "origin"]` section with `url = …`.
+    """
+    config = _resolve_git_config(wiki_root)
+    if config is None:
         return None
     import re
     text = config.read_text(encoding="utf-8")
@@ -93,8 +149,10 @@ def _is_foreign_submodule(path: Path, wiki_root: Path) -> bool:
     """True when path is registered as a git submodule with a foreign origin.
 
     Reads `<wiki>/.gitmodules` and compares each submodule's `url =` to the
-    wiki's own origin from `<wiki>/.git/config`. When either is unreadable,
-    returns False (callers fall back to the other heuristics).
+    wiki's own origin (resolved via `_wiki_origin_url`, which handles `.git/`
+    directories as well as `.git` files in submodules and worktrees). When
+    either is unreadable, returns False (callers fall back to the other
+    heuristics).
     """
     gitmodules = wiki_root / ".gitmodules"
     if not gitmodules.is_file():

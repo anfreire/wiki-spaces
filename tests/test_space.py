@@ -277,6 +277,58 @@ def test_wiki_origin_url_returns_none_without_config(tmp_path):
     assert space._wiki_origin_url(wiki) is None
 
 
+def test_wiki_origin_url_follows_gitdir_file(tmp_path):
+    """Submodule layout: `<wiki>/.git` is a FILE pointing at the real gitdir."""
+    wiki = _make_wiki(tmp_path)
+    real_gitdir = tmp_path / "elsewhere" / "modules" / "mywiki"
+    real_gitdir.mkdir(parents=True)
+    (real_gitdir / "config").write_text(
+        '[remote "origin"]\n\turl = https://github.com/sub/wiki.git\n'
+    )
+    (wiki / ".git").write_text(f"gitdir: {real_gitdir}\n")
+    assert space._wiki_origin_url(wiki) == "https://github.com/sub/wiki.git"
+
+
+def test_wiki_origin_url_worktree_follows_commondir(tmp_path):
+    """Worktree layout: gitdir holds `commondir` pointing at the shared repo."""
+    wiki = _make_wiki(tmp_path)
+    common = tmp_path / "main-repo" / ".git"
+    common.mkdir(parents=True)
+    (common / "config").write_text(
+        '[remote "origin"]\n\turl = https://github.com/wt/shared.git\n'
+    )
+    worktree_gitdir = common / "worktrees" / "feature"
+    worktree_gitdir.mkdir(parents=True)
+    (worktree_gitdir / "commondir").write_text("../..\n")
+    (worktree_gitdir / "config").write_text(
+        '[remote "origin"]\n\turl = https://example.invalid/should-be-ignored.git\n'
+    )
+    (wiki / ".git").write_text(f"gitdir: {worktree_gitdir}\n")
+    assert space._wiki_origin_url(wiki) == "https://github.com/wt/shared.git"
+
+
+def test_wiki_origin_url_returns_none_for_broken_gitdir_file(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    (wiki / ".git").write_text("gitdir: /nonexistent/path/does/not/exist\n")
+    assert space._wiki_origin_url(wiki) is None
+
+
+def test_wiki_origin_url_relative_gitdir(tmp_path):
+    """Common submodule shape: `gitdir: ../.git/modules/<name>` (relative)."""
+    parent_repo = tmp_path / "parent"
+    parent_repo.mkdir()
+    real_gitdir = parent_repo / ".git" / "modules" / "sub"
+    real_gitdir.mkdir(parents=True)
+    (real_gitdir / "config").write_text(
+        '[remote "origin"]\n\turl = https://github.com/sub/wiki.git\n'
+    )
+    wiki = parent_repo / "sub"
+    wiki.mkdir()
+    (wiki / "index.md").write_text("# sub")
+    (wiki / ".git").write_text("gitdir: ../.git/modules/sub\n")
+    assert space._wiki_origin_url(wiki) == "https://github.com/sub/wiki.git"
+
+
 def test_is_foreign_submodule_no_gitmodules(tmp_path):
     wiki = _make_wiki(tmp_path)
     (wiki / "projects" / "foo").mkdir(parents=True)
