@@ -4,6 +4,12 @@ A minimal nestable wiki — a folder with `index.md`, for any use case. Research
 
 Markdown flavor is **Obsidian** — wikilinks, frontmatter, callouts, embeds, comments, Bases. One dialect across the spec, the skills, and the tools.
 
+## Audience
+
+wiki-spaces is built for **AI coding harnesses with filesystem access** — Claude Code, Codex, Cursor, Windsurf, Gemini CLI, Aider, and similar tools that read and write local files. Browser-only AI assistants (ChatGPT in a tab, Claude.ai web) are out of scope: they can't reach the filesystem to read or write your wiki. If your AI lives in a browser, this isn't the tool.
+
+The *shape* of the wiki — research notes, recipes, journal, team reference, anything — is yours. The *harness* that drives it is what wiki-spaces assumes you have.
+
 ## Start
 
 ```sh

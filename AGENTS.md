@@ -2,6 +2,8 @@
 
 The wiki-spaces spec. Vocabulary, structure, and the operating contract for an LLM working in a wiki-spaces wiki.
 
+**Scope.** wiki-spaces targets LLMs running inside an AI coding harness with filesystem access (Claude Code, Codex, Cursor, Windsurf, Gemini CLI, Aider, and similar). Browser-only assistants are out of scope — they cannot read or write the wiki directly.
+
 ## What a wiki is
 
 A wiki is a folder with `index.md`. That's it.

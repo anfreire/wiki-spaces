@@ -5,19 +5,17 @@ build-backend = "hatchling.build"
 [project]
 name = "wiki-spaces"
 version = "0.3.0"
-description = "Minimal nestable wiki — a folder + index.md, for any use case (notes, research, recipes, writing, team docs). Spec, conventions catalog, and reference skills."
+description = "Minimal nestable wiki for AI coding harnesses with filesystem access (Claude Code, Codex, Cursor, Windsurf, etc.). A folder + index.md, for any use case (notes, research, recipes, writing, team docs). Spec, conventions catalog, and reference skills. Out of scope: browser-only AI assistants."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 authors = [{ name = "André Ferreira", email = "anfreire.dev@gmail.com" }]
-keywords = ["wiki", "markdown", "obsidian", "knowledge-base", "notes", "personal-wiki", "ai-agents"]
+keywords = ["wiki", "markdown", "obsidian", "knowledge-base", "notes", "personal-wiki", "ai-agents", "ai-coding-harness", "claude-code", "codex", "cursor"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
-    "Intended Audience :: End Users/Desktop",
     "Intended Audience :: Developers",
-    "Intended Audience :: Education",
     "Intended Audience :: Information Technology",
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
