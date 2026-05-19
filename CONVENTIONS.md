@@ -337,16 +337,13 @@ Grep-style search is preferred over full reads. Full reads are capped at 3 candi
 
 ### Recommended search backends
 
-For wikis bigger than a few dozen pages, grep alone misses semantic matches and aliases. When the harness has a markdown-aware search tool available, `wiki-search` prefers it over raw grep. Every option below speaks MCP over stdio, so any AI coding harness that supports local MCP servers (Claude Code, Codex, OpenCode, Cursor, etc.) can wire them in:
+For wikis bigger than a few dozen pages, grep alone misses semantic matches and aliases. When the harness has a markdown-aware search tool available, `wiki-search` prefers it over raw grep:
 
-| Backend | Why pick it | Install | Search modes |
-|---|---|---|---|
-| **[markdown-vault-mcp](https://github.com/pvliesdonk/markdown-vault-mcp)** | Most Obsidian-vault-native: vault folders, frontmatter, headings, attachments. Closest fit to the wiki-spaces shape. | `pip` / `uv` | BM25 + vectors + RRF hybrid |
-| **[mdkb](https://github.com/sstraus/mdkb)** | Search + persistent agent memory + Claude Code / Codex hooks. Best when you want the wiki to double as agent memory. | `brew`, `cargo` | BM25 + vectors + hybrid |
-| **[sqmd](https://github.com/itkoren/sqmd)** | Lightweight "just search my vault" option. remark AST, headings, line numbers. | `npm` | BM25/Tantivy + vectors + RRF + rerank |
-| **[qmd](https://github.com/tobi/qmd)** | Most features — query expansion, rerank. Heavier setup; pick when you've outgrown the others. | `npm` / `bun` | BM25 + vectors + hybrid + query expansion + rerank |
-| Harness-native search MCP | Use what's already in the harness when it understands markdown headings + frontmatter. | — | varies |
-| **Ripgrep** (`rg`) or the harness's grep tool | Universal fallback. Always available. | `brew`, `cargo`, etc. | Fast keyword search; misses semantics and aliases. |
+| Backend | When to use | Notes |
+|---|---|---|
+| **[qmd](https://github.com/tobi/qmd) MCP** | Recommended primary. Local search over markdown with BM25 + semantic vectors + hybrid + rerank. | The project Andrej Karpathy references in the canonical [LLM-wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). MCP- and CLI-installable into Claude Code, Codex, OpenCode, Cursor, and similar harnesses. |
+| Harness-native search MCP | Use what's already in the harness (e.g., the harness's built-in file search). | Beats grep when it understands markdown headings + frontmatter. |
+| **Ripgrep** (`rg`) or the harness's grep tool | Universal fallback. Always available. | Fast keyword search; misses semantics and aliases. |
 
 `wiki-search` checks for the recommended backends in order and uses the first one it finds; otherwise it falls back to grep. Tools should never *require* a specific backend — the wiki is plain markdown and any retrieval method that reads files works.
 

@@ -62,7 +62,7 @@ For Cursor / Windsurf / Copilot / Aider (no skills concept), see [`references/HA
 
 ## Search at scale
 
-`wiki-search` works out of the box with grep / ripgrep, which is fine for personal/team wikis up to a few hundred pages. For larger vaults, install a markdown-aware MCP backend ([`markdown-vault-mcp`](https://github.com/pvliesdonk/markdown-vault-mcp), [`mdkb`](https://github.com/sstraus/mdkb), [`sqmd`](https://github.com/itkoren/sqmd), or [`qmd`](https://github.com/tobi/qmd)) — see [`CONVENTIONS.md` § Recommended search backends](CONVENTIONS.md#recommended-search-backends).
+`wiki-search` works out of the box with grep / ripgrep, which is fine for personal/team wikis up to a few hundred pages. For larger vaults, install [`qmd`](https://github.com/tobi/qmd) — the markdown-aware MCP backend Andrej Karpathy references in the canonical [LLM-wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). See [`CONVENTIONS.md` § Recommended search backends](CONVENTIONS.md#recommended-search-backends).
 
 ## Learn more
 
