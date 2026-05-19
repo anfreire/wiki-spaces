@@ -2,7 +2,7 @@
 
 A minimal nestable wiki — a folder with `index.md`, for any use case. Research, recipes, code notes, writing, team docs, a personal life wiki — your shape, your call.
 
-Markdown flavor is **Obsidian** — wikilinks, frontmatter, callouts, embeds, comments, Bases. One dialect across the spec, the skills, and the tools.
+Markdown flavor is **Obsidian** — wikilinks, frontmatter, callouts, embeds, comments, Bases. One dialect across the spec, the skills, and the tools. Non-Obsidian renderers (GitHub preview, vanilla VS Code, plain markdown viewers) display the content but will not render Obsidian-specific syntax (provenance comments, embeds, `.base` files) the way Obsidian does — view your wiki in Obsidian for full fidelity.
 
 ## Audience
 
@@ -37,6 +37,8 @@ uvx wiki-spaces space add projects/foo   # create a space + register it
 uvx wiki-spaces space audit              # report ## Spaces drift
 ```
 
+`space add` and `space remove` require a `## Spaces` section in the parent's `index.md` (the navigability contract). Wikis scaffolded via `wiki-spaces init` get this automatically. Hand-rolled `mkdir + echo` wikis are Tier 1 and need `## Spaces` added to `index.md` first — either by `wiki-spaces init` (which registers the wiki in your config) or by editing the file directly.
+
 ### Let an AI agent do the setup
 
 Paste this to your agent:
@@ -56,7 +58,11 @@ Three reference skills your AI agent uses to work with the wiki:
 - `wiki-update` — capture / save / sync
 - `wiki-tend` — audit, normalize tags, cross-link
 
-For Cursor / Windsurf / Copilot / Aider (no skills concept), see [`references/HARNESS_INTEGRATION.md`](references/HARNESS_INTEGRATION.md).
+For Cursor / Windsurf / Copilot / Aider (no skills concept), see [`references/HARNESS_INTEGRATION.md`](references/HARNESS_INTEGRATION.md). The fastest path is `wiki-spaces install --bridge <key>` (emits the rule snippet to stdout — pipe it into your project's rules file).
+
+## Search at scale
+
+`wiki-search` works out of the box with grep / ripgrep, which is fine for personal/team wikis up to a few hundred pages. For larger vaults, install a markdown-aware MCP backend ([`markdown-vault-mcp`](https://github.com/pvliesdonk/markdown-vault-mcp), [`mdkb`](https://github.com/sstraus/mdkb), [`sqmd`](https://github.com/itkoren/sqmd), or [`qmd`](https://github.com/tobi/qmd)) — see [`CONVENTIONS.md` § Recommended search backends](CONVENTIONS.md#recommended-search-backends).
 
 ## Learn more
 
