@@ -46,6 +46,11 @@ from ._common import (
     write_owned_marker,
 )
 
+BRIDGES: dict[str, str] = {
+    "cursor": "cursor/wiki-spaces.mdc",
+    "windsurf": "windsurf/wiki-spaces.md",
+}
+
 
 def _ensure_vendor_dev(*, dry_run: bool) -> None:
     """In a dev checkout, vendor/kepano/ may be missing on a fresh clone.
@@ -145,6 +150,21 @@ def install_harness(
     return actions
 
 
+def _emit_bridge(key: str) -> int:
+    if key not in BRIDGES:
+        print(
+            f"Unknown bridge key {key!r}. Supported: {', '.join(sorted(BRIDGES))}",
+            file=sys.stderr,
+        )
+        return 2
+    src = data_root() / "bridges" / BRIDGES[key]
+    if not src.is_file():
+        print(f"  ! bridge file missing on disk: {src}", file=sys.stderr)
+        return 1
+    sys.stdout.write(src.read_text(encoding="utf-8"))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true")
@@ -156,7 +176,20 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="overwrite existing skill directories that wiki-spaces didn't install",
     )
+    parser.add_argument(
+        "--bridge",
+        metavar="KEY",
+        choices=sorted(BRIDGES),
+        help="emit a project-scoped rule snippet to stdout for a harness without "
+        "a skills concept (cursor, windsurf). Pipe to the appropriate rules "
+        "file: `wiki-spaces install --bridge cursor > .cursor/rules/wiki-spaces.mdc`. "
+        "Ignores --dry-run / --copy / --harness / --all (it writes nothing — the "
+        "caller controls placement via shell redirection).",
+    )
     args = parser.parse_args(argv)
+
+    if args.bridge:
+        return _emit_bridge(args.bridge)
 
     _ensure_vendor_dev(dry_run=args.dry_run)
 

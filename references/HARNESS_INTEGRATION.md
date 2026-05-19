@@ -1,6 +1,8 @@
 # Manual integration for harnesses without skills
 
-`install.py` handles harnesses with a "skills" concept (Claude Code, Codex, Gemini CLI, Hermes, Kiro). For other harnesses, you supply integration manually — either copy a ready-made snippet into a project rule file, or paste the snippet body into the harness's instruction file.
+`install.py` handles harnesses with a "skills" concept (Claude Code, Codex, Gemini CLI, Hermes, Kiro). For other harnesses, you supply integration manually — either pipe the bundled snippet into a project rule file, or paste the snippet body into the harness's instruction file.
+
+The fastest path is `wiki-spaces install --bridge <key>`, which emits the snippet body to stdout. Pipe it wherever your harness expects rules — no per-project state managed by wiki-spaces, you control placement entirely.
 
 Ready-to-copy snippets at the wiki-spaces repo:
 - [`bridges/cursor/wiki-spaces.mdc`](../bridges/cursor/wiki-spaces.mdc)
@@ -12,7 +14,7 @@ The snippets all say the same thing: wiki-spaces is available; read `~/.config/w
 
 ```sh
 mkdir -p <your-project>/.cursor/rules
-cp <repo>/bridges/cursor/wiki-spaces.mdc <your-project>/.cursor/rules/wiki-spaces.mdc
+wiki-spaces install --bridge cursor > <your-project>/.cursor/rules/wiki-spaces.mdc
 ```
 
 Cursor's modern rule format is `.mdc` files under `.cursor/rules/`. The snippet uses `alwaysApply: true` so it loads every session.
@@ -21,7 +23,7 @@ Cursor's modern rule format is `.mdc` files under `.cursor/rules/`. The snippet 
 
 ```sh
 mkdir -p <your-project>/.windsurf/rules
-cp <repo>/bridges/windsurf/wiki-spaces.md <your-project>/.windsurf/rules/wiki-spaces.md
+wiki-spaces install --bridge windsurf > <your-project>/.windsurf/rules/wiki-spaces.md
 ```
 
 Windsurf's rule frontmatter uses `trigger: always_on`.
