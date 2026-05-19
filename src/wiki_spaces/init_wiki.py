@@ -32,15 +32,23 @@ DEFAULT_DESCRIPTION = "<one paragraph describing this wiki>"
 
 
 def build_index_md(name: str, description: str) -> str:
-    """Compose the initial index.md: title + `## What this space is`.
+    """Compose the initial index.md: title, `## What this space is`, empty `## Spaces`.
 
-    Folders passed via `--folders` are created on disk but not listed in
-    `index.md`. Tools discover plain folders by globbing the filesystem;
-    `## Spaces` is added by `wiki-spaces space add` once a folder becomes a
-    space. `## Items` is left for the user to add by hand if they want a
-    human-facing landing list.
+    The empty `## Spaces` heading is scaffolded so the navigability contract
+    is live from t=0. Empty is valid — the contract is "exhaustive," not
+    "non-empty." Plain folders (no `index.md`) are not listed here; `## Items`
+    is left for the user.
     """
-    return "\n".join([f"# {name}", "", "## What this space is", "", description, ""])
+    return "\n".join([
+        f"# {name}",
+        "",
+        "## What this space is",
+        "",
+        description,
+        "",
+        "## Spaces",
+        "",
+    ])
 
 LOG_MD = "# Log\n"
 HOT_MD = "# Hot\n\n_Currently active work._\n"

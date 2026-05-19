@@ -26,6 +26,16 @@ def test_build_index_md():
     assert "## What this space is" in text
     assert "A description" in text
     assert "## Items" not in text
+    assert "## Spaces" in text
+
+
+def test_build_index_md_spaces_section_is_empty():
+    """Empty `## Spaces` is spec-valid (the contract is 'exhaustive list,'
+    not 'non-empty list'). A new wiki has no contained spaces yet."""
+    text = init_wiki.build_index_md("MyWiki", "A description")
+    from wiki_spaces import _md
+    assert _md.has_section(text, "Spaces")
+    assert _md.parse_section_entries(text, "Spaces") == []
 
 
 def test_init_folders_created_but_not_listed_in_index(monkeypatch, tmp_path):
