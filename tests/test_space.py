@@ -81,21 +81,22 @@ def test_add_is_idempotent(tmp_path):
     assert len(entries) == 1
 
 
-def test_add_leaves_tier1_parent_alone(tmp_path):
+def test_add_refuses_tier1_parent(tmp_path):
+    """Atomic refuse: ancestor has no ## Spaces → CLI errors, FS untouched.
+    LLM/skill layer handles upgrading Tier 1 parents."""
     wiki = _make_wiki(tmp_path, with_spaces_section=False)
-    rc, out, _ = _run(["--wiki", str(wiki), "add", "foo"])
-    assert rc == 0
+    rc, _, err = _run(["--wiki", str(wiki), "add", "foo"])
+    assert rc == 2
+    assert "## Spaces" in err
+    assert not (wiki / "foo").exists()
     assert "## Spaces" not in (wiki / "index.md").read_text()
 
 
-def test_add_upgrade_parent_creates_section(tmp_path):
+def test_add_upgrade_parent_flag_removed(tmp_path):
+    """The --upgrade-parent flag was removed; argparse rejects it."""
     wiki = _make_wiki(tmp_path, with_spaces_section=False)
-    rc, out, _ = _run(["--wiki", str(wiki), "add", "foo", "--upgrade-parent"])
-    assert rc == 0
-    text = (wiki / "index.md").read_text()
-    assert "## Spaces" in text
-    entries = _md.parse_section_entries(text, "Spaces")
-    assert entries[0].href == "foo/index.md"
+    with pytest.raises(SystemExit):
+        _run(["--wiki", str(wiki), "add", "foo", "--upgrade-parent"])
 
 
 def test_add_nested_path_walks_up_to_nearest_space(tmp_path):
@@ -162,6 +163,75 @@ def test_remove_refuses_wiki_root(tmp_path):
     assert rc == 2
 
 
+def test_remove_refuses_tier1_parent(tmp_path):
+    """Symmetric with add: ancestor has no ## Spaces → CLI errors, FS untouched."""
+    wiki = _make_wiki(tmp_path, with_spaces_section=False)
+    (wiki / "foo").mkdir()
+    (wiki / "foo" / "index.md").write_text("# foo")
+    rc, _, err = _run(["--wiki", str(wiki), "remove", "foo"])
+    assert rc == 2
+    assert "## Spaces" in err
+    assert (wiki / "foo").exists()
+
+
+def test_remove_tier1_parent_error_precedes_nonempty_check(tmp_path):
+    """Tier 1 refusal must be the first-class error, NOT 'pass --force'.
+    Without ordering the contract check before content check, a user with a
+    Tier 1 parent + nonempty child would be told to add --force, then hit the
+    Tier 1 error on retry."""
+    wiki = _make_wiki(tmp_path, with_spaces_section=False)
+    (wiki / "foo").mkdir()
+    (wiki / "foo" / "index.md").write_text("# foo")
+    (wiki / "foo" / "extra.md").write_text("user content")
+    rc, _, err = _run(["--wiki", str(wiki), "remove", "foo"])
+    assert rc == 2
+    assert "## Spaces" in err
+    assert "--force" not in err
+    assert (wiki / "foo" / "extra.md").exists()
+
+
+def test_remove_normalized_href_match(tmp_path):
+    """`space remove foo` must remove an existing `- [foo/](foo/)` entry even
+    though its href is `foo/`, not `foo/index.md`. Audit normalizes these
+    forms; add/remove must match audit's semantics."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "foo").mkdir()
+    (wiki / "foo" / "index.md").write_text("# foo")
+    idx = wiki / "index.md"
+    idx.write_text(idx.read_text() + "- [foo/](foo/)\n")
+    rc, _, _ = _run(["--wiki", str(wiki), "remove", "foo"])
+    assert rc == 0
+    assert not (wiki / "foo").exists()
+    entries = _md.parse_section_entries((wiki / "index.md").read_text(), "Spaces")
+    assert entries == []
+
+
+def test_add_normalized_href_idempotent(tmp_path):
+    """`space add foo` against `- [foo/](foo/)` must NOT duplicate. Different
+    href forms (`foo/` vs `foo/index.md`) identify the same child space."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "foo").mkdir()
+    (wiki / "foo" / "index.md").write_text("# foo")
+    idx = wiki / "index.md"
+    idx.write_text(idx.read_text() + "- [foo/](foo/)\n")
+    rc, _, _ = _run(["--wiki", str(wiki), "add", "foo"])
+    assert rc == 0
+    entries = _md.parse_section_entries((wiki / "index.md").read_text(), "Spaces")
+    assert len(entries) == 1
+
+
+def test_add_creates_tier2_child(tmp_path):
+    """A space created by `space add` must itself have `## Spaces` so that
+    nested `space add foo/bar` works without a second upgrade step."""
+    wiki = _make_wiki(tmp_path)
+    _run(["--wiki", str(wiki), "add", "foo"])
+    child_text = (wiki / "foo" / "index.md").read_text()
+    assert "## Spaces" in child_text
+    rc, _, _ = _run(["--wiki", str(wiki), "add", "foo/bar"])
+    assert rc == 0
+    assert (wiki / "foo" / "bar" / "index.md").exists()
+
+
 # ---------- space audit ----------
 
 def test_audit_reports_missing_direct_child(tmp_path):
@@ -190,6 +260,77 @@ def test_audit_skips_external_shared(tmp_path):
     # shared/ is external; should NOT be flagged as missing entry
     rc, out, _ = _run(["--wiki", str(wiki), "audit"])
     assert rc == 0
+
+
+def test_audit_summary_excludes_external_from_page_count(tmp_path):
+    """The summary `pages` count must match audit's owned-only scope; pages
+    under `shared/` are external and excluded from both drift detection and
+    the summary."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "owned.md").write_text("# owned")
+    shared = wiki / "shared" / "team"
+    shared.mkdir(parents=True)
+    (shared / "index.md").write_text("# team")
+    (shared / "extra.md").write_text("# extra in external space")
+    rc, out, _ = _run(["--wiki", str(wiki), "audit"])
+    assert rc == 0
+    # 1 owned page (owned.md) + 1 index (wiki/index.md) = 2; external pages excluded
+    assert "pages:  2" in out
+
+
+def test_audit_summary_excludes_nested_foreign_submodule(tmp_path):
+    """A foreign submodule at `projects/external/` is external even though
+    `projects/` itself is owned. A naive top-level filter would count its
+    pages; the directory-by-directory walk must prune at any depth."""
+    wiki = _make_wiki(tmp_path)
+    _make_git_config(wiki, "https://github.com/me/mywiki.git")
+    external = wiki / "projects" / "external"
+    external.mkdir(parents=True)
+    (external / "index.md").write_text("# external")
+    (external / "leaked.md").write_text("# should not be counted")
+    (wiki / ".gitmodules").write_text(
+        '[submodule "external"]\n'
+        "\tpath = projects/external\n"
+        "\turl = https://github.com/other/wiki.git\n"
+    )
+    rc, out, _ = _run(["--wiki", str(wiki), "audit"])
+    # wiki/index.md = 1 page; everything under projects/external/ is external
+    assert "pages:  1" in out, out
+
+
+def test_audit_terminates_with_in_tree_symlink_cycle(tmp_path):
+    """An in-tree symlink cycle (`deep/loop -> wiki`) must not hang the audit
+    summary header's page count. `_walk_owned_spaces` already guards this;
+    `_count_owned_pages` must mirror the guard or `audit` hangs before drift
+    detection even runs. Isolates the cycle-vs-hang concern by registering
+    `deep/` in `## Spaces` so the test asserts on termination, not drift."""
+    wiki = _make_wiki(tmp_path)
+    _run(["--wiki", str(wiki), "add", "deep"])
+    import os
+    os.symlink(wiki, wiki / "deep" / "loop")
+    rc, out, _ = _run(["--wiki", str(wiki), "audit"])
+    assert "pages:" in out
+    assert "OK" in out
+    assert rc == 0
+
+
+def test_remove_strips_all_duplicate_entries(tmp_path):
+    """A pre-corrupted wiki with multiple `## Spaces` entries for the same
+    directory should be fully cleaned up in one `space remove` call. Without
+    looping, only the first matching entry would be removed."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "foo").mkdir()
+    (wiki / "foo" / "index.md").write_text("# foo")
+    idx = wiki / "index.md"
+    idx.write_text(
+        idx.read_text()
+        + "- [foo/](foo/)\n"
+        + "- [foo/](foo/index.md)\n"
+    )
+    rc, _, _ = _run(["--wiki", str(wiki), "remove", "foo"])
+    assert rc == 0
+    entries = _md.parse_section_entries((wiki / "index.md").read_text(), "Spaces")
+    assert entries == []
 
 
 def test_audit_accepts_bare_folder_href(tmp_path):

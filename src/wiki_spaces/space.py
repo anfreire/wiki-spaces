@@ -4,13 +4,20 @@ Maintains the `## Spaces` exhaustiveness contract automatically so users
 never edit ancestor `index.md` files by hand to track child spaces.
 
 Operations:
-- `space add <rel-path>`     create a new space; update nearest ancestor's
-                             `## Spaces` if that section exists there.
-- `space remove <rel-path>`  delete a space; remove the entry from its
-                             nearest ancestor's `## Spaces`. Refuses without
-                             `--force` when the space contains content.
+- `space add <rel-path>`     create a new space and register it in the
+                             nearest ancestor's `## Spaces`. **Atomically
+                             refuses** when the ancestor has no `## Spaces`
+                             section (Tier 1 parent) — exits non-zero,
+                             touches nothing. The LLM/skill layer handles
+                             upgrading Tier 1 parents.
+- `space remove <rel-path>`  symmetric: refuses when ancestor is Tier 1.
+                             Otherwise removes the entry and the directory.
+                             Refuses without `--force` when the space
+                             contains content beyond `index.md`.
 - `space audit`              walk owned spaces; report drift between actual
-                             direct child spaces and listed `## Spaces` entries.
+                             direct child spaces and listed `## Spaces`
+                             entries. Always-on summary header (tier
+                             breakdown, page count, conventions detected).
 
 Trust scope: writes stay inside the wiki tree. External spaces (per the
 heuristic in CONVENTIONS.md / Owned vs external) are skipped on traversal.
@@ -260,8 +267,16 @@ def _walk_owned_spaces(wiki_root: Path):
 
 
 def _new_index_md(name: str, description: str) -> str:
-    """Minimal Tier-1 index.md body for a freshly created space."""
-    return f"# {name}\n\n## What this space is\n\n{description}\n"
+    """Tier-2 index.md body for a freshly created space.
+
+    Includes an empty `## Spaces` heading so the navigability contract is live
+    from t=0 (matches `init_wiki.build_index_md`). Keeps the "CLI-rolled spaces
+    are Tier 2" mental model consistent — `space add foo/bar` works on a fresh
+    `foo` without a second upgrade step.
+    """
+    return (
+        f"# {name}\n\n## What this space is\n\n{description}\n\n## Spaces\n\n"
+    )
 
 
 def _spaces_href_to_dir(href: str) -> str:
@@ -275,6 +290,45 @@ def _spaces_href_to_dir(href: str) -> str:
     if h.endswith("/index.md"):
         h = h[: -len("/index.md")]
     return h.rstrip("/")
+
+
+def _add_space_entry(text: str, label: str, href: str, description: str | None):
+    """Add a `## Spaces` entry, treating directory-equivalent hrefs as duplicates.
+
+    Idempotent: when an entry already exists pointing at the same directory
+    (regardless of `foo`/`foo/`/`foo/index.md` form), returns the text
+    unchanged. Without this normalization, `space add foo` against a wiki
+    that already lists `- [foo/](foo/)` would append a duplicate.
+    """
+    target_dir = _spaces_href_to_dir(href)
+    for e in _md.parse_section_entries(text, "Spaces"):
+        if e.href and _spaces_href_to_dir(e.href) == target_dir:
+            return text
+    return _md.add_entry(text, "Spaces", label, href, description)
+
+
+def _remove_space_entry(text: str, href: str) -> str:
+    """Remove a `## Spaces` entry by normalized directory match.
+
+    Removes whichever href form happens to be in the file (`foo`/`foo/`/
+    `foo/index.md`). Removes ALL equivalent duplicates in one pass, so a
+    pre-corrupted wiki with multiple entries for the same directory gets
+    fully cleaned up in a single `space remove` call.
+    """
+    target_dir = _spaces_href_to_dir(href)
+    result = text
+    while True:
+        matched_href = None
+        for e in _md.parse_section_entries(result, "Spaces"):
+            if e.href and _spaces_href_to_dir(e.href) == target_dir:
+                matched_href = e.href
+                break
+        if matched_href is None:
+            return result
+        new = _md.remove_entry(result, "Spaces", matched_href)
+        if new == result:
+            return result
+        result = new
 
 
 # ---------- Subcommands ----------
@@ -296,6 +350,26 @@ def cmd_add(args: argparse.Namespace) -> int:
     rel = args.path.strip().rstrip("/")
     new_space = wiki_root / rel
 
+    # Atomic refuse when the contract is absent — the LLM/skill layer handles
+    # Tier-1 parents, not the CLI. Keeps `space add` all-or-nothing.
+    ancestor = _nearest_ancestor_space(wiki_root, new_space)
+    ancestor_index = ancestor / "index.md"
+    text = ancestor_index.read_text(encoding="utf-8")
+    ancestor_rel = ancestor.relative_to(wiki_root)
+    printable = "<wiki>/" if str(ancestor_rel) == "." else f"<wiki>/{ancestor_rel}/"
+    if not _md.has_section(text, "Spaces"):
+        print(
+            f"  ! cannot register {rel}/: nearest ancestor {printable}index.md "
+            "has no `## Spaces` section.",
+            file=sys.stderr,
+        )
+        print(
+            f"    Add `## Spaces` to {printable}index.md first (the parent is "
+            "currently Tier 1). See AGENTS.md / Tiers for the contract.",
+            file=sys.stderr,
+        )
+        return 2
+
     # Already exists?
     already_space = (new_space / "index.md").is_file()
     if already_space and not args.force_index:
@@ -309,33 +383,14 @@ def cmd_add(args: argparse.Namespace) -> int:
         )
         print(f"  + {rel}/index.md")
 
-    # Update nearest ancestor's ## Spaces (or upgrade Tier 1 → Tier 2 when asked)
-    ancestor = _nearest_ancestor_space(wiki_root, new_space)
-    ancestor_index = ancestor / "index.md"
-    text = ancestor_index.read_text(encoding="utf-8")
-    ancestor_rel = ancestor.relative_to(wiki_root)
-    printable = "<wiki>/" if str(ancestor_rel) == "." else f"<wiki>/{ancestor_rel}/"
-    section_present = _md.has_section(text, "Spaces")
-    if not section_present and not args.upgrade_parent:
-        print(
-            f"  . {printable}index.md has no `## Spaces` section — "
-            "leaving its layout unchanged (Tier 1 parent). "
-            "Pass --upgrade-parent to add `## Spaces` there and list this space."
-        )
-        return 0
-
     rel_from_ancestor = new_space.relative_to(ancestor)
     label = f"{rel_from_ancestor}/"
     href = f"{rel_from_ancestor}/index.md"
-    new_text = _md.add_entry(
-        text, "Spaces", label, href, args.description
-    )
+    new_text = _add_space_entry(text, label, href, args.description)
     if new_text == text:
         print(f"  . entry for {label} already in ancestor's ## Spaces")
         return 0
     ancestor_index.write_text(new_text, encoding="utf-8")
-    if not section_present:
-        print(f"  + {printable}index.md ## Spaces (upgraded to Tier 2)")
     print(f"  ~ {printable}index.md ## Spaces  += [{label}]")
     return 0
 
@@ -362,7 +417,27 @@ def cmd_remove(args: argparse.Namespace) -> int:
         print("  ! refusing to remove the wiki root", file=sys.stderr)
         return 2
 
-    # Check for non-index.md content
+    ancestor = _nearest_ancestor_space(wiki_root, target)
+    ancestor_index = ancestor / "index.md"
+    text = ancestor_index.read_text(encoding="utf-8")
+    rel_from_ancestor = target.relative_to(ancestor)
+    href = f"{rel_from_ancestor}/index.md"
+    ancestor_rel = ancestor.relative_to(wiki_root)
+    printable = "<wiki>/" if str(ancestor_rel) == "." else f"<wiki>/{ancestor_rel}/"
+    if not _md.has_section(text, "Spaces"):
+        print(
+            f"  ! cannot remove {rel}/: nearest ancestor {printable}index.md "
+            "has no `## Spaces` section.",
+            file=sys.stderr,
+        )
+        print(
+            f"    The parent is Tier 1; there is no contract to update. Add "
+            f"`## Spaces` to {printable}index.md first, or remove the directory "
+            "manually to bypass the contract.",
+            file=sys.stderr,
+        )
+        return 2
+
     contents = [
         p for p in target.iterdir()
         if not (p.name == "index.md" and p.is_file())
@@ -375,22 +450,13 @@ def cmd_remove(args: argparse.Namespace) -> int:
         )
         return 2
 
-    # Remove from ancestor's ## Spaces (if section present)
-    ancestor = _nearest_ancestor_space(wiki_root, target)
-    ancestor_index = ancestor / "index.md"
-    text = ancestor_index.read_text(encoding="utf-8")
-    rel_from_ancestor = target.relative_to(ancestor)
-    href = f"{rel_from_ancestor}/index.md"
-    ancestor_rel = ancestor.relative_to(wiki_root)
-    printable = "<wiki>/" if str(ancestor_rel) == "." else f"<wiki>/{ancestor_rel}/"
-    if _md.has_section(text, "Spaces"):
-        new_text = _md.remove_entry(text, "Spaces", href)
-        if new_text != text:
-            if args.dry_run:
-                print(f"  ~ (dry-run) {printable}index.md ## Spaces  -= [{rel_from_ancestor}/]")
-            else:
-                ancestor_index.write_text(new_text, encoding="utf-8")
-                print(f"  ~ {printable}index.md ## Spaces  -= [{rel_from_ancestor}/]")
+    new_text = _remove_space_entry(text, href)
+    if new_text != text:
+        if args.dry_run:
+            print(f"  ~ (dry-run) {printable}index.md ## Spaces  -= [{rel_from_ancestor}/]")
+        else:
+            ancestor_index.write_text(new_text, encoding="utf-8")
+            print(f"  ~ {printable}index.md ## Spaces  -= [{rel_from_ancestor}/]")
 
     if args.dry_run:
         print(f"  . (dry-run) would remove {rel}/")
@@ -399,6 +465,80 @@ def cmd_remove(args: argparse.Namespace) -> int:
     shutil.rmtree(target)
     print(f"  - {rel}/")
     return 0
+
+
+def _count_owned_pages(wiki_root: Path) -> int:
+    """Count markdown files inside owned scope, walking the tree directory by
+    directory so external mounts at ANY depth are pruned. A simple `rglob`
+    plus top-level filter misses a foreign submodule at `projects/external/`
+    because `projects/` itself is owned. Mirrors `_walk_owned_spaces`'s
+    realpath-visited guard so in-tree symlink cycles can't hang the audit.
+    """
+    count = 0
+    try:
+        root_real = wiki_root.resolve()
+    except OSError:
+        return 0
+    visited: set[Path] = {root_real}
+    stack: list[Path] = [wiki_root]
+    while stack:
+        d = stack.pop()
+        try:
+            entries = list(d.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            name = entry.name
+            if entry.is_file() and entry.suffix == ".md":
+                count += 1
+                continue
+            if not entry.is_dir():
+                continue
+            if name.startswith(".") or name == "_archives":
+                continue
+            if _is_external(entry, wiki_root):
+                continue
+            try:
+                entry_real = entry.resolve()
+            except OSError:
+                continue
+            if entry_real in visited:
+                continue
+            visited.add(entry_real)
+            stack.append(entry)
+    return count
+
+
+def _summary_header(wiki_root: Path, all_spaces: list[Path]) -> list[str]:
+    tier2 = sum(
+        1 for s in all_spaces
+        if _md.has_section((s / "index.md").read_text(encoding="utf-8"), "Spaces")
+    )
+    tier1 = len(all_spaces) - tier2
+
+    convention_files = [
+        "log.md", "_meta/taxonomy.md", ".manifest.json",
+        "hot.md", "_template.md", ".obsidian",
+    ]
+    present = [c for c in convention_files if (wiki_root / c).exists()]
+
+    pages = _count_owned_pages(wiki_root)
+
+    lines = [
+        f"wiki: {wiki_root}",
+        f"  spaces: {len(all_spaces)} ({tier2} with `## Spaces`, {tier1} Tier 1)",
+        f"  pages:  {pages} markdown files (owned scope; excludes hidden / _archives / external)",
+        f"  conventions at root: {', '.join(present) if present else '(none)'}",
+    ]
+    log = wiki_root / "log.md"
+    if log.is_file():
+        log_lines = [ln for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        if log_lines:
+            last = log_lines[-1].strip()
+            if len(last) > 100:
+                last = last[:97] + "..."
+            lines.append(f"  last log:  {last}")
+    return lines
 
 
 def cmd_audit(args: argparse.Namespace) -> int:
@@ -411,6 +551,9 @@ def cmd_audit(args: argparse.Namespace) -> int:
         return 2
 
     all_spaces = list(_walk_owned_spaces(wiki_root))
+    for line in _summary_header(wiki_root, all_spaces):
+        print(line)
+    print()
     # Every owned space should be listed in the `## Spaces` of its nearest
     # ancestor space. That ancestor can sit across intervening plain folders,
     # so the entry may be a multi-segment path (e.g. `projects/foo`).
@@ -482,12 +625,6 @@ def main(argv: list[str] | None = None) -> int:
         "--force-index",
         action="store_true",
         help="overwrite an existing index.md at the target",
-    )
-    p_add.add_argument(
-        "--upgrade-parent",
-        action="store_true",
-        help="when the nearest ancestor is Tier 1 (no ## Spaces), add ## Spaces "
-        "and list this entry instead of leaving the parent unchanged",
     )
     p_add.set_defaults(func=cmd_add)
 
