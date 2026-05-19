@@ -28,11 +28,11 @@ Find content in the user's canonical wiki and answer using only what's stored. C
    - **Quick lookup** — triggered by an agent checking before external research, or user says "quick answer", "just check", "do I have anything on X". Stops at step 5.1 (no page bodies read). Prefix the answer: `Quick lookup: summaries only; page bodies not read.`
    - **Deep query** — default for user questions. Full tiered retrieval below.
 4. **Pick a search backend** per CONVENTIONS / Retrieval primitives § Recommended search backends. Prefer in this order:
-   - A markdown-aware search MCP installed in the harness (**qmd** is the recommended primary — BM25 + semantic + HyDE).
+   - A markdown-aware search MCP installed in the harness. Several work well: **markdown-vault-mcp** (most Obsidian-vault-native), **mdkb** (search + agent memory), **sqmd** (lightweight), **qmd** (most features). Use whichever is wired into the harness; the wiki-spaces project does not require a specific one.
    - The harness's native file-search tool, when it understands markdown structure.
    - Ripgrep (`rg`) or the harness's grep tool as a universal fallback.
 
-   Don't gate retrieval on any specific backend. If qmd is available, use it for the index and section passes below; otherwise grep is fine.
+   Don't gate retrieval on any specific backend. If a markdown-aware MCP is available, use it for the index and section passes below; otherwise grep is fine.
 
 5. **Tiered retrieval** per CONVENTIONS / Retrieval primitives. Use the cheapest primitive that answers; escalate only when it cannot.
    1. **Index pass.** Build the candidate set. Where frontmatter is in use, grep the frontmatter fields (`title`, `tags`, `aliases`, `summary`) across pages — a fast signal that surfaces and ranks likely candidates. Frontmatter adoption may be partial, so it is not a complete map: **always also glob `**/*.md`** (minus the subtrees excluded in step 6) as the completeness backstop, ranking globbed files by filename and path-segment match. Collect the top 5–10 candidates overall: exact title/alias > tag match > summary/path match. *(Quick lookup stops here — candidates only, no page bodies read.)*
