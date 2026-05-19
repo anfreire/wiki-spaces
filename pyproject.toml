@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "wiki-spaces"
-version = "0.3.1"
+version = "0.4.0"
 description = "Minimal nestable wiki for AI coding harnesses with filesystem access (Claude Code, Codex, Cursor, Windsurf, etc.). A folder + index.md, for any use case (notes, research, recipes, writing, team docs). Spec, conventions catalog, and reference skills. Out of scope: browser-only AI assistants."
 readme = "README.md"
 license = "MIT"
