@@ -16,26 +16,13 @@ Extract durable knowledge from the current source (project, conversation, or res
 
 ## Initialization
 
-When step 1 of the procedure finds no usable wiki (config missing or wiki path invalid), drive an interactive scaffold before anything else. The full briefing lives in `references/SETUP.md` at the wiki-spaces repo; the short version:
+When step 1 of the procedure finds no usable wiki (config missing or wiki path invalid), drive an interactive scaffold before anything else. The full briefing is `references/SETUP.md` (Branch A) at the wiki-spaces repo. Keep it to **two exchanges** — gather, then confirm — and **run every command yourself**; the user never types one. The short version:
 
-1. **Ask what the wiki is for, in the user's own words.** A one- or two-sentence description. Don't show a menu — infer the layout from what the user describes. Use the patterns below as internal priors; when the description doesn't match cleanly, derive 3-6 folder names from the recurring kinds the user mentioned, default to no opt-in bundle (still offer them), and default git to "ask."
+1. **Ask once, in a single message.** Gather, together: what the wiki is for (one or two sentences, in the user's words); and whether they already have a folder of notes / an existing wiki to use — with its path — or want a fresh one (default location `~/Wiki`). Don't show a menu, don't split across messages, and don't ask about folders, opt-ins, or git — infer those.
 
-   | Pattern | Suggested layout | Opt-in bundle | Git |
-   |---|---|---|---|
-   | Developer notebook | `concepts/`, `entities/`, `skills/`, `projects/` | `log.md` + `_meta/taxonomy.md` + `.manifest.json` | yes |
-   | Research wiki | `papers/`, `topics/`, `methods/`, `datasets/`, `projects/` | `log.md` + `_meta/taxonomy.md` | yes |
-   | Writing project | `drafts/`, `characters/`, `worldbuilding/`, `notes/`, `archive/` | `hot.md` (current piece) | yes |
-   | Recipe collection | `recipes/`, `ingredients/`, `techniques/`, `meal-plans/` | (none) | optional |
-   | Personal knowledge | `journal/`, `learning/`, `contacts/`, `places/`, `interests/` | (none) | optional, often no |
-   | Team reference | `runbooks/`, `decisions/`, `services/`, `people/`, `clients/` | `_meta/taxonomy.md` + `log.md` | yes |
+2. **Infer the layout and present one proposal.** `references/SETUP.md` (Branch A, step 2) is the single source for the per-use-case layout priors — developer notebook, research, writing, recipe, personal, team, each with suggested folders, opt-in bundle, and git default. Match the description to a prior, or derive 3-6 folders from the recurring kinds mentioned (then default to no opt-in bundle, git "ask"). Present it in one plain-language block — never enumerate internal files like `log.md` as menu items. If the user named an existing folder, the wiki *is* that folder: `init` adopts it (adds `index.md` only if missing, never touches existing files) — offer "adopt as-is, or also organize into folders?" inside this same proposal. Take adjustments in the user's words and re-present until confirmed. Flat wikis (no folders) are fully valid.
 
-   Recommendations, not rules — the user can deviate freely. Flat wikis (no folders) are fully valid.
-
-2. **Ask where the wiki should live.** Absolute path. Default: `~/Wiki/`. Also ask the display name if it differs from the directory basename.
-
-3. **Present the inferred proposal and accept adjustments in natural language.** Show the proposal in one block: folders + opt-in bundle + git. Don't enumerate internal opt-in files as a menu — the user shouldn't have to know what `log.md` or `.manifest.json` is to set up a wiki. If the user wants changes, take them in their own words (*"rename recipes to desserts"*, *"skip git"*, *"add tag tracking"*) and re-present. If they ask what an opt-in does (*"what's log.md?"*), answer in 1-2 sentences and continue. Flat wikis (no folders) are fully valid; the proposal can include "no folders" when the description warrants it.
-
-Then run `uvx wiki-spaces init <wiki-path> [--name <display-name>] [--description <text>] [--with <opt-ins>] [--folders <names>] [--git]` (drop the `uvx` prefix if wiki-spaces was installed permanently via `uv tool install wiki-spaces` or `pip install wiki-spaces`). Pass the user's one-sentence description from step 1 as `--description` so their words land in `index.md`'s "What this space is" section. The command creates `index.md`, writes the opt-in files, creates each `--folders` directory at the wiki root (with a `.gitkeep` placeholder when `--git` is set), runs `git init -b main` when `--git` is set, and writes `wiki = <wiki-path>` to `~/.config/wiki-spaces/config` automatically. Omit `--folders` for a flat wiki. After init, return to step 1 of the Procedure.
+3. **Execute.** Run `uvx wiki-spaces install` (drop `uvx` if wiki-spaces is installed permanently via `uv tool install` / `pip install`), then `uvx wiki-spaces init <wiki-path> [--name <display-name>] [--description <text>] [--with <opt-ins>] [--folders <names>] [--git]`. `<wiki-path>` is the new location for a fresh wiki, or the user's existing folder for an adoption. Pass the user's one-sentence description as `--description` so it lands in `index.md`'s "What this space is" verbatim. `init` creates `index.md` (skipped if already present), writes opt-in files, creates `--folders` directories (with `.gitkeep` under `--git`), runs `git init -b main` under `--git`, and writes `wiki = <wiki-path>` to `~/.config/wiki-spaces/config`. Omit `--folders` for a flat wiki or a port-as-is adoption. Then return to step 1 of the Procedure.
 
 ## Procedure
 

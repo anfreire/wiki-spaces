@@ -23,10 +23,12 @@ That's a complete wiki. Add files, folders, anything. The whole spec is one page
 For AI agents to find and act on your wiki, install the helper:
 
 ```bash
-uvx wiki-spaces install                  # link skills into detected AI harnesses
+uvx wiki-spaces install                  # link skills into detected harnesses
 uvx wiki-spaces init ~/Wiki              # scaffold + register as default target
 uvx wiki-spaces doctor --no-net          # verify
 ```
+
+`install` auto-detects and links the skills into whichever of **Claude Code, Codex, Gemini CLI, Antigravity, Hermes, and Kiro** are present (`--all` pre-positions for every one). Cursor, Windsurf, GitHub Copilot, and Aider have no global skills directory — they integrate via a rule-file snippet instead (see [What you get](#what-you-get)).
 
 Or `pip install wiki-spaces` (or `uv tool install wiki-spaces`) and drop the `uvx` prefix.
 
@@ -34,10 +36,11 @@ Also available:
 
 ```bash
 uvx wiki-spaces space add projects/foo   # create a space + register it
-uvx wiki-spaces space audit              # report ## Spaces drift
+uvx wiki-spaces space audit              # audit drift, broken links, orphans
+uvx wiki-spaces space mount <url> shared/team --as submodule   # mount an external space
 ```
 
-`space add` and `space remove` require a `## Spaces` section in the parent's `index.md` (the navigability contract). Wikis scaffolded via `wiki-spaces init` get this automatically. Hand-rolled `mkdir + echo` wikis are Tier 1 and need `## Spaces` added to `index.md` first — either by `wiki-spaces init` (which registers the wiki in your config) or by editing the file directly.
+`space add`, `space remove`, and `space mount` require a `## Spaces` section in the parent's `index.md` (the navigability contract). Wikis scaffolded via `wiki-spaces init` get this automatically. Hand-rolled `mkdir + echo` wikis are Tier 1 and need `## Spaces` added to `index.md` first — either by `wiki-spaces init` (which registers the wiki in your config) or by editing the file directly.
 
 ### Let an AI agent do the setup
 
@@ -79,7 +82,7 @@ Python `>=3.11`. [`uv`](https://docs.astral.sh/uv/) recommended (handles Python 
 
 - Andrej Karpathy's [LLM Wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
 - [Ar9av/obsidian-wiki](https://github.com/Ar9av/obsidian-wiki) — broader framework wiki-spaces extracts from
-- [kepano](https://github.com/kepano) — vendored `obsidian-markdown` and `obsidian-bases` skills
+- [kepano](https://github.com/kepano) — vendored `obsidian-markdown` and `obsidian-bases` skills (MIT-licensed; see [`vendor/kepano/LICENSE`](vendor/kepano/LICENSE))
 
 ## License
 

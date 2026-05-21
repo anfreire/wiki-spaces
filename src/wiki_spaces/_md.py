@@ -209,6 +209,59 @@ def find_wikilinks(text: str) -> list[str]:
     return out
 
 
+_WIKILINK_REF_RE = re.compile(r"(!?)\[\[([^\]]+)\]\]")
+
+
+def find_wikilink_refs(text: str) -> list[tuple[str, bool]]:
+    """Return `(target, is_embed)` for each wikilink and embed in text.
+
+    `is_embed` is True for `![[...]]` — an Obsidian embed, which routinely
+    targets a non-page asset (image, PDF, audio) — and False for a plain
+    `[[...]]` link. Targets have `|alias` and `#heading` stripped; order
+    preserved, duplicates kept. `find_wikilinks` is the target-only view of
+    the same scan.
+    """
+    out: list[tuple[str, bool]] = []
+    for m in _WIKILINK_REF_RE.finditer(text):
+        is_embed = bool(m.group(1))
+        target = m.group(2).split("|", 1)[0].split("#", 1)[0].strip()
+        if target:
+            out.append((target, is_embed))
+    return out
+
+
+_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+_INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
+
+
+def strip_code_spans(text: str) -> str:
+    """Blank out fenced code blocks and inline code spans; line count kept.
+
+    Used before scanning for `[[wikilinks]]` so links shown inside code
+    examples aren't mistaken for real links. A fenced block opens and closes
+    on a line of 3+ backticks or tildes; the closing fence must use the same
+    character and be at least as long as the opener (so a `~~~` line cannot
+    close a ``` block, nor a short fence close a longer one). Code content
+    becomes blank lines / spaces, so a caller that indexes by line number
+    stays aligned.
+    """
+    out: list[str] = []
+    fence: str | None = None  # the opening fence run, e.g. "```" or "~~~~"
+    for line in text.splitlines():
+        m = _FENCE_RE.match(line)
+        if fence is None:
+            if m:
+                fence = m.group(1)
+                out.append("")
+                continue
+            out.append(_INLINE_CODE_RE.sub(lambda mm: " " * len(mm.group(0)), line))
+        else:
+            out.append("")
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
+                fence = None
+    return "\n".join(out)
+
+
 def _path_distance(a: Path, b: Path) -> int:
     """Directory steps between two absolute paths (0 when equal)."""
     common = 0

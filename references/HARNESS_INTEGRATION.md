@@ -1,6 +1,6 @@
 # Manual integration for harnesses without skills
 
-`install.py` handles harnesses with a "skills" concept (Claude Code, Codex, Gemini CLI, Hermes, Kiro). For other harnesses, you supply integration manually — either pipe the bundled snippet into a project rule file, or paste the snippet body into the harness's instruction file.
+`install.py` handles harnesses with a "skills" concept (Claude Code, Codex, Gemini CLI, Antigravity, Hermes, Kiro). For other harnesses, you supply integration manually — either pipe the bundled snippet into a project rule file, or paste the snippet body into the harness's instruction file.
 
 The fastest path is `wiki-spaces install --bridge <key>`, which emits the snippet body to stdout. Pipe it wherever your harness expects rules — no per-project state managed by wiki-spaces, you control placement entirely.
 

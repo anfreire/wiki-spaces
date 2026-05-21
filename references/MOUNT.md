@@ -2,6 +2,8 @@
 
 Three mechanisms; pick by use case. The source can be any space — someone's whole wiki, a subtree they extracted, a reference snapshot. From your perspective it lands as a space inside your wiki.
 
+**Shortcut.** `wiki-spaces space mount <source> <rel-path> --as {submodule|clone|symlink}` does all of this in one command — it runs the chosen mechanism, verifies the mount has `index.md`, and registers it in the nearest ancestor's `## Spaces`. It refuses on a Tier 1 parent (no `## Spaces`), exactly like `space add`. The branch-by-branch steps below are the manual equivalent, and the reference for what the command does and why.
+
 ## Decision
 
 | Use case | Mechanism |

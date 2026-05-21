@@ -14,10 +14,17 @@ Operations:
                              Otherwise removes the entry and the directory.
                              Refuses without `--force` when the space
                              contains content beyond `index.md`.
-- `space audit`              walk owned spaces; report drift between actual
-                             direct child spaces and listed `## Spaces`
-                             entries. Always-on summary header (tier
-                             breakdown, page count, conventions detected).
+- `space mount <src> <rel>`  mount an external space — git clone, git
+                             submodule, or symlink (`--as`) — verify it has
+                             `index.md`, and register it in the nearest
+                             ancestor's `## Spaces`. Refuses on a Tier 1
+                             parent like `space add`.
+- `space audit`              walk owned spaces; report `## Spaces` drift,
+                             broken `[[wikilinks]]`, and orphan pages.
+                             Always-on summary header (tier breakdown, page
+                             count, conventions detected). Drift and broken
+                             links set a non-zero exit; orphans are
+                             informational and do not.
 
 Trust scope: writes stay inside the wiki tree. External spaces (per the
 heuristic in CONVENTIONS.md / Owned vs external) are skipped on traversal.
@@ -252,6 +259,8 @@ def _walk_owned_spaces(wiki_root: Path):
         for child in entries:
             if not child.is_dir() or child.name.startswith("."):
                 continue
+            if child.name == "_archives":  # retired content — out of audit scope
+                continue
             if _is_external(child, wiki_root):
                 continue
             try:
@@ -467,18 +476,21 @@ def cmd_remove(args: argparse.Namespace) -> int:
     return 0
 
 
-def _count_owned_pages(wiki_root: Path) -> int:
-    """Count markdown files inside owned scope, walking the tree directory by
-    directory so external mounts at ANY depth are pruned. A simple `rglob`
-    plus top-level filter misses a foreign submodule at `projects/external/`
-    because `projects/` itself is owned. Mirrors `_walk_owned_spaces`'s
-    realpath-visited guard so in-tree symlink cycles can't hang the audit.
+def _walk_owned_md_files(wiki_root: Path) -> list[Path]:
+    """Return every markdown file inside owned scope.
+
+    Walks the tree directory by directory so external mounts at ANY depth are
+    pruned — a foreign submodule at `projects/external/` is skipped even
+    though `projects/` itself is owned (a plain `rglob` plus top-level filter
+    would miss it). Mirrors `_walk_owned_spaces`'s realpath-visited guard so
+    in-tree symlink cycles can't hang the walk. Hidden directories and
+    `_archives/` are excluded.
     """
-    count = 0
+    out: list[Path] = []
     try:
         root_real = wiki_root.resolve()
     except OSError:
-        return 0
+        return out
     visited: set[Path] = {root_real}
     stack: list[Path] = [wiki_root]
     while stack:
@@ -490,7 +502,7 @@ def _count_owned_pages(wiki_root: Path) -> int:
         for entry in entries:
             name = entry.name
             if entry.is_file() and entry.suffix == ".md":
-                count += 1
+                out.append(entry)
                 continue
             if not entry.is_dir():
                 continue
@@ -506,7 +518,80 @@ def _count_owned_pages(wiki_root: Path) -> int:
                 continue
             visited.add(entry_real)
             stack.append(entry)
-    return count
+    return out
+
+
+def _count_owned_pages(wiki_root: Path) -> int:
+    """Count markdown files inside owned scope (see `_walk_owned_md_files`)."""
+    return len(_walk_owned_md_files(wiki_root))
+
+
+def _audit_content(wiki_root: Path) -> tuple[list[tuple[Path, str]], list[Path]]:
+    """Scan owned markdown for broken wikilinks and orphan pages.
+
+    Returns `(broken, orphans)`:
+    - `broken`  — `(page, target)` for each plain `[[wikilink]]` resolving to
+      no page by path, filename, or frontmatter alias. Obsidian embeds
+      (`![[...]]`) are never flagged broken — they routinely target non-page
+      assets (images, PDFs); a resolvable embed still counts as an incoming
+      reference. Links inside fenced code, inline code, and frontmatter are
+      ignored — they are not real links.
+    - `orphans` — content pages with zero incoming wikilinks, sorted.
+      `index.md` and `log.md` are never orphan candidates (navigation /
+      append-only log) but still count as link *sources*.
+
+    Both are structural facts. Whether an orphan is acceptable, or how a
+    broken link should be repaired, is judgment left to the caller.
+    """
+    md_files = _walk_owned_md_files(wiki_root)
+
+    def _real(p: Path) -> Path:
+        try:
+            return p.resolve()
+        except OSError:
+            return p
+
+    candidates: set[Path] = {_real(f) for f in md_files}
+
+    # Frontmatter alias index (alias lowercased -> page) and post-frontmatter
+    # bodies, read once per file.
+    alias_index: dict[str, Path] = {}
+    bodies: dict[Path, str] = {}
+    for f in md_files:
+        try:
+            text = f.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        _, bodies[f] = _md.split_frontmatter(text)
+        fm = _md.parse_frontmatter(text)
+        if fm and isinstance(fm.get("aliases"), list):
+            for alias in fm["aliases"]:
+                if alias:
+                    alias_index[str(alias).lower()] = f
+
+    broken: list[tuple[Path, str]] = []
+    incoming: set[Path] = set()
+    for f, body in bodies.items():
+        for link, is_embed in _md.find_wikilink_refs(_md.strip_code_spans(body)):
+            target = _md.resolve_wikilink(link, f.parent, candidates)
+            if target is None:
+                aliased = alias_index.get(link.lower())
+                if aliased is None:
+                    # An embed (`![[...]]`) routinely targets a non-page asset
+                    # — image, PDF, audio — absent from the page candidate set.
+                    # Only plain `[[links]]` are flagged broken.
+                    if not is_embed:
+                        broken.append((f, link))
+                    continue
+                target = _real(aliased)
+            if target != _real(f):  # a page linking itself is not "incoming"
+                incoming.add(target)
+
+    orphans = [
+        f for f in md_files
+        if f.name not in ("index.md", "log.md") and _real(f) not in incoming
+    ]
+    return broken, sorted(orphans)
 
 
 def _summary_header(wiki_root: Path, all_spaces: list[Path]) -> list[str]:
@@ -594,12 +679,182 @@ def cmd_audit(args: argparse.Namespace) -> int:
                 print(f"  - stale entry {entry}/ (no index.md on disk)")
             issues += len(missing) + len(stale)
 
-    if issues == 0:
-        print("OK: no `## Spaces` drift")
+    drift_issues = issues
+    broken, orphans = _audit_content(wiki_root)
+
+    if broken:
+        print()
+        by_page: dict[Path, list[str]] = {}
+        for page, link in broken:
+            by_page.setdefault(page, []).append(link)
+        for page in sorted(by_page):
+            print(f"<wiki>/{page.relative_to(wiki_root)}:")
+            for link in sorted(by_page[page]):
+                print(f"  ! broken wikilink [[{link}]]")
+
+    if orphans:
+        print(
+            f"\norphans: {len(orphans)} page(s) with no incoming wikilinks "
+            "(informational — a page may be standalone on purpose):"
+        )
+        for page in orphans:
+            print(f"  . <wiki>/{page.relative_to(wiki_root)}")
+
+    # Orphans are a fact, not an error — they never flip the exit code.
+    # `## Spaces` drift and broken wikilinks do.
+    errors = drift_issues + len(broken)
+    print()
+    if errors == 0:
+        tail = f" ({len(orphans)} orphan(s) reported above)" if orphans else ""
+        print(f"OK: no `## Spaces` drift, no broken wikilinks{tail}")
         return 0
-    print(f"\n{issues} issue(s) found. Re-run after fixing, or use "
-          "`wiki-spaces space add/remove` to update individual entries.")
+    parts: list[str] = []
+    if drift_issues:
+        parts.append(f"{drift_issues} `## Spaces` drift")
+    if broken:
+        parts.append(f"{len(broken)} broken wikilink(s)")
+    print(
+        f"{errors} issue(s) found: {' + '.join(parts)}. Re-run after fixing, "
+        "or use `wiki-spaces space add/remove` for `## Spaces` entries."
+    )
     return 1
+
+
+def _run_git(cmd: list[str]) -> tuple[int, str]:
+    """Run a git command; return `(returncode, stderr-or-error-text)`.
+
+    Returns `(127, ...)` when git itself is missing, so `cmd_mount` can read
+    linearly without nesting its own try/except per call.
+    """
+    import subprocess
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError:
+        return 127, "git not found on PATH"
+    return proc.returncode, (proc.stderr or proc.stdout or "").strip()
+
+
+def cmd_mount(args: argparse.Namespace) -> int:
+    """Mount an external space (clone / submodule / symlink) and register it.
+
+    The mechanism is the caller's explicit choice (`--as`) — collaborative vs
+    read-only vs local is a judgment, not something the CLI guesses. The CLI
+    does the mechanical part: run the mount, verify the result is a
+    wiki-spaces space (`index.md` present), and add the `## Spaces` entry.
+    """
+    wiki_root = _resolve_wiki(args.wiki)
+    if wiki_root is None:
+        print(
+            "  ! no wiki resolved. Pass --wiki <path> or set `wiki` in config.",
+            file=sys.stderr,
+        )
+        return 2
+    ok, err = _validate_rel_path(args.path)
+    if not ok:
+        print(f"  ! invalid path: {err}", file=sys.stderr)
+        return 2
+
+    rel = args.path.strip().rstrip("/")
+    dest = wiki_root / rel
+    if dest.exists() or dest.is_symlink():
+        print(
+            f"  ! {rel} already exists; choose a path that does not exist yet",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Atomic refuse on a Tier 1 parent — the same `## Spaces` contract as
+    # `space add`, checked before any filesystem work so a refusal is a no-op.
+    ancestor = _nearest_ancestor_space(wiki_root, dest)
+    ancestor_index = ancestor / "index.md"
+    text = ancestor_index.read_text(encoding="utf-8")
+    ancestor_rel = ancestor.relative_to(wiki_root)
+    printable = "<wiki>/" if str(ancestor_rel) == "." else f"<wiki>/{ancestor_rel}/"
+    if not _md.has_section(text, "Spaces"):
+        print(
+            f"  ! cannot register {rel}/: nearest ancestor {printable}index.md "
+            "has no `## Spaces` section.",
+            file=sys.stderr,
+        )
+        print(
+            f"    Add `## Spaces` to {printable}index.md first (the parent is "
+            "currently Tier 1). See AGENTS.md / Tiers for the contract.",
+            file=sys.stderr,
+        )
+        return 2
+
+    mechanism = args.mechanism
+    if mechanism == "submodule" and not (wiki_root / ".git").exists():
+        print(
+            f"  ! --as submodule needs the wiki to be a git repo; "
+            f"{wiki_root}/.git not found. Use --as clone or --as symlink, "
+            "or `git init` the wiki first.",
+            file=sys.stderr,
+        )
+        return 2
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    if mechanism == "symlink":
+        src = Path(args.source).expanduser()
+        try:
+            src_resolved = src.resolve()
+        except OSError:
+            src_resolved = src
+        if not src_resolved.is_dir():
+            print(f"  ! symlink source is not a directory: {src}", file=sys.stderr)
+            return 2
+        try:
+            dest.symlink_to(src_resolved, target_is_directory=True)
+        except OSError as e:
+            print(f"  ! symlink failed: {e}", file=sys.stderr)
+            return 1
+        print(f"  + {rel} -> {src_resolved}  (symlink)")
+    elif mechanism == "clone":
+        rc, errout = _run_git(["git", "clone", args.source, str(dest)])
+        if rc != 0:
+            print(f"  ! git clone failed: {errout}", file=sys.stderr)
+            return 1
+        print(f"  + {rel}/  (git clone of {args.source})")
+    else:  # submodule
+        rc, errout = _run_git(
+            ["git", "-C", str(wiki_root), "submodule", "add", args.source, rel]
+        )
+        if rc != 0:
+            print(f"  ! git submodule add failed: {errout}", file=sys.stderr)
+            return 1
+        print(f"  + {rel}/  (git submodule of {args.source})")
+
+    # Verify the mount is actually a wiki-spaces space before registering it.
+    if not (dest / "index.md").is_file():
+        print(
+            f"  ! mounted {rel}/ has no index.md — it is not a wiki-spaces "
+            "space, so it was not registered in `## Spaces`.",
+            file=sys.stderr,
+        )
+        if mechanism == "symlink":
+            dest.unlink()
+            print(f"  - removed the symlink {rel}", file=sys.stderr)
+        else:
+            print(
+                f"    The files are on disk at {rel}/; remove them, or add an "
+                "index.md and run `wiki-spaces space audit`.",
+                file=sys.stderr,
+            )
+        return 1
+
+    # Register in the nearest ancestor's `## Spaces`.
+    rel_from_ancestor = dest.relative_to(ancestor)
+    label = f"{rel_from_ancestor}/"
+    href = f"{rel_from_ancestor}/index.md"
+    new_text = _add_space_entry(text, label, href, args.description)
+    if new_text != text:
+        ancestor_index.write_text(new_text, encoding="utf-8")
+        print(f"  ~ {printable}index.md ## Spaces  += [{label}]")
+    else:
+        print(f"  . entry for {label} already in ancestor's ## Spaces")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -642,8 +897,32 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_remove.set_defaults(func=cmd_remove)
 
-    p_audit = sub.add_parser("audit", help="report ## Spaces drift across the wiki")
+    p_audit = sub.add_parser(
+        "audit",
+        help="report ## Spaces drift, broken wikilinks, and orphan pages",
+    )
     p_audit.set_defaults(func=cmd_audit)
+
+    p_mount = sub.add_parser(
+        "mount",
+        help="mount an external space (clone/submodule/symlink) and register it",
+    )
+    p_mount.add_argument("source", help="git URL, or local path, of the space to mount")
+    p_mount.add_argument(
+        "path", help="destination path relative to the wiki root (e.g. shared/team-foo)"
+    )
+    p_mount.add_argument(
+        "--as",
+        dest="mechanism",
+        required=True,
+        choices=("submodule", "clone", "symlink"),
+        help="mount mechanism: submodule (collaborative, push changes back), "
+        "clone (read-only one-time copy), symlink (local folder)",
+    )
+    p_mount.add_argument(
+        "--description", help="one-line description for the `## Spaces` entry"
+    )
+    p_mount.set_defaults(func=cmd_mount)
 
     args = parser.parse_args(argv)
     return args.func(args)

@@ -131,3 +131,20 @@ def test_is_owned_install_unowned_dir(tmp_path):
     dst.mkdir()
     (dst / "SKILL.md").write_text("user content")
     assert _common.is_owned_install(dst, src) is False
+
+
+# ---------- HARNESSES matrix ----------
+
+def test_harnesses_includes_antigravity():
+    assert "antigravity" in {h.key for h in _common.HARNESSES}
+
+
+def test_antigravity_harness_paths():
+    ag = next(h for h in _common.HARNESSES if h.key == "antigravity")
+    assert ag.skills_dir == _common.HOME / ".gemini/antigravity/skills"
+    assert _common.HOME / ".gemini/antigravity" in ag.detect
+
+
+def test_harness_keys_are_unique():
+    keys = [h.key for h in _common.HARNESSES]
+    assert len(keys) == len(set(keys))

@@ -1,5 +1,6 @@
 """Shallow-clone kepano/obsidian-skills and copy obsidian-markdown +
-obsidian-bases into vendor/kepano/. Writes vendor/kepano/COMMIT with the
+obsidian-bases plus the upstream LICENSE into vendor/kepano/. Writes
+vendor/kepano/COMMIT with the
 source SHA + ISO date. Idempotent: re-running with no upstream change
 produces no diff. Aborts (without updating COMMIT) if any required skill
 is missing upstream.
@@ -60,7 +61,12 @@ def main(argv: list[str] | None = None) -> int:
 
         commit_file = vendor_dir / "COMMIT"
         existing = commit_file.read_text().splitlines() if commit_file.exists() else []
-        if existing and existing[0] == sha and all((vendor_dir / s / "SKILL.md").exists() for s in KEPANO_DEPS):
+        if (
+            existing
+            and existing[0] == sha
+            and all((vendor_dir / s / "SKILL.md").exists() for s in KEPANO_DEPS)
+            and (vendor_dir / "LICENSE").is_file()
+        ):
             print(f"\nvendor/kepano/COMMIT unchanged  sha={sha[:12]}  (skipping copy)")
             return 0
 
@@ -80,6 +86,19 @@ def main(argv: list[str] | None = None) -> int:
                 shutil.rmtree(dst)
             shutil.copytree(src, dst)
             print(f"  vendored {skill}")
+
+        # Redistributing upstream content carries an obligation to retain its
+        # license. kepano/obsidian-skills is MIT — copy LICENSE alongside it.
+        license_src = clone_dir / "LICENSE"
+        if license_src.is_file():
+            shutil.copy2(license_src, vendor_dir / "LICENSE")
+            print("  vendored LICENSE")
+        else:
+            print(
+                "  ! WARNING: no LICENSE found upstream; vendor/kepano/LICENSE "
+                "not refreshed (vendored content must retain its license).",
+                file=sys.stderr,
+            )
 
     iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     commit_file.write_text(f"{sha}\n{iso}\n{KEPANO_REPO}\n")

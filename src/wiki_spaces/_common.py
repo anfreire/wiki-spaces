@@ -118,6 +118,15 @@ HARNESSES: tuple[Harness, ...] = (
         skills_dir=HOME / ".gemini/skills",
     ),
     Harness(
+        # Google Antigravity nests its skills under ~/.gemini/antigravity/;
+        # detecting that subdir (not ~/.gemini) keeps it distinct from the
+        # Gemini CLI harness above. An Antigravity-only machine still trips
+        # gemini's ~/.gemini detect — harmless (an unused ~/.gemini/skills/).
+        "antigravity",
+        detect=(HOME / ".gemini/antigravity",),
+        skills_dir=HOME / ".gemini/antigravity/skills",
+    ),
+    Harness(
         "hermes",
         detect=(HOME / ".hermes",),
         skills_dir=HOME / ".hermes/skills",

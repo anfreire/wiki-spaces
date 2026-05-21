@@ -313,3 +313,58 @@ def test_update_frontmatter_appends_missing_key():
 def test_update_frontmatter_noop_when_absent():
     text = "# No frontmatter\n"
     assert _md.update_frontmatter_field(text, "summary", "x") == text
+
+
+# ---------- strip_code_spans ----------
+
+def test_strip_code_spans_blanks_fenced_block():
+    out = _md.strip_code_spans("before\n```\n[[fake]]\n```\nafter")
+    assert "[[fake]]" not in out
+    assert "before" in out and "after" in out
+
+
+def test_strip_code_spans_blanks_inline_code():
+    out = _md.strip_code_spans("see `[[inline]]` here")
+    assert "[[inline]]" not in out
+    assert "see" in out and "here" in out
+
+
+def test_strip_code_spans_keeps_real_links():
+    assert "[[real-link]]" in _md.strip_code_spans("this [[real-link]] stays put")
+
+
+def test_strip_code_spans_tilde_fence():
+    out = _md.strip_code_spans("p\n~~~\n[[t]]\n~~~\nq")
+    assert "[[t]]" not in out
+    assert "p" in out and "q" in out
+
+
+def test_strip_code_spans_preserves_line_count():
+    text = "a\n```\nx\ny\n```\nb"
+    assert len(_md.strip_code_spans(text).splitlines()) == len(text.splitlines())
+
+
+def test_strip_code_spans_fence_closes_on_same_char():
+    # A ~~~ line inside a ``` block does not close it; the matching ``` does.
+    out = _md.strip_code_spans("```\n~~~\n[[still-code]]\n```\n[[live]]")
+    assert "[[still-code]]" not in out
+    assert "[[live]]" in out
+
+
+def test_strip_code_spans_short_fence_does_not_close_longer():
+    # A 3-backtick line must NOT close a 4-backtick-opened block.
+    out = _md.strip_code_spans("````\n```\n[[still-code]]\n````\n[[live]]")
+    assert "[[still-code]]" not in out
+    assert "[[live]]" in out
+
+
+# ---------- find_wikilink_refs ----------
+
+def test_find_wikilink_refs_marks_embeds():
+    refs = _md.find_wikilink_refs("a [[link]] and an ![[embed.png]]")
+    assert ("link", False) in refs
+    assert ("embed.png", True) in refs
+
+
+def test_find_wikilink_refs_strips_alias_and_heading():
+    assert _md.find_wikilink_refs("see [[page#section|Display]]") == [("page", False)]
