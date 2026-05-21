@@ -10,29 +10,32 @@ wiki-spaces is built for **AI coding harnesses with filesystem access** — Clau
 
 The *shape* of the wiki — research notes, recipes, journal, team reference, anything — is yours. The *harness* that drives it is what wiki-spaces assumes you have.
 
-## Start
+## Install
 
-```sh
-mkdir -p ~/Wiki && echo "# My Wiki" > ~/Wiki/index.md
+Installing gives your agent the reference skills plus a scaffolded, registered wiki. **Letting an agent do it is the recommended path** — setup is a short interview, and an agent runs the steps end to end without fat-fingering a path or a flag.
+
+### Let your AI agent do it (recommended)
+
+Paste this to your coding agent (Claude Code, Codex, Cursor, Windsurf, Gemini CLI, Antigravity, …):
+
+```
+Install and set up wiki-spaces for me by following the instructions here:
+https://raw.githubusercontent.com/anfreire/wiki-spaces/main/references/SETUP.md
 ```
 
-That's a complete wiki. Add files, folders, anything. The whole spec is one page: [`AGENTS.md`](AGENTS.md).
+The agent reads [`SETUP.md`](references/SETUP.md), asks what the wiki is for and where it should live, infers a layout, links the skills into your harness, scaffolds the wiki, and writes the config — confirming the plan with you before it runs anything.
 
-## Optional tooling
-
-For AI agents to find and act on your wiki, install the helper:
+### Manual
 
 ```bash
 uvx wiki-spaces install                  # link skills into detected harnesses
-uvx wiki-spaces init ~/Wiki              # scaffold + register as default target
+uvx wiki-spaces init ~/Wiki              # scaffold a wiki + register it
 uvx wiki-spaces doctor --no-net          # verify
 ```
 
-`install` auto-detects and links the skills into whichever of **Claude Code, Codex, Gemini CLI, Antigravity, Hermes, and Kiro** are present (`--all` pre-positions for every one). Cursor, Windsurf, GitHub Copilot, and Aider have no global skills directory — they integrate via a rule-file snippet instead (see [What you get](#what-you-get)).
+`install` auto-detects and links the skills into whichever of **Claude Code, Codex, Gemini CLI, Antigravity, Hermes, and Kiro** are present (`--all` pre-positions for every one). Cursor, Windsurf, GitHub Copilot, and Aider have no global skills directory — they integrate via a rule-file snippet (`wiki-spaces install --bridge <key>`; see [`HARNESS_INTEGRATION.md`](references/HARNESS_INTEGRATION.md)). For a permanent install, `pip install wiki-spaces` or `uv tool install wiki-spaces`, then drop the `uvx` prefix.
 
-Or `pip install wiki-spaces` (or `uv tool install wiki-spaces`) and drop the `uvx` prefix.
-
-Also available:
+Once a wiki exists, the `space` subcommands manage its structure:
 
 ```bash
 uvx wiki-spaces space add projects/foo   # create a space + register it
@@ -40,18 +43,15 @@ uvx wiki-spaces space audit              # audit drift, broken links, orphans
 uvx wiki-spaces space mount <url> shared/team --as submodule   # mount an external space
 ```
 
-`space add`, `space remove`, and `space mount` require a `## Spaces` section in the parent's `index.md` (the navigability contract). Wikis scaffolded via `wiki-spaces init` get this automatically. Hand-rolled `mkdir + echo` wikis are Tier 1 and need `## Spaces` added to `index.md` first — either by `wiki-spaces init` (which registers the wiki in your config) or by editing the file directly.
+`space add`, `space remove`, and `space mount` need a `## Spaces` section in the parent's `index.md`; `wiki-spaces init` scaffolds that automatically.
 
-### Let an AI agent do the setup
+### No tooling at all
 
-Paste this to your agent:
-
-```
-Install and set up wiki-spaces for me by following the instructions here:
-https://raw.githubusercontent.com/anfreire/wiki-spaces/main/references/SETUP.md
+```sh
+mkdir -p ~/Wiki && echo "# My Wiki" > ~/Wiki/index.md
 ```
 
-The agent picks tailored defaults, scaffolds, links the skills into your harness, and writes the config.
+A folder with `index.md` is already a complete wiki — the whole spec is one page, [`AGENTS.md`](AGENTS.md). The skills still work on it (they discover the wiki from your current directory); run `wiki-spaces init` later to register it for config-based discovery.
 
 ## What you get
 
@@ -61,7 +61,7 @@ Three reference skills your AI agent uses to work with the wiki:
 - `wiki-update` — capture / save / sync
 - `wiki-tend` — audit, normalize tags, cross-link
 
-For Cursor / Windsurf / Copilot / Aider (no skills concept), see [`references/HARNESS_INTEGRATION.md`](references/HARNESS_INTEGRATION.md). The fastest path is `wiki-spaces install --bridge <key>` (emits the rule snippet to stdout — pipe it into your project's rules file).
+Cursor / Windsurf / Copilot / Aider integration is covered under [Install](#install) above and in [`HARNESS_INTEGRATION.md`](references/HARNESS_INTEGRATION.md).
 
 ## Search at scale
 
