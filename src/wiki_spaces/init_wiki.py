@@ -31,24 +31,30 @@ OPTIONAL = {"log.md", "hot.md", "_template.md", "_meta/taxonomy.md", ".manifest.
 DEFAULT_DESCRIPTION = "<one paragraph describing this wiki>"
 
 
-def build_index_md(name: str, description: str) -> str:
-    """Compose the initial index.md: title, `## What this space is`, empty `## Spaces`.
+def build_index_md(name: str, description: str, *, tier1: bool = False) -> str:
+    """Compose the initial index.md.
 
-    The empty `## Spaces` heading is scaffolded so the navigability contract
-    is live from t=0. Empty is valid — the contract is "exhaustive," not
-    "non-empty." Plain folders (no `index.md`) are not listed here; `## Items`
-    is left for the user.
+    Tier 2 (default): title, `## What this space is`, and an empty `## Spaces`
+    so the navigability contract is live from t=0. For a fresh wiki the empty
+    list creates no drift — there are no child spaces yet.
+
+    Tier 1 (`tier1=True`): omit `## Spaces`. Used when adopting an existing
+    folder, which may already contain nested spaces — a Tier 2 root with an
+    empty `## Spaces` would otherwise report immediate drift against those
+    children. A Tier 1 root carries no navigability contract; the user can
+    opt up later by adding `## Spaces`.
     """
-    return "\n".join([
+    parts = [
         f"# {name}",
         "",
         "## What this space is",
         "",
         description,
         "",
-        "## Spaces",
-        "",
-    ])
+    ]
+    if not tier1:
+        parts += ["## Spaces", ""]
+    return "\n".join(parts)
 
 LOG_MD = "# Log\n"
 HOT_MD = "# Hot\n\n_Currently active work._\n"
@@ -115,6 +121,13 @@ def main(argv: list[str] | None = None) -> int:
         "'projects/foo' are accepted",
     )
     parser.add_argument("--force", action="store_true", help="overwrite existing files")
+    parser.add_argument(
+        "--tier1",
+        action="store_true",
+        help="scaffold a Tier 1 index.md (omit the `## Spaces` section). Use "
+        "when adopting an existing folder that may already contain nested "
+        "spaces, so an audit does not report immediate `## Spaces` drift",
+    )
     parser.add_argument(
         "--git",
         action="store_true",
@@ -205,7 +218,7 @@ def main(argv: list[str] | None = None) -> int:
         f.write_text(content)
         written.append(rel)
 
-    write("index.md", build_index_md(name, description))
+    write("index.md", build_index_md(name, description, tier1=args.tier1))
 
     for opt in args.extras:
         match opt:

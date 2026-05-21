@@ -794,8 +794,9 @@ def cmd_mount(args: argparse.Namespace) -> int:
         )
         return 2
 
-    dest.parent.mkdir(parents=True, exist_ok=True)
-
+    # Validate a symlink source before creating anything on disk, so a bad
+    # source leaves no empty parent directory behind.
+    src_resolved: Path | None = None
     if mechanism == "symlink":
         src = Path(args.source).expanduser()
         try:
@@ -805,6 +806,10 @@ def cmd_mount(args: argparse.Namespace) -> int:
         if not src_resolved.is_dir():
             print(f"  ! symlink source is not a directory: {src}", file=sys.stderr)
             return 2
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    if mechanism == "symlink":
         try:
             dest.symlink_to(src_resolved, target_is_directory=True)
         except OSError as e:
@@ -827,6 +832,9 @@ def cmd_mount(args: argparse.Namespace) -> int:
         print(f"  + {rel}/  (git submodule of {args.source})")
 
     # Verify the mount is actually a wiki-spaces space before registering it.
+    # A symlink or clone is cleaned up; a submodule cannot be auto-undone
+    # safely (`submodule add` already staged a gitlink and edited
+    # .gitmodules), so the exact recovery commands are printed instead.
     if not (dest / "index.md").is_file():
         print(
             f"  ! mounted {rel}/ has no index.md — it is not a wiki-spaces "
@@ -836,10 +844,18 @@ def cmd_mount(args: argparse.Namespace) -> int:
         if mechanism == "symlink":
             dest.unlink()
             print(f"  - removed the symlink {rel}", file=sys.stderr)
-        else:
+        elif mechanism == "clone":
+            import shutil
+
+            shutil.rmtree(dest, ignore_errors=True)
+            print(f"  - removed the clone at {rel}/", file=sys.stderr)
+        else:  # submodule
             print(
-                f"    The files are on disk at {rel}/; remove them, or add an "
-                "index.md and run `wiki-spaces space audit`.",
+                f"    `git submodule add` left files on disk, staged a "
+                f"gitlink, and edited .gitmodules. To undo:\n"
+                f"      git -C {wiki_root} submodule deinit -f {rel}\n"
+                f"      git -C {wiki_root} rm -f {rel}\n"
+                f"      rm -rf {wiki_root}/.git/modules/{rel}",
                 file=sys.stderr,
             )
         return 1

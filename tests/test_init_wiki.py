@@ -38,6 +38,22 @@ def test_build_index_md_spaces_section_is_empty():
     assert _md.parse_section_entries(text, "Spaces") == []
 
 
+def test_build_index_md_tier1_omits_spaces_section():
+    """`tier1=True` scaffolds a Tier 1 root — no `## Spaces` section — for
+    adopting an existing folder without forcing the navigability contract."""
+    text = init_wiki.build_index_md("MyWiki", "A description", tier1=True)
+    assert text.startswith("# MyWiki")
+    assert "## What this space is" in text
+    assert "## Spaces" not in text
+
+
+def test_init_tier1_flag_writes_tier1_index(monkeypatch, tmp_path):
+    monkeypatch.setattr(_common, "CONFIG_PATH", tmp_path / "absent-config")
+    rc, _, _ = _run([str(tmp_path / "wiki"), "--tier1", "--no-config"])
+    assert rc == 0
+    assert "## Spaces" not in (tmp_path / "wiki" / "index.md").read_text()
+
+
 def test_init_folders_created_but_not_listed_in_index(monkeypatch, tmp_path):
     """--folders creates directories on disk; index.md gets no `## Items`
     section — tools discover plain folders via the filesystem."""

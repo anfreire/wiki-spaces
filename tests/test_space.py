@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from wiki_spaces import _md, space
+from wiki_spaces import _md, init_wiki, space
 
 
 def _make_wiki(tmp_path: Path, with_spaces_section: bool = True) -> Path:
@@ -702,12 +702,19 @@ def _make_space_dir(path: Path, title: str = "mounted") -> Path:
     return path
 
 
-def _make_git_repo(path: Path, title: str = "cloned") -> Path:
-    """A real local git repo with index.md and one commit (for clone tests)."""
+def _make_git_repo(path: Path, title: str = "cloned", *, with_index: bool = True) -> Path:
+    """A real local git repo with one commit (for clone tests).
+
+    With `with_index` (default) the repo contains index.md; otherwise only
+    notes.md — used to exercise the not-a-wiki mount path.
+    """
     import os
     import subprocess
     path.mkdir(parents=True, exist_ok=True)
-    (path / "index.md").write_text(f"# {title}\n")
+    if with_index:
+        (path / "index.md").write_text(f"# {title}\n")
+    else:
+        (path / "notes.md").write_text(f"# {title} notes\n")
     env = {
         **os.environ,
         "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
@@ -805,3 +812,44 @@ def test_mount_clone_copies_and_registers(tmp_path):
     assert (wiki / "shared" / "team" / ".git").exists()
     entries = _md.parse_section_entries((wiki / "index.md").read_text(), "Spaces")
     assert any(e.href and "shared/team" in e.href for e in entries)
+
+
+def test_mount_symlink_bad_source_leaves_no_parent_dir(tmp_path):
+    """A nonexistent symlink source is rejected before any directory is
+    created — no empty `shared/` left behind."""
+    wiki = _make_wiki(tmp_path)
+    rc, _, _ = _run(
+        ["--wiki", str(wiki), "mount", str(tmp_path / "nope"), "shared/team",
+         "--as", "symlink"]
+    )
+    assert rc == 2
+    assert not (wiki / "shared").exists()
+
+
+@pytest.mark.skipif(not _HAS_GIT, reason="git not on PATH")
+def test_mount_clone_without_index_is_cleaned_up(tmp_path):
+    """A clone of a repo with no index.md is not a wiki-spaces space — the
+    command refuses it and removes the clone it just made."""
+    wiki = _make_wiki(tmp_path)
+    src = _make_git_repo(tmp_path / "src-repo", with_index=False)
+    rc, _, err = _run(
+        ["--wiki", str(wiki), "mount", str(src), "shared/team", "--as", "clone"]
+    )
+    assert rc == 1
+    assert "index.md" in err
+    assert not (wiki / "shared" / "team").exists()
+
+
+def test_audit_tier1_adopted_root_with_nested_space_no_drift(tmp_path):
+    """Adopting a folder that already has a nested space: `init --tier1`
+    makes a Tier 1 root carrying no `## Spaces` contract, so audit reports no
+    drift against that pre-existing child."""
+    folder = tmp_path / "my-notes"
+    nested = folder / "projects" / "foo"
+    nested.mkdir(parents=True)
+    (nested / "index.md").write_text("# foo")
+    assert init_wiki.main([str(folder), "--no-config", "--tier1"]) == 0
+    assert "## Spaces" not in (folder / "index.md").read_text()
+    rc, out, _ = _run(["--wiki", str(folder), "audit"])
+    assert rc == 0, out
+    assert "missing entry" not in out
