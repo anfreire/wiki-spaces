@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import io
 from contextlib import redirect_stdout
+from pathlib import Path
+
+import pytest
 
 from wiki_spaces import doctor
 
@@ -71,3 +74,40 @@ def test_check_config_returns_bool(monkeypatch):
     monkeypatch.setattr(doctor, "_validate_repo", lambda r: "MISSING ON DISK")
     with redirect_stdout(io.StringIO()):
         assert doctor.check_config() is False
+
+
+def _fake_install(tmp_path: Path) -> Path:
+    """Materialize a minimal valid wiki-spaces install: every REPO_SENTINEL
+    file present, content irrelevant."""
+    root = tmp_path / "install"
+    for sentinel in doctor.REPO_SENTINELS:
+        target = root / sentinel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("ok", encoding="utf-8")
+    return root
+
+
+def test_validate_repo_ok_for_complete_install(tmp_path):
+    """All sentinels present ⇒ valid."""
+    root = _fake_install(tmp_path)
+    assert doctor._validate_repo(str(root)) == "OK"
+
+
+@pytest.mark.parametrize("sentinel", list(doctor.REPO_SENTINELS))
+def test_validate_repo_flags_any_missing_sentinel(tmp_path, sentinel):
+    """Each sentinel is individually load-bearing. Missing any one ⇒ invalid
+    repo. Parametrized so a new sentinel (e.g., the wiki-update and wiki-tend
+    skill files we just added) is automatically covered."""
+    root = _fake_install(tmp_path)
+    (root / sentinel).unlink()
+    state = doctor._validate_repo(str(root))
+    assert "NOT A WIKI-SPACES INSTALL" in state
+    assert sentinel in state
+
+
+def test_repo_sentinels_includes_all_three_wiki_skills():
+    """Codex blocker: doctor previously only checked wiki-search/SKILL.md, so
+    a missing wiki-update or wiki-tend would slip through. This pins the fix."""
+    assert "skills/wiki-search/SKILL.md" in doctor.REPO_SENTINELS
+    assert "skills/wiki-update/SKILL.md" in doctor.REPO_SENTINELS
+    assert "skills/wiki-tend/SKILL.md" in doctor.REPO_SENTINELS

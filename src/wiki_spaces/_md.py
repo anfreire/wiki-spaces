@@ -435,3 +435,218 @@ def update_frontmatter_field(text: str, key: str, value: str) -> str:
         lines.append(f"{key}: {value}")
     new_fm = "\n".join(lines)
     return f"---\n{new_fm}\n---\n{body}"
+
+
+# ---------- Markdown links (path-aware rewrite for `space promote`) ----------
+
+MARKDOWN_LINK_RE = re.compile(r"\[([^\]\n]*)\]\(([^)\s]+)\)")
+
+
+@dataclass(frozen=True)
+class MarkdownLink:
+    """A `[label](href[#anchor])` link with its source span.
+
+    `anchor` includes the leading `#` (or empty string).
+    `span` is the (start, end) offsets in the original text.
+    """
+    label: str
+    href: str
+    anchor: str
+    span: tuple[int, int]
+
+
+def parse_markdown_links(text: str) -> list[MarkdownLink]:
+    """Find every `[label](href[#anchor])` link in `text`.
+
+    Anchor captured separately so a rewrite of just the path part is trivial.
+    Wikilink syntax `[[target]]` is not matched (separate primitive).
+    """
+    out: list[MarkdownLink] = []
+    for m in MARKDOWN_LINK_RE.finditer(text):
+        href = m.group(2)
+        if "#" in href:
+            path, anchor_body = href.split("#", 1)
+            anchor = "#" + anchor_body
+        else:
+            path, anchor = href, ""
+        out.append(MarkdownLink(
+            label=m.group(1),
+            href=path,
+            anchor=anchor,
+            span=m.span(),
+        ))
+    return out
+
+
+def _is_external_href(href: str) -> bool:
+    """True for URLs, mailto:, anchor-only, or absolute paths."""
+    if not href:
+        return True
+    if href.startswith(("http://", "https://", "mailto:", "ftp://", "//")):
+        return True
+    if href.startswith("#"):
+        return True
+    if href.startswith("/"):
+        return True
+    return False
+
+
+def resolve_markdown_link(href: str, containing_file: Path, wiki_root: Path) -> Path | None:
+    """Resolve a relative `href` against `containing_file`'s directory.
+
+    Returns the absolute path the link refers to, or None when the link is
+    external (URL, mailto:, anchor-only, absolute path) or escapes the wiki.
+    """
+    if _is_external_href(href):
+        return None
+    base = containing_file.parent
+    try:
+        target = (base / href).resolve()
+    except OSError:
+        return None
+    try:
+        target.relative_to(wiki_root.resolve())
+    except ValueError:
+        return None
+    return target
+
+
+def compute_relative_link(target: Path, from_file: Path) -> str:
+    """POSIX-style relative path from `from_file`'s parent to `target`.
+
+    Markdown uses `/` separators on every platform; `os.path.relpath` uses
+    the native separator, so we normalize backslashes to forward slashes.
+    """
+    import os.path as _osp
+    rel = _osp.relpath(str(target), str(from_file.parent))
+    return rel.replace("\\", "/")
+
+
+# ---------- Wikilinks: full structural parser ----------
+
+
+@dataclass(frozen=True)
+class Wikilink:
+    """A `[[target[#anchor][|display]]]` wikilink with its source span.
+
+    `target`  — the literal between `[[` and `|` or `#` (no normalization).
+    `anchor`  — the `#anchor` portion without the `#`, or "".
+    `display` — the `|display` portion, or None when no `|` was present.
+    `span`    — (start, end) offsets of the whole `[[...]]` in the source.
+    """
+    target: str
+    anchor: str
+    display: str | None
+    span: tuple[int, int]
+
+
+def parse_wikilink_full(text: str) -> list[Wikilink]:
+    """Find every `[[...]]` wikilink in `text` with full structure captured.
+
+    Handles all forms: `[[t]]`, `[[t|d]]`, `[[t#a]]`, `[[t#a|d]]`, and
+    pathful targets `[[folder/page]]` with optional anchor / display.
+    """
+    out: list[Wikilink] = []
+    for m in WIKILINK_RE.finditer(text):
+        inner = m.group(1)
+        if "|" in inner:
+            tgt_part, display = inner.split("|", 1)
+            display = display.strip()
+        else:
+            tgt_part, display = inner, None
+        if "#" in tgt_part:
+            target, anchor = tgt_part.split("#", 1)
+            anchor = anchor.strip()
+        else:
+            target, anchor = tgt_part, ""
+        out.append(Wikilink(
+            target=target.strip(),
+            anchor=anchor,
+            display=display,
+            span=m.span(),
+        ))
+    return out
+
+
+# ---------- Frontmatter aliases (additive merge for `space promote`) ----------
+
+
+def parse_frontmatter_aliases(text: str) -> list[str]:
+    """Return the `aliases:` list from frontmatter, or [] when absent.
+
+    Pure parsing — no fs. Always returns a list (wraps a scalar value in
+    [scalar] so callers don't have to type-check).
+    """
+    fm = parse_frontmatter(text)
+    if not fm:
+        return []
+    aliases = fm.get("aliases")
+    if aliases is None:
+        return []
+    if isinstance(aliases, str):
+        return [aliases] if aliases else []
+    return list(aliases)
+
+
+_ALIASES_LINE_RE = re.compile(r"^aliases\s*:\s*(.*)$")
+
+
+def frontmatter_add_alias(text: str, alias: str) -> tuple[str, bool]:
+    """Add `alias` to the frontmatter `aliases:` list. Returns (new_text, added).
+
+    Case-insensitive no-op via `casefold()` — matches Obsidian's autocomplete
+    and the wiki-level collision preflight in `space.py`.
+
+    Style preservation (best-effort, stdlib-only):
+    - No frontmatter        → create block-style frontmatter at the top.
+    - No `aliases:` field    → append block-list at the end of frontmatter.
+    - `aliases: [a, b]`      → append in-line: `aliases: [a, b, alias]`.
+    - `aliases:\\n  - a`      → append a new `  - alias` line at the same indent.
+
+    Edge cases (mixed indentation, comments inside frontmatter) fall back
+    to block style and may not match the source style byte-for-byte — tests
+    assert the alias is present and parseable, not perfect formatting.
+    """
+    existing = parse_frontmatter_aliases(text)
+    if any(a.casefold() == alias.casefold() for a in existing):
+        return text, False
+
+    fm_text, body = split_frontmatter(text)
+    if fm_text is None:
+        new_fm = f"---\naliases:\n  - {alias}\n---\n"
+        return new_fm + text, True
+
+    lines = fm_text.splitlines()
+    for i, line in enumerate(lines):
+        m = _ALIASES_LINE_RE.match(line)
+        if not m:
+            continue
+        rest = m.group(1).strip()
+        if rest.startswith("[") and rest.endswith("]"):
+            inner = rest[1:-1].strip()
+            new_inner = f"{inner}, {alias}" if inner else alias
+            lines[i] = f"aliases: [{new_inner}]"
+            break
+        # Block-list: walk forward until the indented list ends.
+        insert_at = i + 1
+        indent = "  "
+        while insert_at < len(lines):
+            cand = lines[insert_at]
+            mm = _BLOCK_LIST_ITEM_RE.match(cand)
+            if mm:
+                indent = mm.group(1)
+                insert_at += 1
+                continue
+            if not cand.strip():
+                insert_at += 1
+                continue
+            break
+        lines.insert(insert_at, f"{indent}- {alias}")
+        break
+    else:
+        lines.append("aliases:")
+        lines.append(f"  - {alias}")
+
+    new_fm = "\n".join(lines)
+    trailing = "\n" if text.endswith("\n") or body else ""
+    return f"---\n{new_fm}\n---\n{body}", True

@@ -33,6 +33,8 @@ REPO_SENTINELS = (
     "AGENTS.md",
     "CONVENTIONS.md",
     "skills/wiki-search/SKILL.md",
+    "skills/wiki-update/SKILL.md",
+    "skills/wiki-tend/SKILL.md",
     "references/SETUP.md",
     "vendor/kepano/obsidian-markdown/SKILL.md",
 )

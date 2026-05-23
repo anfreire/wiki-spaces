@@ -71,6 +71,35 @@ Updated wiki:
 - Mode: <project_sync|conversation|research>
 ```
 
+## Promote to space
+
+A `.md` file that has grown into multiple distinct topics, accreted siblings, or now represents a recurring kind is a candidate for promotion to its own space.
+
+**When to consider promotion.** Any of:
+
+- Page exceeds ~300 lines of body content.
+- Page has 3+ H2 sections covering distinct sub-topics.
+- Sibling pages have accreted around the topic (e.g. `strategy.md`, `strategy-backtest.md`, `strategy-screening.md`) that would read more naturally as children of a `strategy/` space.
+- New content's intent suggests the existing page has become a hub.
+
+**Procedure.**
+
+1. Identify the file. Confirm it's not already an `index.md` and not in an external space.
+2. Run `wiki-spaces space promote <path>` (wiki-root-relative). Preview with `--dry-run` first if the wiki has many cross-references.
+3. The CLI:
+   - moves the file to `<basename>/index.md`,
+   - rewrites markdown links across the owned tree (path-aware: only links resolving to the promoted file are touched; hrefs recomputed relative to each linking file's directory so deep cross-links stay correct),
+   - rewrites wikilinks pointing to the promoted file (all forms — bare, display, anchored, pathful — with display preserved),
+   - adjusts the promoted file's outgoing relative links for its new depth (one extra `../`),
+   - adds `aliases: [<basename>]` to the new `index.md` for forward-compatible wikilink resolution (skip with `--skip-aliases` if another page already claims the alias),
+   - ensures the new `index.md` has `## Spaces` (Tier 2 by default — matches `space add`),
+   - registers the new space's `## Spaces` entry in the nearest ancestor (uses the file's frontmatter `summary` for the description if present).
+4. Read the new `index.md`. If sections read like standalone children, capture them as separate `.md` files under the new space in a follow-up `wiki-update` cycle. The CLI deliberately does not split content — that's authorship, not mechanics.
+
+**Atomicity.** The CLI snapshots every affected file to a system tempdir (outside the wiki tree) before mutating disk and restores from the snapshot if anything fails. Works on both git-tracked and untracked wikis. The snapshot dir is always cleaned, success or failure.
+
+**Refuses if.** Target dir exists with content; parent is Tier 1; path is external (or descends from an external scope); another owned page already claims the alias `<basename>` case-insensitively (use `--skip-aliases` to bypass).
+
 ## Logging
 
 Append to `log.md` only if it exists at the **scope root** (the wiki for default operations; the targeted space if the user named one — per CONVENTIONS / Per-space convention auto-detection):

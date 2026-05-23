@@ -389,6 +389,8 @@ Detection: a `.git` entry at the wiki root, whether a directory (regular repo) o
 
 **If present:** The wiki is intended to be opened in Obsidian. `wiki-tend`'s colorize step writes graph color groups into `.obsidian/graph.json` (only the `colorGroups` key; everything else preserved; backup written).
 
+**Hazard — Obsidian overwrites `graph.json` on graph-view interaction.** Opening the color-groups panel in Obsidian's graph view can wipe `colorGroups` entirely (most reliably with `collapse-color-groups: false`). The backup written by `wiki-tend` protects against `wiki-tend`'s own writes, not Obsidian's. Close Obsidian before running colorize, and avoid the graph color panel afterward until the vault is reloaded.
+
 Default colorize mode is `by-tag` (top 10 tags by usage, default palette below). `by-category` colors the categorical layout folders. `custom` honors user-provided mappings.
 
 Default palette (RGB ints) — tools may override:

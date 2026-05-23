@@ -853,3 +853,572 @@ def test_audit_tier1_adopted_root_with_nested_space_no_drift(tmp_path):
     rc, out, _ = _run(["--wiki", str(folder), "audit"])
     assert rc == 0, out
     assert "missing entry" not in out
+# ---------- _is_in_external_scope: ancestor-walking trust-scope preflight ----------
+
+def test_is_in_external_scope_returns_false_for_owned_path(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    target = wiki / "projects" / "mine"
+    is_external, reason = space._is_in_external_scope(target, wiki)
+    assert is_external is False
+    assert reason is None
+
+
+def test_is_in_external_scope_catches_shared_root(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    target = wiki / "shared" / "foo"
+    is_external, reason = space._is_in_external_scope(target, wiki)
+    assert is_external is True
+    assert "shared" in (reason or "")
+
+
+def test_is_in_external_scope_catches_shared_descendant(tmp_path):
+    """`shared/team/sub` is external because `shared` is the first segment —
+    _is_external itself catches this (lexical), but verify the ancestor
+    walker reports it correctly via the same path."""
+    wiki = _make_wiki(tmp_path)
+    target = wiki / "shared" / "team" / "sub"
+    is_external, _ = space._is_in_external_scope(target, wiki)
+    assert is_external is True
+
+
+def test_is_in_external_scope_catches_descendant_of_foreign_submodule(tmp_path):
+    """Codex's blocker: `_is_external` only checks the exact path, so a path
+    under a foreign-submodule mount slipped through. The ancestor walker
+    must catch it."""
+    wiki = _make_wiki(tmp_path)
+    _make_git_config(wiki, "https://github.com/me/mywiki.git")
+    sub = wiki / "external" / "foreign"
+    sub.mkdir(parents=True)
+    (wiki / ".gitmodules").write_text(
+        '[submodule "foreign"]\n'
+        "\tpath = external/foreign\n"
+        "\turl = https://github.com/someone-else/their-wiki.git\n"
+    )
+    descendant = sub / "deep" / "child"
+    is_external, reason = space._is_in_external_scope(descendant, wiki)
+    assert is_external is True
+    assert "external/foreign" in (reason or "")
+
+
+def test_is_in_external_scope_catches_descendant_of_escaping_symlink(tmp_path):
+    """A symlink that escapes the wiki tree → any descendant of that symlink
+    is in external scope. Same blocker class as the submodule case."""
+    wiki = _make_wiki(tmp_path)
+    outside = tmp_path / "outside-wiki"
+    outside.mkdir()
+    (outside / "child").mkdir()
+    import os
+    link = wiki / "mount"
+    os.symlink(outside, link)
+    descendant = link / "child"
+    is_external, reason = space._is_in_external_scope(descendant, wiki)
+    assert is_external is True
+    assert "mount" in (reason or "")
+
+
+def test_is_in_external_scope_path_outside_wiki(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    outside = tmp_path / "elsewhere" / "stuff"
+    is_external, reason = space._is_in_external_scope(outside, wiki)
+    assert is_external is True
+    assert "outside" in (reason or "")
+
+
+# ---------- cmd_add: --force-external preflight ----------
+
+def test_add_refuses_external_shared(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    rc, _, err = _run(["--wiki", str(wiki), "add", "shared/foo"])
+    assert rc == 2
+    assert "external scope" in err
+    assert not (wiki / "shared" / "foo").exists()
+
+
+def test_add_refuses_external_shared_descendant(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    rc, _, err = _run(["--wiki", str(wiki), "add", "shared/team/sub"])
+    assert rc == 2
+    assert "external scope" in err
+
+
+def test_add_refuses_under_escaping_symlink(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    import os
+    os.symlink(outside, wiki / "mount")
+    rc, _, err = _run(["--wiki", str(wiki), "add", "mount/child"])
+    assert rc == 2
+    assert "external scope" in err
+
+
+def test_add_refuses_under_foreign_submodule(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    _make_git_config(wiki, "https://github.com/me/mywiki.git")
+    sub = wiki / "external" / "foreign"
+    sub.mkdir(parents=True)
+    (wiki / ".gitmodules").write_text(
+        '[submodule "foreign"]\n'
+        "\tpath = external/foreign\n"
+        "\turl = https://github.com/other/wiki.git\n"
+    )
+    rc, _, err = _run(["--wiki", str(wiki), "add", "external/foreign/child"])
+    assert rc == 2
+    assert "external scope" in err
+
+
+def test_add_force_external_overrides(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    rc, out, _ = _run(["--wiki", str(wiki), "add", "shared/foo", "--force-external"])
+    assert rc == 0
+    assert (wiki / "shared" / "foo" / "index.md").is_file()
+
+
+# ---------- cmd_remove: --force-external preflight ----------
+
+def test_remove_refuses_external_shared(tmp_path):
+    """Construct the external space directly (bypassing add's guard) so we can
+    verify remove also refuses to operate on it without --force-external."""
+    wiki = _make_wiki(tmp_path)
+    sub = wiki / "shared" / "foo"
+    sub.mkdir(parents=True)
+    (sub / "index.md").write_text("# foo")
+    rc, _, err = _run(["--wiki", str(wiki), "remove", "shared/foo"])
+    assert rc == 2
+    assert "external scope" in err
+    assert sub.exists()  # untouched
+
+
+def test_remove_force_external_succeeds(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    sub = wiki / "shared" / "foo"
+    sub.mkdir(parents=True)
+    (sub / "index.md").write_text("# foo")
+    rc, _, _ = _run(["--wiki", str(wiki), "remove", "shared/foo", "--force-external"])
+    assert rc == 0
+    assert not sub.exists()
+
+
+# ---------- _walk_owned_md_files ----------
+
+def test_walk_owned_md_files_descends_into_plain_folders(tmp_path):
+    """Plain folders (no index.md) are valid per AGENTS.md and must be
+    traversed — _walk_owned_spaces misses them; _walk_owned_md_files must not."""
+    wiki = _make_wiki(tmp_path)
+    plain = wiki / "drafts"  # no index.md → plain folder
+    plain.mkdir()
+    (plain / "page.md").write_text("# page")
+    (wiki / "projects" / "spaced").mkdir(parents=True)
+    (wiki / "projects" / "spaced" / "index.md").write_text("# spaced")
+    (wiki / "projects" / "spaced" / "child.md").write_text("# child")
+    files = sorted(p.relative_to(wiki).as_posix() for p in space._walk_owned_md_files(wiki))
+    assert "drafts/page.md" in files
+    assert "projects/spaced/child.md" in files
+    assert "projects/spaced/index.md" in files
+
+
+def test_walk_owned_md_files_skips_externals(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    (wiki / "shared" / "team").mkdir(parents=True)
+    (wiki / "shared" / "team" / "team-page.md").write_text("# team")
+    (wiki / "projects" / "mine").mkdir(parents=True)
+    (wiki / "projects" / "mine" / "p.md").write_text("# p")
+    files = sorted(p.relative_to(wiki).as_posix() for p in space._walk_owned_md_files(wiki))
+    assert "projects/mine/p.md" in files
+    assert not any("shared/" in f for f in files)
+
+
+def test_walk_owned_md_files_skips_excluded_dirs(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    for d in (".obsidian", "_archives", ".git", "wiki-spaces-promote-leftover"):
+        (wiki / d).mkdir()
+        (wiki / d / "page.md").write_text("# x")
+    (wiki / "ok.md").write_text("# ok")
+    files = sorted(p.relative_to(wiki).as_posix() for p in space._walk_owned_md_files(wiki))
+    assert "ok.md" in files
+    for d in (".obsidian", "_archives", ".git", "wiki-spaces-promote-leftover"):
+        assert not any(f.startswith(f"{d}/") for f in files), f"{d} was walked"
+
+
+# ---------- _find_alias_owners ----------
+
+def test_find_alias_owners_case_insensitive(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    a = wiki / "a.md"
+    a.write_text("---\naliases:\n  - Foo\n---\n# a")
+    b = wiki / "b.md"
+    b.write_text("---\naliases: [bar, BAR]\n---\n# b")
+    owners = space._find_alias_owners(wiki)
+    assert "foo" in owners and owners["foo"] == [a]
+    # case-folded "bar" collects both entries
+    assert "bar" in owners and len(owners["bar"]) == 1
+    assert owners["bar"][0] == b
+
+
+# ---------- cmd_promote: happy path ----------
+
+def test_promote_moves_file_and_creates_tier2_index(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    page = wiki / "page.md"
+    page.write_text("# page\n\nbody text\n")
+    rc, out, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc == 0, err
+    assert not page.exists()
+    new = wiki / "page" / "index.md"
+    assert new.is_file()
+    new_text = new.read_text()
+    assert "# page" in new_text
+    assert "body text" in new_text
+    assert "## Spaces" in new_text  # Tier-2 by default
+    assert "aliases:" in new_text
+    assert "page" in _md.parse_frontmatter_aliases(new_text)
+    # Parent ## Spaces has the entry
+    parent_text = (wiki / "index.md").read_text()
+    assert "page/" in parent_text
+
+
+def test_promote_uses_frontmatter_summary_for_parent_entry(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    page = wiki / "page.md"
+    page.write_text("---\nsummary: A short summary.\n---\n# page\nbody\n")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc == 0, err
+    parent_text = (wiki / "index.md").read_text()
+    assert "A short summary." in parent_text
+
+
+# ---------- cmd_promote: refusals ----------
+
+def test_promote_refuses_index_md(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "index.md"])
+    assert rc == 2
+    assert "cannot promote" in err
+
+
+def test_promote_refuses_nonexistent_file(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "missing.md"])
+    assert rc == 2
+    assert "does not exist" in err
+
+
+def test_promote_refuses_non_md_file(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    (wiki / "thing.txt").write_text("x")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "thing.txt"])
+    assert rc == 2
+    assert ".md" in err
+
+
+def test_promote_refuses_existing_target_dir(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    (wiki / "page.md").write_text("# page")
+    (wiki / "page").mkdir()
+    (wiki / "page" / "preexisting.md").write_text("# preexisting")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc == 2
+    assert "already exists" in err
+    assert (wiki / "page.md").exists()  # source untouched
+
+
+def test_promote_refuses_tier1_parent(tmp_path):
+    wiki = _make_wiki(tmp_path, with_spaces_section=False)
+    (wiki / "page.md").write_text("# page")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc == 2
+    assert "## Spaces" in err
+    assert (wiki / "page.md").exists()
+
+
+def test_promote_refuses_external_root(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    (wiki / "shared").mkdir()
+    page = wiki / "shared" / "page.md"
+    page.write_text("# page")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "shared/page.md"])
+    assert rc == 2
+    assert "external scope" in err
+    assert page.exists()
+
+
+def test_promote_refuses_external_descendant(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    (wiki / "shared" / "team").mkdir(parents=True)
+    page = wiki / "shared" / "team" / "page.md"
+    page.write_text("# page")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "shared/team/page.md"])
+    assert rc == 2
+    assert "external scope" in err
+
+
+def test_promote_refuses_alias_collision_case_insensitive(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    (wiki / "other.md").write_text("---\naliases:\n  - Page\n---\n# other")
+    (wiki / "page.md").write_text("# page")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc == 2
+    assert "alias collision" in err.lower() or "already declares" in err
+    assert (wiki / "page.md").exists()
+
+
+def test_promote_skip_aliases_bypasses_collision(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    (wiki / "other.md").write_text("---\naliases:\n  - page\n---\n# other")
+    (wiki / "page.md").write_text("# page")
+    rc, _, err = _run([
+        "--wiki", str(wiki), "promote", "page.md", "--skip-aliases",
+    ])
+    assert rc == 0, err
+    new = wiki / "page" / "index.md"
+    assert new.is_file()
+    assert "aliases:" not in new.read_text() or "page" not in _md.parse_frontmatter_aliases(new.read_text())
+
+
+def test_promote_root_file(tmp_path):
+    """A .md at the wiki root promotes correctly (ancestor is wiki_root)."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "rootpage.md").write_text("# root\n\nbody\n")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "rootpage.md"])
+    assert rc == 0, err
+    assert (wiki / "rootpage" / "index.md").is_file()
+
+
+# ---------- cmd_promote: link rewriting ----------
+
+def test_promote_rewrites_markdown_link_in_sibling_page(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    (wiki / "page.md").write_text("# page")
+    sibling = wiki / "sibling.md"
+    sibling.write_text("see [page](page.md) here")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc == 0, err
+    new = sibling.read_text()
+    assert "[page](page/index.md)" in new
+
+
+def test_promote_rewrites_markdown_link_with_anchor(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    (wiki / "page.md").write_text("# page")
+    sibling = wiki / "sibling.md"
+    sibling.write_text("[a](page.md#section)")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc == 0, err
+    assert "[a](page/index.md#section)" in sibling.read_text()
+
+
+def test_promote_rewrites_markdown_link_from_nested_page(tmp_path):
+    """Codex v3 named this as silent-corruption-risk: the rewrite must be
+    relative to the LINKING file's directory, not wiki-root."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "projects").mkdir()
+    target = wiki / "projects" / "foo.md"
+    target.write_text("# foo")
+    other_dir = wiki / "projects" / "other"
+    other_dir.mkdir()
+    notes = other_dir / "notes.md"
+    notes.write_text("ref [foo](../foo.md) here")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "projects/foo.md"])
+    assert rc == 0, err
+    new = notes.read_text()
+    # The rewrite must be relative to projects/other/, not wiki root.
+    assert "[foo](../foo/index.md)" in new
+    assert "projects/foo/index.md" not in new
+
+
+def test_promote_does_not_rewrite_unrelated_same_basename(tmp_path):
+    """Two files named foo.md in different folders. Promoting one must not
+    rewrite links pointing at the other."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "a").mkdir()
+    (wiki / "a" / "foo.md").write_text("# foo a")
+    (wiki / "b").mkdir()
+    (wiki / "b" / "foo.md").write_text("# foo b")
+    (wiki / "ref.md").write_text("link [a](a/foo.md) and [b](b/foo.md)")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "a/foo.md"])
+    assert rc == 0, err
+    new = (wiki / "ref.md").read_text()
+    assert "[a](a/foo/index.md)" in new
+    assert "[b](b/foo.md)" in new  # other foo untouched
+
+
+def test_promote_rewrites_simple_wikilink(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    (wiki / "page.md").write_text("# page")
+    (wiki / "ref.md").write_text("see [[page]] here")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc == 0, err
+    assert "[[page/index|page]]" in (wiki / "ref.md").read_text()
+
+
+def test_promote_rewrites_wikilink_with_display(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    (wiki / "page.md").write_text("# page")
+    (wiki / "ref.md").write_text("see [[page|My Page]] here")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc == 0, err
+    assert "[[page/index|My Page]]" in (wiki / "ref.md").read_text()
+
+
+def test_promote_rewrites_wikilink_with_anchor(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    (wiki / "page.md").write_text("# page")
+    (wiki / "ref.md").write_text("[[page#section]]")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc == 0, err
+    assert "[[page/index#section|page]]" in (wiki / "ref.md").read_text()
+
+
+def test_promote_rewrites_pathful_wikilink_from_remote_directory(tmp_path):
+    """Codex v5 named this as silent-staleness blocker: the WS8-internal
+    resolver must match pathful targets wiki-root-relative, not file-
+    relative (the existing `_md.resolve_wikilink` doesn't)."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "projects").mkdir()
+    (wiki / "projects" / "foo.md").write_text("# foo")
+    (wiki / "recipes").mkdir()
+    (wiki / "recipes" / "dessert.md").write_text("see [[projects/foo]] here")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "projects/foo.md"])
+    assert rc == 0, err
+    assert "[[projects/foo/index|projects/foo]]" in (wiki / "recipes" / "dessert.md").read_text()
+
+
+def test_promote_pathful_wikilink_different_file_not_touched(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    (wiki / "a").mkdir()
+    (wiki / "a" / "foo.md").write_text("# foo a")
+    (wiki / "b").mkdir()
+    (wiki / "b" / "foo.md").write_text("# foo b")
+    (wiki / "ref.md").write_text("[[a/foo]] and [[b/foo]]")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "a/foo.md"])
+    assert rc == 0, err
+    new = (wiki / "ref.md").read_text()
+    assert "[[a/foo/index|a/foo]]" in new
+    assert "[[b/foo]]" in new
+
+
+def test_promote_adjusts_promoted_files_outgoing_relative_links(tmp_path):
+    """The promoted file moves one level deeper; its outgoing relative links
+    must gain the extra ../ to keep resolving."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "sibling.md").write_text("# sibling")
+    (wiki / "page.md").write_text("# page\n\nsee [sib](sibling.md) here")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc == 0, err
+    new = (wiki / "page" / "index.md").read_text()
+    assert "[sib](../sibling.md)" in new
+
+
+def test_promote_finds_links_in_plain_folder_pages(tmp_path):
+    """A page in a plain folder (no index.md) must have its links rewritten —
+    exercises the _walk_owned_md_files correctness gap."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "page.md").write_text("# page")
+    plain = wiki / "drafts"
+    plain.mkdir()
+    (plain / "scratch.md").write_text("ref [p](../page.md)")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc == 0, err
+    assert "[p](../page/index.md)" in (plain / "scratch.md").read_text()
+
+
+# ---------- cmd_promote: dry-run + atomicity ----------
+
+def test_promote_dry_run_no_side_effects(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    page = wiki / "page.md"
+    page.write_text("# page")
+    sibling = wiki / "sib.md"
+    sibling.write_text("[p](page.md)")
+    before_page = page.read_text()
+    before_sibling = sibling.read_text()
+    rc, out, _ = _run(["--wiki", str(wiki), "promote", "page.md", "--dry-run"])
+    assert rc == 0
+    assert "(dry-run)" in out
+    assert page.read_text() == before_page
+    assert sibling.read_text() == before_sibling
+    assert not (wiki / "page").exists()
+
+
+def test_promote_snapshot_dir_cleaned_on_success(tmp_path):
+    """Snapshot dir lives in /tmp; after success it must be deleted."""
+    import tempfile
+    sysroot = Path(tempfile.gettempdir())
+    before = {p.name for p in sysroot.iterdir() if p.name.startswith("wiki-spaces-promote-")}
+    wiki = _make_wiki(tmp_path)
+    (wiki / "page.md").write_text("# page")
+    rc, _, _ = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc == 0
+    after = {p.name for p in sysroot.iterdir() if p.name.startswith("wiki-spaces-promote-")}
+    assert after == before, "snapshot dir not cleaned"
+
+
+def test_promote_existing_spaces_section_not_duplicated(tmp_path):
+    """Promoted file already had ## Spaces (rare but possible) ⇒ no second one added."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "page.md").write_text("# page\n\n## Spaces\n\n- [a](a/index.md)\n")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc == 0, err
+    new = (wiki / "page" / "index.md").read_text()
+    assert new.count("## Spaces") == 1
+
+
+def test_promote_link_in_ancestor_index_is_not_clobbered_by_entry_add(tmp_path):
+    """Regression for the clobber bug: when the ancestor's index.md contains
+    a link to the promoted file, the link-rewrite pass updates the link,
+    then `_add_space_entry` writes a NEW entry. Both edits must land — the
+    entry-add must build on top of the rewritten ancestor text, not the
+    pre-rewrite snapshot.
+    """
+    wiki = _make_wiki(tmp_path)
+    # Ancestor's index.md links to the promoted file in body text.
+    idx_text = (wiki / "index.md").read_text()
+    (wiki / "index.md").write_text(
+        idx_text + "\nSee [page](page.md) for more.\n"
+    )
+    (wiki / "page.md").write_text("# page\n\nbody\n")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc == 0, err
+    final = (wiki / "index.md").read_text()
+    # Both edits must be present:
+    assert "[page](page/index.md)" in final, "link rewrite was clobbered"
+    assert "- [page/]" in final or "page/index.md" in final, "entry-add missing"
+
+
+def test_promote_rollback_removes_orphaned_target_dir(tmp_path, monkeypatch):
+    """When promote fails mid-mutation, the target/ dir created by mkdir must
+    be cleaned up — not left as an empty folder polluting the wiki."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "page.md").write_text("# page\n\nbody\n")
+    # Sabotage: make _add_space_entry raise to force rollback.
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated mid-promote failure")
+
+    monkeypatch.setattr(space, "_add_space_entry", boom)
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc == 2
+    assert "rolled back" in err or "failed" in err
+    # The target directory must not be left behind.
+    assert not (wiki / "page").exists(), "orphaned target dir not cleaned up"
+    # Source must be restored.
+    assert (wiki / "page.md").is_file()
+
+
+def test_promote_rollback_preserves_preexisting_empty_target_dir(tmp_path, monkeypatch):
+    """If the user mkdir'd `page/` before running promote (and the preflight
+    tolerated it as empty), rollback must NOT delete that pre-existing
+    directory — only directories WE created should be cleaned."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "page.md").write_text("# page\n\nbody\n")
+    (wiki / "page").mkdir()  # user pre-created the empty target dir
+    # Sabotage promote so it rolls back.
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated mid-promote failure")
+
+    monkeypatch.setattr(space, "_add_space_entry", boom)
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc == 2
+    # Pre-existing directory must survive.
+    assert (wiki / "page").is_dir(), "pre-existing empty target dir was deleted on rollback"
+    # Source must be restored.
+    assert (wiki / "page.md").is_file()

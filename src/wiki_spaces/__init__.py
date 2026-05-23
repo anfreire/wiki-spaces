@@ -5,4 +5,11 @@ See `wiki_spaces.cli` for the console-script entry point. Each subcommand
 standalone module with a `main()` entry.
 """
 
-__version__ = "0.5.0"
+from importlib.metadata import PackageNotFoundError, version as _v
+
+try:
+    __version__ = _v("wiki-spaces")
+except PackageNotFoundError:
+    __version__ = "0+unknown"
+
+del _v, PackageNotFoundError

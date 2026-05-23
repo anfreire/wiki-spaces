@@ -124,13 +124,22 @@ def _resolve_install_root(*, dry_run: bool) -> tuple[Path, Path]:
 
 def install_harness(
     h: Harness, read_root: Path, write_root: Path, *, dry: bool, copy: bool, force: bool
-) -> list[str]:
+) -> tuple[list[str], bool]:
+    """Install one harness. Returns (stdout_actions, had_fatal_error).
+
+    `had_fatal_error` is True when any required skill source is missing — the
+    install is partial and the harness will not have a working wiki-spaces
+    surface. Fatal messages are written to stderr inline; the caller exits
+    nonzero so setup scripts can gate on it.
+    """
     actions: list[str] = []
+    had_fatal = False
     for skill in (*WIKI_SKILLS, *KEPANO_DEPS):
         rel = ("skills" if skill in WIKI_SKILLS else "vendor/kepano") + f"/{skill}"
         src = read_root / rel
         if not src.exists():
-            actions.append(f"  {h.key}: ! source missing {src}")
+            print(f"  {h.key}: ! source missing {src}", file=sys.stderr)
+            had_fatal = True
             continue
         dst = h.skills_dir / skill
         if not force and not is_owned_install(dst, src):
@@ -147,7 +156,7 @@ def install_harness(
         if mode == "copy":
             write_owned_marker(dst, src)
         actions.append(f"  {h.key}: {mode} {dst}")
-    return actions
+    return actions, had_fatal
 
 
 def _emit_bridge(key: str) -> int:
@@ -220,11 +229,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  harnesses: {', '.join(h.key for h in selected)}")
     print()
 
+    any_failure = False
     for h in selected:
-        for line in install_harness(
+        actions, had_fatal = install_harness(
             h, read_root, write_root, dry=args.dry_run, copy=args.copy, force=args.force
-        ):
+        )
+        for line in actions:
             print(line)
+        any_failure = any_failure or had_fatal
 
     if not args.dry_run:
         write_config({"repo": str(write_root)})
@@ -233,6 +245,9 @@ def main(argv: list[str] | None = None) -> int:
         print("Next: scaffold a wiki with `wiki-spaces init`, or set wiki = <path> in the config.")
 
     print()
+    if any_failure:
+        print("Install completed with errors (see stderr).", file=sys.stderr)
+        return 1
     print("Done." if not args.dry_run else "Dry run complete; nothing was changed.")
     return 0
 

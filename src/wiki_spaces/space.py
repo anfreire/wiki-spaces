@@ -33,7 +33,10 @@ heuristic in CONVENTIONS.md / Owned vs external) are skipped on traversal.
 from __future__ import annotations
 
 import argparse
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from . import _md
@@ -223,6 +226,33 @@ def _is_external(path: Path, wiki_root: Path) -> bool:
     return False
 
 
+def _is_in_external_scope(path: Path, wiki_root: Path) -> tuple[bool, str | None]:
+    """True when `path` or any ancestor (up to but not including wiki_root) is external.
+
+    Closes a gap in `_is_external`, which only inspects the exact path: a
+    descendant of a foreign-submodule mount or escaping symlink would slip
+    through it. Returns `(True, reason)` when the path is external,
+    `(False, None)` otherwise. `reason` names the offending node for the
+    user-facing error message.
+    """
+    try:
+        path.relative_to(wiki_root)
+    except ValueError:
+        return True, "path is outside the wiki tree"
+    p = path
+    while True:
+        if p == wiki_root:
+            return False, None
+        if _is_external(p, wiki_root):
+            rel = p.relative_to(wiki_root).as_posix()
+            return True, (
+                f"{rel} is external (per CONVENTIONS / Owned vs external "
+                "— under shared/, a foreign-origin submodule, or a symlink "
+                "that escapes the wiki tree)"
+            )
+        p = p.parent
+
+
 def _nearest_ancestor_space(wiki_root: Path, target: Path) -> Path:
     """Walk up from target.parent until a folder with index.md is found.
 
@@ -359,6 +389,15 @@ def cmd_add(args: argparse.Namespace) -> int:
     rel = args.path.strip().rstrip("/")
     new_space = wiki_root / rel
 
+    is_external, reason = _is_in_external_scope(new_space, wiki_root)
+    if is_external and not args.force_external:
+        print(
+            f"  ! refusing to operate on external scope: {reason}. "
+            "Pass --force-external to override.",
+            file=sys.stderr,
+        )
+        return 2
+
     # Atomic refuse when the contract is absent — the LLM/skill layer handles
     # Tier-1 parents, not the CLI. Keeps `space add` all-or-nothing.
     ancestor = _nearest_ancestor_space(wiki_root, new_space)
@@ -426,6 +465,15 @@ def cmd_remove(args: argparse.Namespace) -> int:
         print("  ! refusing to remove the wiki root", file=sys.stderr)
         return 2
 
+    is_external, reason = _is_in_external_scope(target, wiki_root)
+    if is_external and not args.force_external:
+        print(
+            f"  ! refusing to operate on external scope: {reason}. "
+            "Pass --force-external to override.",
+            file=sys.stderr,
+        )
+        return 2
+
     ancestor = _nearest_ancestor_space(wiki_root, target)
     ancestor_index = ancestor / "index.md"
     text = ancestor_index.read_text(encoding="utf-8")
@@ -470,7 +518,6 @@ def cmd_remove(args: argparse.Namespace) -> int:
     if args.dry_run:
         print(f"  . (dry-run) would remove {rel}/")
         return 0
-    import shutil
     shutil.rmtree(target)
     print(f"  - {rel}/")
     return 0
@@ -507,6 +554,10 @@ def _walk_owned_md_files(wiki_root: Path) -> list[Path]:
             if not entry.is_dir():
                 continue
             if name.startswith(".") or name == "_archives":
+                continue
+            if name.startswith("wiki-spaces-promote-"):
+                # Defensive: snapshots used by `space promote` live in /tmp, but
+                # if a leftover snapshot dir ever appears under the wiki, skip it.
                 continue
             if _is_external(entry, wiki_root):
                 continue
@@ -726,8 +777,6 @@ def _run_git(cmd: list[str]) -> tuple[int, str]:
     Returns `(127, ...)` when git itself is missing, so `cmd_mount` can read
     linearly without nesting its own try/except per call.
     """
-    import subprocess
-
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True)
     except FileNotFoundError:
@@ -845,8 +894,6 @@ def cmd_mount(args: argparse.Namespace) -> int:
             dest.unlink()
             print(f"  - removed the symlink {rel}", file=sys.stderr)
         elif mechanism == "clone":
-            import shutil
-
             shutil.rmtree(dest, ignore_errors=True)
             print(f"  - removed the clone at {rel}/", file=sys.stderr)
         else:  # submodule
@@ -873,6 +920,438 @@ def cmd_mount(args: argparse.Namespace) -> int:
     return 0
 
 
+def _find_alias_owners(wiki_root: Path) -> dict[str, list[Path]]:
+    """Build `{alias.casefold(): [pages]}` across owned wiki files.
+
+    Used by `cmd_promote`'s collision preflight. Pages with no frontmatter
+    or no `aliases:` contribute nothing. A single page declaring the same
+    alias in multiple cases (e.g. `aliases: [bar, BAR]`) appears once.
+    """
+    out: dict[str, list[Path]] = {}
+    for page in _walk_owned_md_files(wiki_root):
+        try:
+            text = page.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        seen_for_page: set[str] = set()
+        for alias in _md.parse_frontmatter_aliases(text):
+            key = alias.casefold()
+            if key in seen_for_page:
+                continue
+            seen_for_page.add(key)
+            out.setdefault(key, []).append(page)
+    return out
+
+
+def _is_git_tracked(path: Path, wiki_root: Path) -> bool:
+    """True when `git ls-files --error-unmatch <rel>` returns 0."""
+    try:
+        rel = path.relative_to(wiki_root)
+    except ValueError:
+        return False
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", str(rel)],
+            cwd=wiki_root, capture_output=True, check=False,
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, OSError):
+        return False
+
+
+def _resolve_wikilink_target(
+    target: str,
+    page: Path,
+    by_path: dict[str, Path],
+    by_basename: dict[str, list[Path]],
+) -> Path | None:
+    """Resolve a wikilink target. Pathful (`folder/page`) via wiki-root-relative
+    `by_path`; bare basename via `by_basename` with closest-to-page tie-break.
+
+    Codex flagged that `_md.resolve_wikilink` only matches pathful targets
+    relative to the *calling file's* directory, never wiki-root — so
+    `[[projects/foo]]` from anywhere outside `projects/` would silently fail
+    to resolve and be missed by the promote rewrite scan. This resolver is
+    WS8-internal and handles both forms correctly.
+    """
+    t = target[:-3] if target.endswith(".md") else target
+    if "/" in t:
+        return by_path.get(t)
+    candidates = by_basename.get(t, [])
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+    page_resolved = page.resolve()
+
+    def dist(c: Path) -> tuple[int, str]:
+        common = 0
+        for x, y in zip(page_resolved.parts, c.parts):
+            if x != y:
+                break
+            common += 1
+        steps = (len(page_resolved.parts) - common) + (len(c.parts) - common)
+        return (steps, str(c))
+
+    return min(candidates, key=dist)
+
+
+def _rewrite_links_pointing_at(
+    *,
+    text: str,
+    page: Path,
+    old_target: Path,
+    new_target: Path,
+    new_target_wikilink: str,
+    wiki_root: Path,
+    by_path: dict[str, Path],
+    by_basename: dict[str, list[Path]],
+) -> str:
+    """Rewrite markdown links AND wikilinks in `text` that resolve to
+    `old_target` so they point at `new_target` instead.
+
+    Markdown href is recomputed relative to `page`'s directory (preserves
+    nested-page correctness — codex v3 named the wiki-root-relative
+    rewrite as silent-corruption-risk for deep linking pages).
+
+    Wikilink target becomes `new_target_wikilink` (e.g. `projects/foo/index`).
+    Display preserved when explicit; original target text used as display
+    when none was present (rendered text never changes for the reader).
+    """
+    replacements: list[tuple[int, int, str]] = []
+    for link in _md.parse_markdown_links(text):
+        resolved = _md.resolve_markdown_link(link.href, page, wiki_root)
+        if resolved is None or resolved != old_target:
+            continue
+        new_href = _md.compute_relative_link(new_target, page)
+        new_substring = f"[{link.label}]({new_href}{link.anchor})"
+        replacements.append((link.span[0], link.span[1], new_substring))
+
+    for wl in _md.parse_wikilink_full(text):
+        resolved = _resolve_wikilink_target(wl.target, page, by_path, by_basename)
+        if resolved is None or resolved != old_target:
+            continue
+        display = wl.display if wl.display is not None else wl.target
+        anchor = f"#{wl.anchor}" if wl.anchor else ""
+        new_inner = f"{new_target_wikilink}{anchor}|{display}"
+        replacements.append((wl.span[0], wl.span[1], f"[[{new_inner}]]"))
+
+    if not replacements:
+        return text
+    replacements.sort(reverse=True)
+    out = text
+    for start, end, new in replacements:
+        out = out[:start] + new + out[end:]
+    return out
+
+
+def _adjust_outgoing_links_for_depth(
+    *,
+    text: str,
+    original_file: Path,
+    new_file: Path,
+    wiki_root: Path,
+) -> str:
+    """Adjust the promoted file's own outgoing relative markdown links for
+    its new (one-level-deeper) location.
+
+    `[label](rel.md#anchor)` was resolved against `original_file.parent`.
+    After the move, the same relative path resolves against `new_file.parent`
+    (one level deeper). Rewrite the href so it still resolves to the same
+    absolute target. Self-links (`[label](mypage.md)` inside the promoted
+    file itself) are re-pointed at `new_file`.
+    """
+    original_resolved = original_file.resolve()
+    new_file_resolved = new_file
+    try:
+        new_file_resolved = new_file.resolve()
+    except OSError:
+        pass
+    replacements: list[tuple[int, int, str]] = []
+    for link in _md.parse_markdown_links(text):
+        target = _md.resolve_markdown_link(link.href, original_file, wiki_root)
+        if target is None:
+            continue
+        if target == original_resolved:
+            target = new_file_resolved
+        new_href = _md.compute_relative_link(target, new_file)
+        new_substring = f"[{link.label}]({new_href}{link.anchor})"
+        if new_substring != text[link.span[0]:link.span[1]]:
+            replacements.append((link.span[0], link.span[1], new_substring))
+    if not replacements:
+        return text
+    replacements.sort(reverse=True)
+    out = text
+    for start, end, new in replacements:
+        out = out[:start] + new + out[end:]
+    return out
+
+
+def _restore_from_snapshot(snapshot_dir: Path, wiki_root: Path) -> None:
+    """Overwrite every wiki file with its snapshot copy (best-effort)."""
+    for snap_file in snapshot_dir.rglob("*"):
+        if not snap_file.is_file():
+            continue
+        rel = snap_file.relative_to(snapshot_dir)
+        dest = wiki_root / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(snap_file, dest)
+
+
+def cmd_promote(args: argparse.Namespace) -> int:
+    wiki_root = _resolve_wiki(args.wiki)
+    if wiki_root is None:
+        print(
+            "  ! no wiki resolved. Pass --wiki <path> or set `wiki` in config.",
+            file=sys.stderr,
+        )
+        return 2
+
+    ok, err = _validate_rel_path(args.path)
+    if not ok:
+        print(f"  ! invalid path: {err}", file=sys.stderr)
+        return 2
+    rel = args.path.strip().rstrip("/")
+    if not rel.endswith(".md"):
+        print(f"  ! {rel} must be a .md file", file=sys.stderr)
+        return 2
+
+    source = wiki_root / rel
+    if not source.is_file():
+        print(f"  ! {rel} does not exist or is not a regular file", file=sys.stderr)
+        return 2
+    if source.name == "index.md":
+        print(f"  ! cannot promote an index.md", file=sys.stderr)
+        return 2
+
+    external, reason = _is_in_external_scope(source.parent, wiki_root)
+    if external:
+        print(
+            f"  ! refusing to promote in external scope: {reason}",
+            file=sys.stderr,
+        )
+        return 2
+
+    target = source.with_suffix("") / "index.md"
+    target_dir = target.parent
+    target_rel = target.relative_to(wiki_root).as_posix()
+    if target_dir.exists():
+        try:
+            entries = list(target_dir.iterdir())
+        except OSError:
+            entries = []
+        if entries:
+            print(
+                f"  ! target {target_dir.relative_to(wiki_root).as_posix()}/ "
+                "already exists with content; refusing",
+                file=sys.stderr,
+            )
+            return 2
+
+    ancestor = _nearest_ancestor_space(wiki_root, source)
+    ancestor_index = ancestor / "index.md"
+    ancestor_text = ancestor_index.read_text(encoding="utf-8")
+    ancestor_rel = ancestor.relative_to(wiki_root)
+    printable = "<wiki>/" if str(ancestor_rel) == "." else f"<wiki>/{ancestor_rel}/"
+    if not _md.has_section(ancestor_text, "Spaces"):
+        print(
+            f"  ! cannot register the promoted space: nearest ancestor "
+            f"{printable}index.md has no `## Spaces` section.",
+            file=sys.stderr,
+        )
+        print(
+            f"    Add `## Spaces` to {printable}index.md first (the parent is "
+            "currently Tier 1). See AGENTS.md / Tiers for the contract.",
+            file=sys.stderr,
+        )
+        return 2
+
+    basename = source.stem
+    source_resolved = source.resolve()
+
+    if not args.skip_aliases:
+        owners = _find_alias_owners(wiki_root)
+        collisions = owners.get(basename.casefold(), [])
+        external_owners = [p for p in collisions if p.resolve() != source_resolved]
+        if external_owners:
+            other = external_owners[0].relative_to(wiki_root).as_posix()
+            print(
+                f"  ! alias collision: {other} already declares alias "
+                f"'{basename}' (case-insensitive). "
+                "Re-run with --skip-aliases to promote without alias injection.",
+                file=sys.stderr,
+            )
+            return 2
+
+    source_text = source.read_text(encoding="utf-8")
+    fm = _md.parse_frontmatter(source_text) or {}
+    summary = fm.get("summary")
+    if isinstance(summary, list):
+        summary = " ".join(summary)
+    description = (str(summary).strip() if summary else "") or None
+
+    # Build wikilink resolution maps from the current owned md tree.
+    all_md_files = list(_walk_owned_md_files(wiki_root))
+    by_path: dict[str, Path] = {}
+    by_basename: dict[str, list[Path]] = {}
+    for p in all_md_files:
+        try:
+            rel_posix = p.relative_to(wiki_root).as_posix()
+        except ValueError:
+            continue
+        key_no_ext = rel_posix[:-3] if rel_posix.endswith(".md") else rel_posix
+        by_path[key_no_ext] = p.resolve()
+        by_basename.setdefault(p.stem, []).append(p.resolve())
+
+    # Compute the post-move absolute target (for link rewriting).
+    new_target_abs = target
+    new_target_wikilink = source.with_suffix("").relative_to(wiki_root).as_posix() + "/index"
+
+    # Plan rewrites across all other owned md files.
+    planned: list[tuple[Path, str]] = []
+    rewrite_files = 0
+    for page in all_md_files:
+        if page.resolve() == source_resolved:
+            continue
+        try:
+            text = page.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        new_text = _rewrite_links_pointing_at(
+            text=text,
+            page=page,
+            old_target=source_resolved,
+            new_target=new_target_abs,
+            new_target_wikilink=new_target_wikilink,
+            wiki_root=wiki_root,
+            by_path=by_path,
+            by_basename=by_basename,
+        )
+        if new_text != text:
+            planned.append((page, new_text))
+            rewrite_files += 1
+
+    # Plan promoted file's outgoing-link adjustment + Tier-2 + aliases.
+    new_source_text = _adjust_outgoing_links_for_depth(
+        text=source_text,
+        original_file=source,
+        new_file=target,
+        wiki_root=wiki_root,
+    )
+    if not _md.has_section(new_source_text, "Spaces"):
+        if new_source_text and not new_source_text.endswith("\n"):
+            new_source_text += "\n"
+        new_source_text += "\n## Spaces\n\n"
+    aliases_added = False
+    if not args.skip_aliases:
+        new_source_text, aliases_added = _md.frontmatter_add_alias(new_source_text, basename)
+
+    if args.dry_run:
+        print(f"  . (dry-run) would move {rel} -> {target_rel}")
+        print(f"  . (dry-run) would rewrite links in {rewrite_files} file(s)")
+        if aliases_added:
+            print(f"  . (dry-run) would add alias '{basename}' to {target_rel}")
+        print(f"  . (dry-run) would register entry under {printable}index.md ## Spaces")
+        return 0
+
+    # Snapshot every affected file outside the wiki tree.
+    snapshot_dir = Path(tempfile.mkdtemp(prefix="wiki-spaces-promote-"))
+    try:
+        snapshot_set = {source.resolve(), ancestor_index.resolve()}
+        for p, _new in planned:
+            snapshot_set.add(p.resolve())
+        wiki_root_resolved = wiki_root.resolve()
+        for p in snapshot_set:
+            try:
+                rel_p = p.relative_to(wiki_root_resolved)
+            except ValueError:
+                continue
+            snap = snapshot_dir / rel_p
+            snap.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(p, snap)
+
+        # Mutate.
+        target_dir_pre_existed = target_dir.exists()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        moved_via_git = False
+        if (wiki_root / ".git").exists() and _is_git_tracked(source, wiki_root):
+            try:
+                subprocess.run(
+                    ["git", "mv",
+                     str(source.relative_to(wiki_root)),
+                     str(target.relative_to(wiki_root))],
+                    cwd=wiki_root, check=True, capture_output=True, text=True,
+                )
+                moved_via_git = True
+            except subprocess.CalledProcessError:
+                pass
+        if not moved_via_git:
+            source.rename(target)
+
+        target.write_text(new_source_text, encoding="utf-8")
+
+        # Apply planned rewrites EXCEPT the ancestor's index.md — we need to
+        # fold the entry-add into the same write so link rewrites aren't
+        # clobbered by a later `_add_space_entry(stale_text)`.
+        ancestor_index_resolved = ancestor_index.resolve()
+        ancestor_text_after_rewrites = ancestor_text
+        for page, new_text in planned:
+            if page.resolve() == ancestor_index_resolved:
+                ancestor_text_after_rewrites = new_text
+                continue
+            page.write_text(new_text, encoding="utf-8")
+
+        rel_from_ancestor = target.parent.relative_to(ancestor)
+        label = f"{rel_from_ancestor}/"
+        href = f"{rel_from_ancestor}/index.md"
+        new_ancestor_text = _add_space_entry(
+            ancestor_text_after_rewrites, label, href, description
+        )
+        if new_ancestor_text != ancestor_text:
+            ancestor_index.write_text(new_ancestor_text, encoding="utf-8")
+            print(f"  ~ {printable}index.md ## Spaces  += [{label}]")
+
+        print(f"  + promoted {rel} -> {target_rel}")
+        if rewrite_files:
+            print(f"  ~ rewrote links in {rewrite_files} file(s)")
+        if aliases_added:
+            print(f"  ~ added alias '{basename}' to {target_rel}")
+        return 0
+    except Exception as e:
+        print(f"  ! mutation failed mid-promote: {e}", file=sys.stderr)
+        try:
+            # Undo the move FIRST (if it happened) so the snapshot restore
+            # can put the source back at its original path without colliding
+            # with the moved file. Then restore other touched files. Then
+            # rmdir the (now-empty) target_dir.
+            if target.is_file():
+                try:
+                    target.unlink()
+                except OSError as unlink_err:
+                    print(
+                        f"  ! could not remove partial target {target}: {unlink_err}",
+                        file=sys.stderr,
+                    )
+            _restore_from_snapshot(snapshot_dir, wiki_root)
+            # Only remove target_dir if WE created it. A pre-existing empty
+            # directory (e.g., user did `mkdir page/` before running promote)
+            # must survive rollback.
+            if not target_dir_pre_existed and target_dir.exists():
+                try:
+                    if not list(target_dir.iterdir()):
+                        target_dir.rmdir()
+                except OSError:
+                    pass  # non-empty or permission issue — leave for the user
+            print("  . rolled back from snapshot", file=sys.stderr)
+        except Exception as restore_err:
+            print(
+                f"  ! ROLLBACK ALSO FAILED: {restore_err}. "
+                f"Manual recovery from {snapshot_dir} may be required.",
+                file=sys.stderr,
+            )
+        return 2
+    finally:
+        shutil.rmtree(snapshot_dir, ignore_errors=True)
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="wiki-spaces space",
@@ -897,6 +1376,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="overwrite an existing index.md at the target",
     )
+    p_add.add_argument(
+        "--force-external",
+        action="store_true",
+        help="permit operating on a space outside the owned tree "
+        "(under shared/, a foreign-origin submodule, or a symlink "
+        "that escapes the wiki). Default: refuse.",
+    )
     p_add.set_defaults(func=cmd_add)
 
     p_remove = sub.add_parser("remove", help="delete a space and unregister it")
@@ -905,6 +1391,13 @@ def main(argv: list[str] | None = None) -> int:
         "--force",
         action="store_true",
         help="remove even when the space contains files other than index.md",
+    )
+    p_remove.add_argument(
+        "--force-external",
+        action="store_true",
+        help="permit operating on a space outside the owned tree "
+        "(under shared/, a foreign-origin submodule, or a symlink "
+        "that escapes the wiki). Default: refuse.",
     )
     p_remove.add_argument(
         "--dry-run",
@@ -939,6 +1432,27 @@ def main(argv: list[str] | None = None) -> int:
         "--description", help="one-line description for the `## Spaces` entry"
     )
     p_mount.set_defaults(func=cmd_mount)
+
+    p_promote = sub.add_parser(
+        "promote",
+        help="promote a .md file to a nested space (foo.md -> foo/index.md)",
+    )
+    p_promote.add_argument(
+        "path",
+        help="wiki-root-relative path to a .md file (not index.md)",
+    )
+    p_promote.add_argument(
+        "--skip-aliases",
+        action="store_true",
+        help="do not inject aliases: [<basename>] into the new index.md "
+        "(escape hatch when another page already claims the alias)",
+    )
+    p_promote.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the plan + link-rewrite counts; touch nothing",
+    )
+    p_promote.set_defaults(func=cmd_promote)
 
     args = parser.parse_args(argv)
     return args.func(args)

@@ -368,3 +368,206 @@ def test_find_wikilink_refs_marks_embeds():
 
 def test_find_wikilink_refs_strips_alias_and_heading():
     assert _md.find_wikilink_refs("see [[page#section|Display]]") == [("page", False)]
+# ---------- Markdown links ----------
+
+def test_parse_markdown_links_basic():
+    text = "see [Foo](path/to/foo.md) and [Bar](bar.md)"
+    links = _md.parse_markdown_links(text)
+    assert len(links) == 2
+    assert links[0].label == "Foo"
+    assert links[0].href == "path/to/foo.md"
+    assert links[0].anchor == ""
+    assert links[1].href == "bar.md"
+
+
+def test_parse_markdown_links_anchor():
+    text = "[a](page.md#section) text"
+    links = _md.parse_markdown_links(text)
+    assert len(links) == 1
+    assert links[0].href == "page.md"
+    assert links[0].anchor == "#section"
+
+
+def test_parse_markdown_links_skips_wikilinks():
+    text = "[[foo]] and [bar](bar.md)"
+    links = _md.parse_markdown_links(text)
+    assert len(links) == 1
+    assert links[0].href == "bar.md"
+
+
+def test_resolve_markdown_link_skips_url():
+    from pathlib import Path
+    assert _md.resolve_markdown_link("https://x.com", Path("/w/p.md"), Path("/w")) is None
+
+
+def test_resolve_markdown_link_skips_anchor():
+    from pathlib import Path
+    assert _md.resolve_markdown_link("#section", Path("/w/p.md"), Path("/w")) is None
+
+
+def test_resolve_markdown_link_relative(tmp_path):
+    wiki = tmp_path / "wiki"
+    (wiki / "projects").mkdir(parents=True)
+    (wiki / "projects" / "foo.md").write_text("# foo")
+    (wiki / "projects" / "other.md").write_text("# other")
+    target = _md.resolve_markdown_link("foo.md", wiki / "projects" / "other.md", wiki)
+    assert target == (wiki / "projects" / "foo.md").resolve()
+
+
+def test_resolve_markdown_link_walks_up(tmp_path):
+    wiki = tmp_path / "wiki"
+    (wiki / "projects" / "deep").mkdir(parents=True)
+    (wiki / "projects" / "deep" / "page.md").write_text("# page")
+    (wiki / "global.md").write_text("# global")
+    target = _md.resolve_markdown_link(
+        "../../global.md",
+        wiki / "projects" / "deep" / "page.md",
+        wiki,
+    )
+    assert target == (wiki / "global.md").resolve()
+
+
+def test_compute_relative_link_same_dir(tmp_path):
+    target = tmp_path / "a" / "target.md"
+    src = tmp_path / "a" / "src.md"
+    assert _md.compute_relative_link(target, src) == "target.md"
+
+
+def test_compute_relative_link_up_one(tmp_path):
+    target = tmp_path / "target.md"
+    src = tmp_path / "sub" / "src.md"
+    assert _md.compute_relative_link(target, src) == "../target.md"
+
+
+def test_compute_relative_link_down(tmp_path):
+    target = tmp_path / "sub" / "target.md"
+    src = tmp_path / "src.md"
+    assert _md.compute_relative_link(target, src) == "sub/target.md"
+
+
+# ---------- parse_wikilink_full ----------
+
+def test_parse_wikilink_simple():
+    out = _md.parse_wikilink_full("see [[foo]] here")
+    assert len(out) == 1
+    assert out[0].target == "foo"
+    assert out[0].anchor == ""
+    assert out[0].display is None
+
+
+def test_parse_wikilink_with_display():
+    out = _md.parse_wikilink_full("[[foo|My Foo]]")
+    assert out[0].target == "foo"
+    assert out[0].display == "My Foo"
+
+
+def test_parse_wikilink_with_anchor():
+    out = _md.parse_wikilink_full("[[foo#section]]")
+    assert out[0].target == "foo"
+    assert out[0].anchor == "section"
+    assert out[0].display is None
+
+
+def test_parse_wikilink_with_anchor_and_display():
+    out = _md.parse_wikilink_full("[[foo#section|Display]]")
+    assert out[0].target == "foo"
+    assert out[0].anchor == "section"
+    assert out[0].display == "Display"
+
+
+def test_parse_wikilink_pathful():
+    out = _md.parse_wikilink_full("[[projects/foo]] and [[projects/foo|Display]]")
+    assert len(out) == 2
+    assert out[0].target == "projects/foo"
+    assert out[1].target == "projects/foo"
+    assert out[1].display == "Display"
+
+
+# ---------- parse_frontmatter_aliases ----------
+
+def test_parse_aliases_returns_list_block():
+    text = "---\naliases:\n  - foo\n  - bar\n---\n# body"
+    assert _md.parse_frontmatter_aliases(text) == ["foo", "bar"]
+
+
+def test_parse_aliases_returns_list_inline():
+    text = "---\naliases: [foo, bar]\n---\n# body"
+    assert _md.parse_frontmatter_aliases(text) == ["foo", "bar"]
+
+
+def test_parse_aliases_returns_empty_when_field_absent():
+    text = "---\ntitle: foo\n---\n# body"
+    assert _md.parse_frontmatter_aliases(text) == []
+
+
+def test_parse_aliases_returns_empty_when_no_frontmatter():
+    text = "# body only"
+    assert _md.parse_frontmatter_aliases(text) == []
+
+
+# ---------- frontmatter_add_alias ----------
+
+def test_add_alias_creates_frontmatter_when_absent():
+    text = "# body only\n"
+    new, added = _md.frontmatter_add_alias(text, "foo")
+    assert added is True
+    assert _md.parse_frontmatter_aliases(new) == ["foo"]
+    assert "# body only" in new
+
+
+def test_add_alias_adds_field_when_aliases_missing():
+    text = "---\ntitle: Hello\n---\n# body\n"
+    new, added = _md.frontmatter_add_alias(text, "foo")
+    assert added is True
+    assert _md.parse_frontmatter_aliases(new) == ["foo"]
+    assert _md.parse_frontmatter(new)["title"] == "Hello"
+
+
+def test_add_alias_appends_to_block_list():
+    text = "---\naliases:\n  - foo\n  - bar\n---\n# body\n"
+    new, added = _md.frontmatter_add_alias(text, "baz")
+    assert added is True
+    assert _md.parse_frontmatter_aliases(new) == ["foo", "bar", "baz"]
+
+
+def test_add_alias_appends_to_inline_list():
+    text = "---\naliases: [foo, bar]\n---\n# body\n"
+    new, added = _md.frontmatter_add_alias(text, "baz")
+    assert added is True
+    aliases = _md.parse_frontmatter_aliases(new)
+    assert aliases == ["foo", "bar", "baz"]
+    assert "aliases: [foo, bar, baz]" in new
+
+
+def test_add_alias_no_op_when_present_exact():
+    text = "---\naliases:\n  - foo\n---\n# body"
+    new, added = _md.frontmatter_add_alias(text, "foo")
+    assert added is False
+    assert new == text
+
+
+def test_add_alias_no_op_when_present_case_insensitive():
+    """Matches Obsidian's case-insensitive autocomplete and the wiki-level
+    collision preflight in space.py."""
+    text = "---\naliases:\n  - Foo\n---\n# body"
+    new, added = _md.frontmatter_add_alias(text, "foo")
+    assert added is False
+    assert new == text
+
+
+def test_add_alias_preserves_other_fields():
+    text = (
+        "---\n"
+        "title: Hello\n"
+        "summary: A test\n"
+        "tags: [a, b]\n"
+        "aliases:\n  - foo\n"
+        "---\n"
+        "# body\n"
+    )
+    new, _added = _md.frontmatter_add_alias(text, "bar")
+    fm = _md.parse_frontmatter(new)
+    assert fm["title"] == "Hello"
+    assert fm["summary"] == "A test"
+    assert fm["tags"] == ["a", "b"]
+    assert fm["aliases"] == ["foo", "bar"]

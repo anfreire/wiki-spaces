@@ -148,3 +148,21 @@ def test_antigravity_harness_paths():
 def test_harness_keys_are_unique():
     keys = [h.key for h in _common.HARNESSES]
     assert len(keys) == len(set(keys))
+
+# ---------- __version__ single-sourcing ----------
+
+def test_version_matches_pyproject():
+    """`wiki_spaces.__version__` must equal pyproject.toml's [project] version.
+
+    Codex flagged version drift across __init__.py / pyproject.toml / uv.lock.
+    pyproject.toml is the single source via importlib.metadata; uv.lock tracks
+    it automatically on next `uv lock`. This test catches drift if anyone
+    edits __init__.py and forgets pyproject (or vice versa).
+    """
+    import tomllib
+    import wiki_spaces
+
+    repo_root = Path(__file__).resolve().parent.parent
+    with (repo_root / "pyproject.toml").open("rb") as f:
+        meta = tomllib.load(f)
+    assert wiki_spaces.__version__ == meta["project"]["version"]
