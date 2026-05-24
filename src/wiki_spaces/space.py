@@ -376,16 +376,16 @@ def _walk_classified(wiki_root: Path, *, include_external: bool = False):
     - `classification` is `"owned"` or `"external"`.
     - `reason` is None for owned, or a short string for external.
 
+    External classification inherits down: once we descend into an external
+    boundary under `include_external=True`, every yielded descendant is also
+    classified `"external"`. The bare `_is_external` heuristic only catches
+    the boundary itself (the symlink, the foreign submodule, the `shared/`
+    path); without the inheritance, a child folder under `shared/team/` that
+    isn't itself a symlink or submodule would be misclassified as owned.
+
     The wiki root itself is always yielded first as `"owned"`. Externals are
     yielded with their reason so callers (e.g., `init --adopt`) can emit
     per-skip notices; callers that only want owned spaces filter the stream.
-
-    When `include_external=True`, external subtrees ARE descended into so any
-    `.md`-bearing children are yielded as owned-from-outside-perspective. The
-    classification still reports `"external"` for the root of the external
-    subtree itself; descendants inherit the external classification of the
-    boundary they live under. Callers in scope-opt-in mode (`audit
-    --include-external`) treat both equally.
 
     Tracks resolved realpaths to break symlink cycles; broken symlinks and
     unreadable directories are skipped silently. Hidden directories (names
@@ -397,9 +397,11 @@ def _walk_classified(wiki_root: Path, *, include_external: bool = False):
         return
     visited: set[Path] = {root_real}
     yield (wiki_root, "owned", None)
-    stack = [wiki_root]
+    # Stack of `(path, parent_external)` — `parent_external` carries the
+    # in-external-subtree flag down to every descendant we yield.
+    stack: list[tuple[Path, bool]] = [(wiki_root, False)]
     while stack:
-        current = stack.pop()
+        current, parent_external = stack.pop()
         try:
             entries = sorted(current.iterdir())
         except OSError:
@@ -416,20 +418,29 @@ def _walk_classified(wiki_root: Path, *, include_external: bool = False):
             if child_real in visited:
                 continue
             visited.add(child_real)
-            if _is_external(child, wiki_root):
+            # Once we're inside an external subtree, every descendant inherits
+            # the external classification — only the boundary needs a fresh
+            # `_is_external` check.
+            child_external = parent_external or _is_external(child, wiki_root)
+            if child_external:
                 # Surface every external boundary (with or without index.md)
                 # so callers like `init --adopt` can emit per-skip notices
-                # for the user-visible directory, not the deeper space
-                # (which the user may not even know is there). With
-                # `include_external`, we also descend into the subtree.
-                reason = _external_reason(child, wiki_root)
+                # for the user-visible directory, not the deeper space.
+                # With `include_external`, we also descend into the subtree;
+                # descendants carry `child_external=True`.
+                if parent_external:
+                    # Already inside an external subtree — the reason was
+                    # surfaced at the boundary; descendants reuse it.
+                    reason = "inside an external subtree"
+                else:
+                    reason = _external_reason(child, wiki_root)
                 yield (child, "external", reason)
                 if include_external:
-                    stack.append(child)
+                    stack.append((child, True))
                 continue
             if (child / "index.md").is_file():
                 yield (child, "owned", None)
-            stack.append(child)
+            stack.append((child, False))
 
 
 def _external_reason(path: Path, wiki_root: Path) -> str:
@@ -467,6 +478,130 @@ def _walk_owned_spaces(wiki_root: Path, *, include_external: bool = False):
             continue
         if path == wiki_root or (path / "index.md").is_file():
             yield path
+
+
+def _walk_via_spaces_contract(
+    wiki_root: Path, *, include_external: bool = False,
+):
+    """Yield every space reachable via `## Spaces` entries — contract-first.
+
+    Yields `(space, is_external)` tuples. The contract walker is the
+    consumer-side traversal: it discovers spaces by parsing `## Spaces`
+    entries in `index.md`, not by walking the filesystem. An on-disk space
+    that isn't registered in its ancestor's `## Spaces` is INVISIBLE to
+    this walker (the audit walker `_walk_classified` surfaces such drift).
+
+    Malformed entries are silently skipped here; `_audit_malformed_entries`
+    reports them on the audit side. External classification inherits down
+    the tree — once we descend into an external child, every yielded
+    descendant carries `is_external=True`.
+
+    Owned children are required to resolve under `wiki_root` (escaping
+    paths are skipped); external children may legitimately resolve outside
+    (that's the whole point of `shared/` symlinks).
+    """
+    try:
+        root_real = wiki_root.resolve()
+    except OSError:
+        return
+    visited: set[Path] = {root_real}
+    yield (wiki_root, False)
+    # Stack carries (path, is_in_external_scope) so descendants inherit.
+    stack: list[tuple[Path, bool]] = [(wiki_root, False)]
+    while stack:
+        current, parent_external = stack.pop()
+        try:
+            text = (current / "index.md").read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for entry in _md.parse_section_entries(text, "Spaces"):
+            if not entry.href:
+                continue
+            href_norm = _spaces_href_to_dir(entry.href)
+            if not href_norm:
+                continue
+            href_path = Path(href_norm)
+            if href_path.is_absolute() or ".." in href_path.parts:
+                continue
+            child = current / href_norm
+            try:
+                child_real = child.resolve()
+            except OSError:
+                continue
+            child_external = parent_external or _is_external(child, wiki_root)
+            if child_external and not include_external:
+                continue
+            if not child_external:
+                try:
+                    child_real.relative_to(root_real)
+                except ValueError:
+                    # Owned-by-contract but resolves outside the tree —
+                    # malformed. Audit reports separately.
+                    continue
+            if child_real in visited:
+                continue
+            if not (child / "index.md").is_file():
+                continue
+            visited.add(child_real)
+            yield (child, child_external)
+            stack.append((child, child_external))
+
+
+def _walk_md_files_via_contract(
+    wiki_root: Path, *, include_external: bool = False,
+):
+    """Yield `(page_path, is_external)` for every `.md` file reachable via
+    the navigation contract.
+
+    Walks the contract-discovered spaces (via `_walk_via_spaces_contract`).
+    Within each visited space, descends into PLAIN folders (no `index.md`)
+    but stops at child-space boundaries — those are owned by the contract
+    walker. Escaping symlinks inside plain folders are treated as external
+    when `include_external=True` and skipped otherwise.
+    """
+    try:
+        root_real = wiki_root.resolve()
+    except OSError:
+        return
+    for space, space_external in _walk_via_spaces_contract(
+        wiki_root, include_external=include_external
+    ):
+        stack: list[tuple[Path, bool]] = [(space, space_external)]
+        seen: set[Path] = set()
+        while stack:
+            d, d_external = stack.pop()
+            try:
+                entries = sorted(d.iterdir())
+            except OSError:
+                continue
+            for entry in entries:
+                if entry.is_file() and entry.suffix == ".md":
+                    yield (entry, d_external)
+                    continue
+                if not entry.is_dir():
+                    continue
+                if entry.name.startswith(".") or entry.name == "_archives":
+                    continue
+                # Stop at child-space boundaries — the contract walker owns them.
+                if (entry / "index.md").is_file():
+                    continue
+                entry_external = d_external
+                if entry.is_symlink():
+                    try:
+                        target_real = entry.resolve()
+                        target_real.relative_to(root_real)
+                    except (OSError, ValueError):
+                        if not include_external:
+                            continue
+                        entry_external = True
+                try:
+                    er = entry.resolve()
+                except OSError:
+                    continue
+                if er in seen:
+                    continue
+                seen.add(er)
+                stack.append((entry, entry_external))
 
 
 def _new_index_md(name: str, description: str | None = None) -> str:
@@ -1123,6 +1258,42 @@ def cmd_audit(args: argparse.Namespace) -> int:
             pct = round(chars / cap * 100)
             print(f"  . <wiki>/{rel}: {chars}/{cap} ({pct}%)")
 
+    # Malformed `## Spaces` entries — author errors the framework cannot
+    # auto-repair. Reported alongside drift; flips the exit code.
+    malformed = _audit_malformed_entries(wiki_root, all_spaces)
+    if malformed:
+        print()
+        by_space: dict[Path, list[str]] = {}
+        for sp, issue in malformed:
+            by_space.setdefault(sp, []).append(issue)
+        for sp in sorted(by_space):
+            rel = sp.relative_to(wiki_root)
+            label = "<wiki>" if str(rel) == "." else f"<wiki>/{rel}"
+            print(f"{label}/index.md:")
+            for issue in by_space[sp]:
+                print(f"  ! malformed `## Spaces` entry — {issue}")
+
+    # Duplicate aliases — when two pages declare the same alias, wikilink
+    # resolution is nondeterministic (last walker visit wins). Always-on
+    # audit so the producer can disambiguate before consumers see drift.
+    alias_owners = _find_alias_owners(
+        wiki_root,
+        walker=_walk_owned_md_files,
+        include_external=include_external,
+    )
+    duplicate_aliases = sorted(
+        (alias, sorted(pages))
+        for alias, pages in alias_owners.items()
+        if len(pages) > 1
+    )
+    if duplicate_aliases:
+        print()
+        for alias, pages in duplicate_aliases:
+            page_list = ", ".join(
+                str(p.relative_to(wiki_root)) for p in pages
+            )
+            print(f"  ! duplicate alias [{alias}] declared by: {page_list}")
+
     if orphans:
         print(
             f"\norphans: {len(orphans)} page(s) with no incoming wikilinks "
@@ -1132,9 +1303,15 @@ def cmd_audit(args: argparse.Namespace) -> int:
             print(f"  . <wiki>/{page.relative_to(wiki_root)}")
 
     # Orphans and approaching-cap are facts, not errors — they never flip the
-    # exit code. `## Spaces` drift, broken wikilinks, and over-cap size
-    # violations do.
-    errors = drift_issues + len(broken) + len(over_cap)
+    # exit code. Drift, broken wikilinks, over-cap size violations, malformed
+    # entries, and duplicate aliases all do.
+    errors = (
+        drift_issues
+        + len(broken)
+        + len(over_cap)
+        + len(malformed)
+        + len(duplicate_aliases)
+    )
     print()
     if errors == 0:
         info_parts: list[str] = []
@@ -1152,6 +1329,10 @@ def cmd_audit(args: argparse.Namespace) -> int:
         parts.append(f"{len(broken)} broken wikilink(s)")
     if over_cap:
         parts.append(f"{len(over_cap)} size violation(s)")
+    if malformed:
+        parts.append(f"{len(malformed)} malformed `## Spaces` entry/entries")
+    if duplicate_aliases:
+        parts.append(f"{len(duplicate_aliases)} duplicate alias(es)")
     print(
         f"{errors} issue(s) found: {' + '.join(parts)}. Re-run after fixing, "
         "or use `wiki-spaces space add/remove` for `## Spaces` entries, "
@@ -1697,15 +1878,29 @@ def _rollback_added_entries(entries: list[tuple[Path, str, str]]) -> None:
             )
 
 
-def _find_alias_owners(wiki_root: Path) -> dict[str, list[Path]]:
-    """Build `{alias.casefold(): [pages]}` across owned wiki files.
+def _find_alias_owners(
+    wiki_root: Path,
+    *,
+    walker=None,
+    include_external: bool = False,
+) -> dict[str, list[Path]]:
+    """Build `{alias.casefold(): [pages]}` across the walked file set.
 
-    Used by `cmd_promote`'s collision preflight. Pages with no frontmatter
-    or no `aliases:` contribute nothing. A single page declaring the same
-    alias in multiple cases (e.g. `aliases: [bar, BAR]`) appears once.
+    Used by `cmd_promote`'s collision preflight (default walker: the FS
+    walker `_walk_owned_md_files`) AND by `cmd_audit`'s duplicate-alias
+    pass (which passes the FS walker explicitly with `include_external`
+    matching the audit flag). A `walker` callable lets cmd_audit's
+    duplicate-alias check stay on the FS walker even after the contract
+    walker becomes the default consumer surface (PR-K2).
+
+    Pages with no frontmatter or no `aliases:` contribute nothing. A
+    single page declaring the same alias in multiple cases (e.g.
+    `aliases: [bar, BAR]`) appears once.
     """
+    if walker is None:
+        walker = _walk_owned_md_files
     out: dict[str, list[Path]] = {}
-    for page in _walk_owned_md_files(wiki_root):
+    for page in walker(wiki_root, include_external=include_external):
         try:
             text = page.read_text(encoding="utf-8")
         except OSError:
@@ -1718,6 +1913,92 @@ def _find_alias_owners(wiki_root: Path) -> dict[str, list[Path]]:
             seen_for_page.add(key)
             out.setdefault(key, []).append(page)
     return out
+
+
+# `## Spaces` entries that don't match _md.ENTRY_RE (e.g. empty href) are
+# silently dropped by `parse_section_entries`. Audit's malformed pass uses
+# its own raw-line scanner so empty hrefs and other failure shapes surface.
+import re as _re
+
+_AUDIT_BULLET_RE = _re.compile(r"^\s*-\s+\[([^\]]*)\]\(([^)]*)\)")
+
+
+def _audit_malformed_entries(
+    wiki_root: Path,
+    spaces: list[Path],
+) -> list[tuple[Path, str]]:
+    """Find `## Spaces` entries that fail policy.
+
+    Reported as errors (audit flips the exit code on any of):
+    - Empty href (`- [foo]()`).
+    - Absolute path href (`- [foo](/abs/path)`).
+    - Href containing `..` segments.
+    - Href that escapes the wiki root after resolution.
+    - Duplicate entries pointing at the same directory.
+
+    Independent of `_md.parse_section_entries` because the raw `ENTRY_RE`
+    drops some malformed shapes silently. External-classified targets are
+    NOT flagged as escape (they legitimately resolve outside; trust scope
+    is the opt-in gate, not malformed-href).
+
+    `audit --fix` does NOT auto-repair these — malformed entries signal
+    author intent the framework cannot reconstruct.
+    """
+    issues: list[tuple[Path, str]] = []
+    try:
+        root_real = wiki_root.resolve()
+    except OSError:
+        return issues
+    for space in spaces:
+        try:
+            text = (space / "index.md").read_text(encoding="utf-8")
+        except OSError:
+            continue
+        in_spaces = False
+        seen_dirs: set[str] = set()
+        for line in text.splitlines():
+            stripped = line.rstrip()
+            if stripped == "## Spaces":
+                in_spaces = True
+                continue
+            if in_spaces and stripped.startswith("## "):
+                in_spaces = False
+            if not in_spaces:
+                continue
+            m = _AUDIT_BULLET_RE.match(line)
+            if not m:
+                continue
+            href = m.group(2)
+            if not href.strip():
+                issues.append((space, f"empty href: {line.strip()}"))
+                continue
+            if href.startswith("/"):
+                issues.append((space, f"absolute href: {href}"))
+                continue
+            href_path = Path(href)
+            if ".." in href_path.parts:
+                issues.append((space, f"href contains `..`: {href}"))
+                continue
+            try:
+                resolved = (space / href).resolve()
+            except OSError:
+                issues.append((space, f"href unresolvable: {href}"))
+                continue
+            child_path = space / href
+            is_ext, _why = _is_in_external_scope(child_path, wiki_root)
+            try:
+                resolved.relative_to(root_real)
+                escapes = False
+            except ValueError:
+                escapes = True
+            if escapes and not is_ext:
+                issues.append((space, f"href escapes after resolution: {href}"))
+                continue
+            dir_norm = _spaces_href_to_dir(href)
+            if dir_norm in seen_dirs:
+                issues.append((space, f"duplicate href dir: {dir_norm}"))
+            seen_dirs.add(dir_norm)
+    return issues
 
 
 def _is_git_tracked(path: Path, wiki_root: Path) -> bool:

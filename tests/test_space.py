@@ -971,6 +971,234 @@ def test_mount_refuses_bare_target(tmp_path):
     assert not (wiki / "shared" / "team").exists()
 
 
+# ---------- PR-K: contract walker + inherited external + malformed entries + duplicate aliases ----------
+
+def test_walk_via_spaces_contract_skips_unregistered(tmp_path):
+    """The contract walker discovers spaces via `## Spaces` entries, not
+    via the filesystem. An on-disk space not listed in its ancestor's
+    `## Spaces` is INVISIBLE to it (audit's FS walker surfaces such drift
+    separately — see the paired test below)."""
+    wiki = _make_wiki(tmp_path)
+    # Registered child.
+    rc, _, _ = _run(["--wiki", str(wiki), "add", "registered"])
+    assert rc == 0
+    # Drift: unregistered on-disk space.
+    (wiki / "unregistered").mkdir()
+    (wiki / "unregistered" / "index.md").write_text("# u\n\n## Spaces\n\n")
+
+    paths = [str(p.relative_to(wiki)) for p, _ in space._walk_via_spaces_contract(wiki)]
+    assert "registered" in paths
+    assert "unregistered" not in paths
+
+
+def test_walk_classified_yields_unregistered_for_audit(tmp_path):
+    """The FS walker (`_walk_classified`) DOES yield unregistered spaces —
+    that's how `space audit` detects drift. Paired with the contract test
+    above to nail down the producer/consumer-vs-audit split."""
+    wiki = _make_wiki(tmp_path)
+    _run(["--wiki", str(wiki), "add", "registered"])
+    (wiki / "unregistered").mkdir()
+    (wiki / "unregistered" / "index.md").write_text("# u\n\n## Spaces\n\n")
+
+    paths = [
+        str(p.relative_to(wiki))
+        for p, classification, _ in space._walk_classified(wiki)
+        if classification == "owned" and p != wiki
+    ]
+    assert "registered" in paths
+    assert "unregistered" in paths
+
+
+def test_walk_classified_descendants_inherit_external(tmp_path):
+    """A child folder under a foreign-submodule mount that isn't itself a
+    symlink/submodule must STILL be classified external (§39). The bare
+    `_is_external` heuristic only catches the boundary; inheritance
+    catches descendants."""
+    import subprocess
+    wiki = _make_wiki(tmp_path)
+    # Make the wiki itself a git repo (required for the foreign-submodule check).
+    subprocess.run(["git", "init", "-q"], cwd=wiki, check=True)
+    # Hand-craft a `.gitmodules` declaring shared/team with a foreign origin.
+    (wiki / ".gitmodules").write_text(
+        '[submodule "shared/team"]\n'
+        '\tpath = shared/team\n'
+        '\turl = https://github.com/other/wiki\n'
+    )
+    boundary = wiki / "shared" / "team"
+    boundary.mkdir(parents=True)
+    (boundary / "index.md").write_text("# team\n\n## Spaces\n\n")
+    # Plain descendant — not itself a symlink or submodule.
+    nested = boundary / "subspace"
+    nested.mkdir()
+    (nested / "index.md").write_text("# sub\n\n## Spaces\n\n")
+
+    yielded = list(space._walk_classified(wiki, include_external=True))
+    classes_by_rel = {
+        str(p.relative_to(wiki)): cls for p, cls, _ in yielded if p != wiki
+    }
+    assert classes_by_rel.get("shared/team") == "external"
+    # Without inheritance, this would be "owned"; with inheritance it's external.
+    assert classes_by_rel.get("shared/team/subspace") == "external"
+
+
+def test_contract_walker_skips_escaping_href(tmp_path):
+    """A `## Spaces` entry pointing at `../outside/index.md` (escapes after
+    resolution) is silently skipped by the contract walker — audit
+    reports it via the malformed-entries pass."""
+    wiki = _make_wiki(tmp_path)
+    idx = wiki / "index.md"
+    idx.write_text(idx.read_text() + "- [outside/](../outside/index.md)\n")
+    paths = [str(p.relative_to(wiki)) for p, _ in space._walk_via_spaces_contract(wiki)]
+    assert paths == ["."]
+
+
+def test_contract_walker_skips_absolute_href(tmp_path):
+    """An absolute href is invalid — silently skipped."""
+    wiki = _make_wiki(tmp_path)
+    idx = wiki / "index.md"
+    idx.write_text(idx.read_text() + "- [abs](/etc/passwd)\n")
+    paths = [str(p.relative_to(wiki)) for p, _ in space._walk_via_spaces_contract(wiki)]
+    assert paths == ["."]
+
+
+def test_contract_walker_skips_external_by_default(tmp_path):
+    """A `## Spaces` entry resolving to `shared/team/` is external — the
+    contract walker skips it without `include_external`."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "shared" / "team").mkdir(parents=True)
+    (wiki / "shared" / "team" / "index.md").write_text("# team\n\n## Spaces\n\n")
+    idx = wiki / "index.md"
+    idx.write_text(idx.read_text() + "- [shared/team/](shared/team/index.md)\n")
+    paths = [str(p.relative_to(wiki)) for p, _ in space._walk_via_spaces_contract(wiki)]
+    assert "shared/team" not in paths
+
+
+def test_contract_walker_includes_external_with_flag(tmp_path):
+    """`include_external=True` exposes external mounts. The yielded tuple's
+    `is_external` flag is True for them."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "shared" / "team").mkdir(parents=True)
+    (wiki / "shared" / "team" / "index.md").write_text("# team\n\n## Spaces\n\n")
+    idx = wiki / "index.md"
+    idx.write_text(idx.read_text() + "- [shared/team/](shared/team/index.md)\n")
+    yielded = list(space._walk_via_spaces_contract(wiki, include_external=True))
+    paths = {str(p.relative_to(wiki)): is_ext for p, is_ext in yielded}
+    assert paths.get("shared/team") is True
+
+
+def test_md_files_walker_descends_plain_folders_inside_registered_space(tmp_path):
+    """Inside a registered space, plain folders (no `index.md`) are traversed
+    for `.md` files — but child-space boundaries are skipped (those are
+    owned by the contract walker)."""
+    wiki = _make_wiki(tmp_path)
+    rc, _, _ = _run(["--wiki", str(wiki), "add", "projects/foo"])
+    assert rc == 0
+    # Plain folder inside the registered space.
+    notes = wiki / "projects" / "foo" / "notes"
+    notes.mkdir()
+    (notes / "x.md").write_text("# x\n")
+    # A nested registered space — the md-files walker must NOT yield its
+    # content (the contract walker owns it).
+    rc, _, _ = _run(["--wiki", str(wiki), "add", "projects/foo/child"])
+    assert rc == 0
+    (wiki / "projects" / "foo" / "child" / "page.md").write_text("# child page\n")
+
+    files = [
+        str(f.relative_to(wiki))
+        for f, _ in space._walk_md_files_via_contract(wiki)
+    ]
+    assert "projects/foo/notes/x.md" in files
+    # child/page.md is yielded by visiting the child SPACE — the walker
+    # iterates the child once via the contract, then iterates THAT space's
+    # plain folders. So page.md DOES show up.
+    assert "projects/foo/child/page.md" in files
+
+
+def test_md_files_walker_skips_escaping_symlink_in_plain_folder(tmp_path):
+    """An escaping symlink under a plain folder is external — skipped
+    unless `include_external=True`."""
+    wiki = _make_wiki(tmp_path)
+    notes = wiki / "notes"
+    notes.mkdir()
+    (notes / "ok.md").write_text("# ok\n")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.md").write_text("# secret\n")
+    import os
+    os.symlink(outside, notes / "link")
+
+    files_default = [
+        str(f.relative_to(wiki))
+        for f, _ in space._walk_md_files_via_contract(wiki)
+    ]
+    assert "notes/ok.md" in files_default
+    # The escaping symlink's content must NOT appear by default.
+    assert not any("link/secret.md" in f for f in files_default)
+
+
+def test_audit_flags_malformed_spaces_entries(tmp_path):
+    """Audit reports malformed `## Spaces` entries (empty href, absolute,
+    `..`, escape, duplicate) and flips the exit code."""
+    wiki = _make_wiki(tmp_path)
+    idx = wiki / "index.md"
+    idx.write_text(
+        idx.read_text()
+        + "- [empty]()\n"
+        + "- [abs](/etc/passwd)\n"
+        + "- [dotdot](../outside)\n"
+    )
+    rc, out, _ = _run(["--wiki", str(wiki), "audit"])
+    assert rc == 1
+    assert "malformed" in out
+    assert "empty href" in out
+    assert "absolute href" in out
+    assert "href contains `..`" in out
+
+
+def test_audit_fix_does_not_repair_malformed_entries(tmp_path):
+    """`audit --fix` repairs drift (insert section, register missing
+    entries) but NOT malformed entries — those signal author intent the
+    framework can't reconstruct."""
+    wiki = _make_wiki(tmp_path)
+    idx = wiki / "index.md"
+    bad_line = "- [empty]()\n"
+    idx.write_text(idx.read_text() + bad_line)
+    rc, _, _ = _run(["--wiki", str(wiki), "audit", "--fix"])
+    assert rc == 1  # malformed still reported as an error
+    assert bad_line in (wiki / "index.md").read_text()
+
+
+def test_audit_flags_duplicate_aliases(tmp_path):
+    """When two owned pages declare the same alias, wikilink resolution is
+    nondeterministic. Audit reports the collision."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "a.md").write_text("---\naliases: [shared]\n---\n# a\n")
+    (wiki / "b.md").write_text("---\naliases: [SHARED]\n---\n# b\n")
+    rc, out, _ = _run(["--wiki", str(wiki), "audit"])
+    assert rc == 1
+    assert "duplicate alias" in out
+    assert "shared" in out
+    assert "a.md" in out and "b.md" in out
+
+
+def test_audit_duplicate_alias_respects_include_external(tmp_path):
+    """External pages aren't audited for duplicate-alias collisions unless
+    `--include-external` opts in."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "shared").mkdir()
+    (wiki / "shared" / "team-page.md").write_text("---\naliases: [shared]\n---\n# t\n")
+    (wiki / "owned.md").write_text("---\naliases: [shared]\n---\n# o\n")
+    rc_default, out_default, _ = _run(["--wiki", str(wiki), "audit"])
+    # Without --include-external, the external page isn't visible.
+    assert rc_default == 0 or "duplicate alias" not in out_default
+
+    rc_ext, out_ext, _ = _run(
+        ["--wiki", str(wiki), "audit", "--include-external"]
+    )
+    assert rc_ext == 1
+    assert "duplicate alias" in out_ext
+
+
 def test_audit_excludes_archives_space_from_drift(tmp_path):
     """A space under `_archives/` is retired content — not flagged as a
     missing `## Spaces` entry."""
