@@ -1204,6 +1204,33 @@ def test_space_manifest_set_refuses_malformed_json_file(tmp_path):
     assert "not valid JSON" in err
 
 
+def test_audit_include_external_walks_shared_subtree(tmp_path):
+    """`audit --include-external` opts the read path into externally-
+    classified spaces. Without the flag, a page under `shared/` is invisible
+    to audit; with the flag, it's scanned for size violations and broken
+    links just like an owned page."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "_meta").mkdir()
+    (wiki / "_meta" / "limits.md").write_text(
+        "| Pattern   | Cap (chars) |\n"
+        "|-----------|-------------|\n"
+        "| big.md    |          50 |\n"
+    )
+    (wiki / "shared" / "team").mkdir(parents=True)
+    (wiki / "shared" / "team" / "index.md").write_text("# team\n\n## Spaces\n\n")
+    (wiki / "shared" / "team" / "big.md").write_text("x" * 100 + "\n")
+
+    rc_default, out_default, _ = _run(["--wiki", str(wiki), "audit"])
+    assert rc_default == 0, out_default
+    # `shared/team/big.md` does NOT trigger a size violation under default scope.
+    assert "shared/team/big.md" not in out_default
+
+    rc_inc, out_inc, _ = _run(["--wiki", str(wiki), "audit", "--include-external"])
+    assert rc_inc == 1
+    assert "shared/team/big.md" in out_inc
+    assert "size" in out_inc
+
+
 def test_audit_reports_size_violations(tmp_path):
     """audit reports pages over their per-pattern cap and flips exit code.
 

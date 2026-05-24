@@ -334,7 +334,7 @@ def _nearest_ancestor_space(wiki_root: Path, target: Path) -> Path:
         p = p.parent
 
 
-def _walk_classified(wiki_root: Path):
+def _walk_classified(wiki_root: Path, *, include_external: bool = False):
     """Yield every space under wiki_root, classified as owned or external.
 
     Yields `(path, classification, reason)` where:
@@ -344,6 +344,13 @@ def _walk_classified(wiki_root: Path):
     The wiki root itself is always yielded first as `"owned"`. Externals are
     yielded with their reason so callers (e.g., `init --adopt`) can emit
     per-skip notices; callers that only want owned spaces filter the stream.
+
+    When `include_external=True`, external subtrees ARE descended into so any
+    `.md`-bearing children are yielded as owned-from-outside-perspective. The
+    classification still reports `"external"` for the root of the external
+    subtree itself; descendants inherit the external classification of the
+    boundary they live under. Callers in scope-opt-in mode (`audit
+    --include-external`) treat both equally.
 
     Tracks resolved realpaths to break symlink cycles; broken symlinks and
     unreadable directories are skipped silently. Hidden directories (names
@@ -378,10 +385,12 @@ def _walk_classified(wiki_root: Path):
                 # Surface every external boundary (with or without index.md)
                 # so callers like `init --adopt` can emit per-skip notices
                 # for the user-visible directory, not the deeper space
-                # (which the user may not even know is there). External
-                # subtrees are NOT descended into (trust scope).
+                # (which the user may not even know is there). With
+                # `include_external`, we also descend into the subtree.
                 reason = _external_reason(child, wiki_root)
                 yield (child, "external", reason)
+                if include_external:
+                    stack.append(child)
                 continue
             if (child / "index.md").is_file():
                 yield (child, "owned", None)
@@ -403,14 +412,25 @@ def _external_reason(path: Path, wiki_root: Path) -> str:
     return "external (per owned/external heuristic)"
 
 
-def _walk_owned_spaces(wiki_root: Path):
-    """Yield every owned space under wiki_root (inclusive). External skipped.
+def _walk_owned_spaces(wiki_root: Path, *, include_external: bool = False):
+    """Yield every owned space under wiki_root (inclusive).
 
-    Thin filter over `_walk_classified`. Preserves the original signature for
-    callers that don't need external classification.
+    Thin filter over `_walk_classified`. With `include_external=True`,
+    externally-classified spaces are also yielded (used by `audit
+    --include-external`).
+
+    `_walk_classified` surfaces external boundaries (including plain folders
+    without `index.md`) so adoption can emit per-skip notices; this filter
+    drops anything that isn't an actual space (no `index.md`) before
+    yielding, because audit / owned-space callers expect every yielded path
+    to be readable as a space.
     """
-    for path, classification, _reason in _walk_classified(wiki_root):
-        if classification == "owned":
+    for path, classification, _reason in _walk_classified(
+        wiki_root, include_external=include_external
+    ):
+        if classification != "owned" and not include_external:
+            continue
+        if path == wiki_root or (path / "index.md").is_file():
             yield path
 
 
@@ -633,7 +653,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
     return 0
 
 
-def _walk_owned_md_files(wiki_root: Path) -> list[Path]:
+def _walk_owned_md_files(wiki_root: Path, *, include_external: bool = False) -> list[Path]:
     """Return every markdown file inside owned scope.
 
     Walks the tree directory by directory so external mounts at ANY depth are
@@ -642,6 +662,9 @@ def _walk_owned_md_files(wiki_root: Path) -> list[Path]:
     would miss it). Mirrors `_walk_owned_spaces`'s realpath-visited guard so
     in-tree symlink cycles can't hang the walk. Hidden directories and
     `_archives/` are excluded.
+
+    When `include_external=True`, external subtrees are descended into and
+    their `.md` files are included — used by `audit --include-external`.
     """
     out: list[Path] = []
     try:
@@ -669,7 +692,7 @@ def _walk_owned_md_files(wiki_root: Path) -> list[Path]:
                 # Defensive: snapshots used by `space promote` live in /tmp, but
                 # if a leftover snapshot dir ever appears under the wiki, skip it.
                 continue
-            if _is_external(entry, wiki_root):
+            if _is_external(entry, wiki_root) and not include_external:
                 continue
             try:
                 entry_real = entry.resolve()
@@ -687,7 +710,7 @@ def _count_owned_pages(wiki_root: Path) -> int:
     return len(_walk_owned_md_files(wiki_root))
 
 
-def _audit_content(wiki_root: Path) -> tuple[list[tuple[Path, str]], list[Path]]:
+def _audit_content(wiki_root: Path, *, include_external: bool = False) -> tuple[list[tuple[Path, str]], list[Path]]:
     """Scan owned markdown for broken wikilinks and orphan pages.
 
     Returns `(broken, orphans)`:
@@ -704,7 +727,7 @@ def _audit_content(wiki_root: Path) -> tuple[list[tuple[Path, str]], list[Path]]
     Both are structural facts. Whether an orphan is acceptable, or how a
     broken link should be repaired, is judgment left to the caller.
     """
-    md_files = _walk_owned_md_files(wiki_root)
+    md_files = _walk_owned_md_files(wiki_root, include_external=include_external)
 
     def _real(p: Path) -> Path:
         try:
@@ -790,7 +813,8 @@ def cmd_audit(args: argparse.Namespace) -> int:
         )
         return 2
 
-    all_spaces = list(_walk_owned_spaces(wiki_root))
+    include_external = getattr(args, "include_external", False)
+    all_spaces = list(_walk_owned_spaces(wiki_root, include_external=include_external))
     for line in _summary_header(wiki_root, all_spaces):
         print(line)
     print()
@@ -835,7 +859,7 @@ def cmd_audit(args: argparse.Namespace) -> int:
             issues += len(missing) + len(stale)
 
     drift_issues = issues
-    broken, orphans = _audit_content(wiki_root)
+    broken, orphans = _audit_content(wiki_root, include_external=include_external)
 
     if broken:
         print()
@@ -853,7 +877,7 @@ def cmd_audit(args: argparse.Namespace) -> int:
     # NOT flip the exit code.
     from . import _limits as _limits_module
     limits = _limits_module.read_limits(wiki_root)
-    md_files = _walk_owned_md_files(wiki_root)
+    md_files = _walk_owned_md_files(wiki_root, include_external=include_external)
     over_cap: list[tuple[Path, int, int]] = []  # (path, chars, cap)
     approaching: list[tuple[Path, int, int]] = []  # (path, chars, cap)
     for f in md_files:
@@ -1769,7 +1793,16 @@ def main(argv: list[str] | None = None) -> int:
 
     p_audit = sub.add_parser(
         "audit",
-        help="report ## Spaces drift, broken wikilinks, and orphan pages",
+        help="report ## Spaces drift, broken wikilinks, size violations, and orphan pages",
+    )
+    p_audit.add_argument(
+        "--include-external",
+        action="store_true",
+        help="also walk externally-classified spaces (under shared/, foreign "
+        "submodules, escaping symlinks). Trust scope per AGENTS.md says read "
+        "ops can opt in to externals; this flag is the opt-in. Plumbed "
+        "through both the drift walker and the broken-link walker so the two "
+        "checks always agree on scope.",
     )
     p_audit.set_defaults(func=cmd_audit)
 
