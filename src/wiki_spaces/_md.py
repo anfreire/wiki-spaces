@@ -244,6 +244,11 @@ def strip_code_spans(text: str) -> str:
     close a ``` block, nor a short fence close a longer one). Code content
     becomes blank lines / spaces, so a caller that indexes by line number
     stays aligned.
+
+    NOTE: line count is preserved, but the TOTAL CHARACTER COUNT is not —
+    a "def foo():\n" code line collapses to "\n". Use
+    `mask_code_spans_offset_preserving` for callers that index by char
+    offset (e.g., span-based link rewriting in `space.py`).
     """
     out: list[str] = []
     fence: str | None = None  # the opening fence run, e.g. "```" or "~~~~"
@@ -260,6 +265,58 @@ def strip_code_spans(text: str) -> str:
             if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
                 fence = None
     return "\n".join(out)
+
+
+def mask_code_spans_offset_preserving(text: str) -> str:
+    """Return `text` with code-span content replaced by spaces — same length.
+
+    Every character inside a fenced code block or inline code span becomes a
+    space. The output has the SAME length as the input, character-for-character;
+    `out[i]` corresponds to `text[i]`. Use this for callers that scan a masked
+    copy for spans (e.g., wikilink matches) but apply replacements back to the
+    original text by character offset.
+
+    The newline structure is preserved exactly (no line collapse), so a fenced
+    code line in the original survives in the mask as a blank line of the
+    same character length.
+    """
+    out: list[str] = []
+    fence: str | None = None
+    lines = text.splitlines(keepends=True)
+    for line in lines:
+        # Split the line into body + trailing newline (if any).
+        if line.endswith("\r\n"):
+            body, eol = line[:-2], "\r\n"
+        elif line.endswith("\n"):
+            body, eol = line[:-1], "\n"
+        else:
+            body, eol = line, ""
+        m = _FENCE_RE.match(body)
+        if fence is None:
+            if m:
+                # Fence-opener line: the fence chars stay (so a re-scan would
+                # still see the fence); content after the fence on the same
+                # line is rare but preserved as spaces.
+                fence = m.group(1)
+                # The fence run itself stays; anything after it becomes spaces.
+                fence_text = m.group(0)
+                rest = body[len(fence_text):]
+                out.append(fence_text + (" " * len(rest)) + eol)
+                continue
+            # Outside any fence: blank inline code spans with spaces.
+            masked = _INLINE_CODE_RE.sub(lambda mm: " " * len(mm.group(0)), body)
+            out.append(masked + eol)
+        else:
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
+                # Fence-closer line: fence chars stay; rest becomes spaces.
+                fence_text = m.group(0)
+                rest = body[len(fence_text):]
+                out.append(fence_text + (" " * len(rest)) + eol)
+                fence = None
+            else:
+                # Inside a fence: every body char becomes a space; eol stays.
+                out.append((" " * len(body)) + eol)
+    return "".join(out)
 
 
 def _path_distance(a: Path, b: Path) -> int:

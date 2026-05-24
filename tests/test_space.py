@@ -1204,6 +1204,61 @@ def test_space_manifest_set_refuses_malformed_json_file(tmp_path):
     assert "not valid JSON" in err
 
 
+def test_promote_does_not_rewrite_links_inside_code_blocks(tmp_path):
+    """Defect #3: promote's link rewrite must NOT touch `[[wikilinks]]` that
+    appear inside fenced code blocks — those are code examples, not real
+    links. Pre-fix, the scanner saw them; post-fix, the offset-preserving
+    mask hides them."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "concepts").mkdir()
+    (wiki / "concepts" / "foo.md").write_text("# Foo\n\ncontent\n")
+    # A page with TWO instances of `[[foo]]`: one real link, one in a code block.
+    (wiki / "doc.md").write_text(
+        "# Doc\n"
+        "\n"
+        "Real link: [[foo]]\n"
+        "\n"
+        "```\n"
+        "Code example: [[foo]] should NOT be rewritten\n"
+        "```\n"
+    )
+
+    rc, _, _ = _run(["--wiki", str(wiki), "promote", "concepts/foo.md"])
+    assert rc == 0
+
+    rewritten = (wiki / "doc.md").read_text()
+    # The real link should be rewritten to the pathful form.
+    assert "[[concepts/foo/index|foo]]" in rewritten
+    # The code-block link should remain literal `[[foo]]`.
+    assert "[[foo]] should NOT be rewritten" in rewritten
+
+
+def test_promote_does_not_rewrite_links_inside_frontmatter(tmp_path):
+    """Defect #3 part 2: links inside YAML frontmatter (e.g., an aliases
+    field that happens to contain `[[foo]]` syntax) are not real wikilinks
+    and must not be touched."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "concepts").mkdir()
+    (wiki / "concepts" / "foo.md").write_text("# Foo\n\ncontent\n")
+    (wiki / "doc.md").write_text(
+        "---\n"
+        "title: Doc\n"
+        "aliases: [\"[[foo]]\"]\n"
+        "---\n"
+        "\n"
+        "Real link: [[foo]]\n"
+    )
+
+    rc, _, _ = _run(["--wiki", str(wiki), "promote", "concepts/foo.md"])
+    assert rc == 0
+
+    rewritten = (wiki / "doc.md").read_text()
+    # The body link should be rewritten.
+    assert "Real link: [[concepts/foo/index|foo]]" in rewritten
+    # The frontmatter `aliases: ["[[foo]]"]` should remain literal.
+    assert 'aliases: ["[[foo]]"]' in rewritten
+
+
 def test_audit_include_external_walks_shared_subtree(tmp_path):
     """`audit --include-external` opts the read path into externally-
     classified spaces. Without the flag, a page under `shared/` is invisible

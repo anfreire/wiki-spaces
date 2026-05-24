@@ -1265,8 +1265,26 @@ def _rewrite_links_pointing_at(
     rewrite the promote step makes can never be misread as broken by a
     subsequent audit.
     """
+    # Mask code spans and frontmatter for the SCAN — offset-preserving so
+    # span positions from `parse_*` are valid against the ORIGINAL text. This
+    # prevents the rewrite from touching `[[wikilinks]]` inside fenced code
+    # examples or YAML frontmatter (those aren't real links). Defect #3 from
+    # the v0.7.0 validation pass: the previous code parsed the raw text, so
+    # a code example like ``` [[foo]] ``` would be rewritten.
+    fm_text, _ = _md.split_frontmatter(text)
+    if fm_text is not None:
+        # Replace the frontmatter region with spaces (same length) so any
+        # wikilink-shaped strings inside frontmatter are invisible to the
+        # scan. The fence delimiters (`---\n` … `---\n`) are short; the
+        # easiest correct mask is to overwrite the whole leading region
+        # with spaces of the same length.
+        fm_block_end = text.index("---", 4) + len("---\n")
+        masked = (" " * fm_block_end) + _md.mask_code_spans_offset_preserving(text[fm_block_end:])
+    else:
+        masked = _md.mask_code_spans_offset_preserving(text)
+
     replacements: list[tuple[int, int, str]] = []
-    for link in _md.parse_markdown_links(text):
+    for link in _md.parse_markdown_links(masked):
         resolved = _md.resolve_markdown_link(link.href, page, wiki_root)
         if resolved is None or resolved != old_target:
             continue
@@ -1274,7 +1292,7 @@ def _rewrite_links_pointing_at(
         new_substring = f"[{link.label}]({new_href}{link.anchor})"
         replacements.append((link.span[0], link.span[1], new_substring))
 
-    for wl in _md.parse_wikilink_full(text):
+    for wl in _md.parse_wikilink_full(masked):
         resolved = _md.resolve_wikilink(
             wl.target, page.parent, candidates, wiki_root=wiki_root
         )
@@ -1572,6 +1590,27 @@ def cmd_promote(args: argparse.Namespace) -> int:
                         file=sys.stderr,
                     )
             _restore_from_snapshot(snapshot_dir, wiki_root)
+            # Defect #4: if we ran `git mv`, the staging index is now in a
+            # dirty state (the move was staged, but we've put the file back
+            # via snapshot restore, so the staged rename doesn't match the
+            # working tree). Unstage so `git status` shows a clean tree.
+            # Best-effort: a failure here doesn't break the working-tree
+            # rollback, only the staging-area cleanup.
+            if moved_via_git:
+                try:
+                    subprocess.run(
+                        ["git", "reset", "HEAD",
+                         str(source.relative_to(wiki_root)),
+                         str(target.relative_to(wiki_root))],
+                        cwd=wiki_root, check=False, capture_output=True, text=True,
+                    )
+                except (subprocess.SubprocessError, FileNotFoundError) as git_err:
+                    print(
+                        f"  ! could not unstage rolled-back git mv: {git_err}. "
+                        "Run `git reset HEAD <paths>` manually if `git status` "
+                        "shows phantom rename.",
+                        file=sys.stderr,
+                    )
             # Only remove target_dir if WE created it. A pre-existing empty
             # directory (e.g., user did `mkdir page/` before running promote)
             # must survive rollback.
