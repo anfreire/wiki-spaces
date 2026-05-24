@@ -12,6 +12,7 @@ One-shot maintenance for the user's canonical wiki: status, audit (read-only), n
 - Spec: `AGENTS.md` at the wiki-spaces repo (path in `~/.config/wiki-spaces/config` `repo` key).
 - Conventions: `CONVENTIONS.md` at the same repo; this skill enforces nothing the wiki hasn't opted into.
 - Markdown syntax: kepano's `obsidian-markdown` skill — installed alongside this one in your harness's skills directory.
+- Traversal model: contract-first per AGENTS.md / The navigation contract. Use `wiki-spaces space list` / `wiki-spaces space files` / `wiki-spaces space audit --json` for structured traversal and audit consumption.
 
 ## Procedure
 
@@ -29,15 +30,17 @@ One-shot maintenance for the user's canonical wiki: status, audit (read-only), n
    | "tend wiki" / "clean wiki" | full sweep: status → audit → ask → normalize → colorize |
 
    For `audit` and `status`: report only. For `normalize`, `colorize`, and full sweep: preview changes and ask before modifying unless the user explicitly said "fix" or "apply".
-4. **Status.** Glob `**/*.md` within the SCOPE. For *read operations* (status, audit), descend through owned spaces; exclude *external* spaces (under `<wiki>/shared/`, git submodules with foreign origins, symlinks resolving outside the wiki tree — see CONVENTIONS / Owned vs external) unless the user opts in. For *write operations* (normalize, colorize), stay within the targeted scope; other spaces are written to only with explicit instruction. Always exclude `.obsidian/` and `_archives/`. Count pages per top-level folder; report `.manifest.json` synced projects (if present); count tags and top 10 by usage (if frontmatter in use); show last `log.md` entry (if present).
-5. **Audit (report only).** Run `wiki-spaces space audit` (add `--wiki <path>` when the scope is a named sub-space, not the canonical wiki) for the structural facts. It walks owned scope and reports five things:
+4. **Status.** Walk the wiki via `wiki-spaces space files` (add `--include-external` when the user opted in). The contract walker honors trust scope automatically — external spaces are excluded by default. Always exclude `.obsidian/` and `_archives/` (the framework already skips those). Count pages per top-level folder; report `.manifest.json` synced projects (if present); count tags and top 10 by usage (if frontmatter in use); show last `log.md` entry (if present).
+5. **Audit (report only).** Run `wiki-spaces space audit --json` (add `--wiki <path>` when the scope is a named sub-space) for the structural facts and consume the JSON document — easier than parsing human output, and the exit code is included. It walks owned scope and reports seven things:
    - **`## Spaces` drift** — listed entries with no space on disk, and sub-folders with `index.md` not listed (the navigation contract per AGENTS.md; `## Items` is human-maintained and not audited).
    - **Broken `[[wikilinks]]`** — links resolving to no page by path, filename, or frontmatter alias; links inside fenced/inline code and frontmatter are ignored.
    - **Size violations** — pages exceeding their per-pattern cap from CONVENTIONS / `_meta/limits.md` (defaults: `index.md` 5K, `log.md` 100K, `*.md` 15K). Flips the exit code like drift and broken links.
    - **Approaching cap** — pages at ≥80% of their cap. Informational; does not flip the exit code. Surface these in the report so the producer can plan a split before the next over-cap rejection.
    - **Orphan pages** — zero incoming wikilinks, `index.md` / `log.md` exempt. Reported as informational.
+   - **Malformed `## Spaces` entries** — empty href, absolute href, `..` segment, escape-after-resolution, duplicate dir target. Author errors the framework cannot reconstruct; `audit --fix` does NOT repair these. Flips the exit code.
+   - **Duplicate aliases** — two owned pages declaring the same alias make wikilink resolution nondeterministic. Flips the exit code; the producer disambiguates.
 
-   The CLI is the source of truth for those five — don't re-derive them by hand. Then add the two judgment-bearing checks it does not do:
+   The CLI is the source of truth for those seven — don't re-derive them by hand. Then add the two judgment-bearing checks it does not do:
    - **Frontmatter field completeness.** On pages that already have frontmatter, check required fields per CONVENTIONS / Frontmatter schema. Pages without frontmatter are NOT flagged (mixed adoption is allowed). Special files exempt.
    - **Stale content.** Only if `.manifest.json` is present. Compare `updated:` to `last_synced`; flag project-scoped pages stale > 30 days.
 
