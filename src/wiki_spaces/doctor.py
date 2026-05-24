@@ -39,6 +39,11 @@ REPO_SENTINELS = (
     "references/SETUP.md",
     "vendor/kepano/obsidian-markdown/SKILL.md",
     "vendor/kepano/obsidian-bases/SKILL.md",
+    # PR-O / §42: COMMIT pins the vendored kepano sha. Missing → the repo
+    # is incomplete; we force reinstall rather than half-trusting the
+    # vendored content. The dev-only `vendor-kepano` recovery hint
+    # doesn't apply to packaged installs, so we don't surface it.
+    "vendor/kepano/COMMIT",
 )
 
 
@@ -102,7 +107,21 @@ def check_vendor(net: bool) -> None:
     vendor_dir = data_root() / "vendor" / "kepano"
     commit_file = vendor_dir / "COMMIT"
     if not commit_file.exists():
-        print("  ! COMMIT file missing — run `wiki-spaces vendor-kepano`")
+        # Packaged installs ship COMMIT with the wheel; missing means the
+        # share dir is incomplete (force reinstall). Dev installs recover
+        # via the in-tree script. Pick the message based on packaging.
+        from ._common import is_packaged
+        if is_packaged():
+            print(
+                "  ! COMMIT missing — reinstall wiki-spaces "
+                "(`uv tool install --reinstall wiki-spaces` or "
+                "`pip install --force-reinstall wiki-spaces`)."
+            )
+        else:
+            print(
+                "  ! COMMIT missing — run `./scripts/vendor_kepano.py` "
+                "(dev-only)."
+            )
         return
     lines = commit_file.read_text().strip().splitlines()
     sha = lines[0] if lines else "?"

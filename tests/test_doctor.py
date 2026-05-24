@@ -159,6 +159,24 @@ def test_doctor_wiki_flag_rejects_missing_index(tmp_path, capsys):
     assert "no index.md" in err
 
 
+def test_doctor_missing_commit_flags_repo_invalid(tmp_path):
+    """PR-O / §42: a packaged install with missing `vendor/kepano/COMMIT`
+    must fail repo validation — that's the actual fix (force reinstall),
+    not the old "run vendor-kepano" message which packaged installs
+    refuse to run."""
+    # Materialize a fake install missing only COMMIT.
+    root = tmp_path / "install"
+    for sentinel in doctor.REPO_SENTINELS:
+        if sentinel == "vendor/kepano/COMMIT":
+            continue  # deliberately absent
+        target = root / sentinel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("ok", encoding="utf-8")
+    state = doctor._validate_repo(str(root))
+    assert "NOT A WIKI-SPACES INSTALL" in state
+    assert "vendor/kepano/COMMIT" in state
+
+
 # ---------- PR-F: CLI help surface ----------
 
 def test_cli_help_hides_vendor_kepano_when_packaged(monkeypatch, capsys):
