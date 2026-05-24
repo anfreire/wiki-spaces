@@ -1104,6 +1104,106 @@ def test_adopt_skips_shared_with_stderr_notice(tmp_path):
     assert "shared/baz" in err.getvalue() or "shared/" in err.getvalue()
 # ---------- _is_in_external_scope: ancestor-walking trust-scope preflight ----------
 
+def _space_log_worker(args):
+    """Module-level worker for the contention test (must be pickleable for
+    multiprocessing.Pool — closures can't cross the fork boundary)."""
+    import io
+    from contextlib import redirect_stdout, redirect_stderr
+    from wiki_spaces import space as _space
+    wiki_str, i = args
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        return _space.main([
+            "--wiki", wiki_str, "log",
+            f"- [2026-01-01T00:00:{i:02d}Z] CONTEND value={i}",
+        ])
+
+
+def test_space_log_appends_to_log_md(tmp_path):
+    """`space log <msg>` creates log.md if missing and appends a line."""
+    wiki = _make_wiki(tmp_path)
+    rc, out, _ = _run([
+        "--wiki", str(wiki), "log",
+        "- [2026-01-01T00:00:00Z] TEST key=value",
+    ])
+    assert rc == 0
+    body = (wiki / "log.md").read_text()
+    assert "TEST key=value" in body
+
+
+def test_space_log_atomic_under_contention(tmp_path):
+    """100 concurrent `space log` invocations via multiprocessing.Pool —
+    every line lands in log.md with no losses. Exercises the flock-
+    protected critical section in `_limits.append_log_with_rotation`."""
+    import multiprocessing
+    import os
+    if os.name == "nt":  # pragma: no cover
+        pytest.skip("flock-based atomicity not enforced on Windows")
+    if "fork" not in multiprocessing.get_all_start_methods():
+        pytest.skip("requires fork-capable multiprocessing")
+    wiki = _make_wiki(tmp_path)
+
+    ctx = multiprocessing.get_context("fork")
+    with ctx.Pool(processes=8) as pool:
+        args = [(str(wiki), i) for i in range(100)]
+        results = pool.map(_space_log_worker, args)
+    assert all(r == 0 for r in results), f"some workers failed: {results}"
+    body = (wiki / "log.md").read_text()
+    written = sum(1 for line in body.splitlines() if "CONTEND value=" in line)
+    assert written == 100, f"expected 100 lines, got {written}"
+
+
+def test_space_manifest_set_creates_file(tmp_path):
+    """`space manifest set <project> <key> <value>` creates .manifest.json
+    if missing and writes the value as a string."""
+    wiki = _make_wiki(tmp_path)
+    rc, _, _ = _run([
+        "--wiki", str(wiki), "manifest", "set",
+        "cryptobot", "source_cwd", "/home/me/cryptobot",
+    ])
+    assert rc == 0
+    import json
+    manifest = json.loads((wiki / ".manifest.json").read_text())
+    assert manifest["projects"]["cryptobot"]["source_cwd"] == "/home/me/cryptobot"
+
+
+def test_space_manifest_set_coerces_int_field(tmp_path):
+    """`pages_in_vault` is auto-coerced to int even without --json."""
+    wiki = _make_wiki(tmp_path)
+    rc, _, _ = _run([
+        "--wiki", str(wiki), "manifest", "set",
+        "cryptobot", "pages_in_vault", "42",
+    ])
+    assert rc == 0
+    import json
+    manifest = json.loads((wiki / ".manifest.json").read_text())
+    assert manifest["projects"]["cryptobot"]["pages_in_vault"] == 42
+
+
+def test_space_manifest_set_json_null(tmp_path):
+    """`--json null` sets the JSON null literal."""
+    wiki = _make_wiki(tmp_path)
+    rc, _, _ = _run([
+        "--wiki", str(wiki), "manifest", "set",
+        "cryptobot", "last_commit_synced", "--json", "null",
+    ])
+    assert rc == 0
+    import json
+    manifest = json.loads((wiki / ".manifest.json").read_text())
+    assert manifest["projects"]["cryptobot"]["last_commit_synced"] is None
+
+
+def test_space_manifest_set_refuses_malformed_json_file(tmp_path):
+    """If .manifest.json exists but is not valid JSON, refuse to overwrite."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / ".manifest.json").write_text("this is not json {")
+    rc, _, err = _run([
+        "--wiki", str(wiki), "manifest", "set",
+        "cryptobot", "source_cwd", "/tmp",
+    ])
+    assert rc == 2
+    assert "not valid JSON" in err
+
+
 def test_audit_reports_size_violations(tmp_path):
     """audit reports pages over their per-pattern cap and flips exit code.
 

@@ -59,8 +59,10 @@ Structured per mode: status table, audit report with counts and file paths, norm
 
 ## Logging
 
-Append to `log.md` only if it exists at the **scope root** (the wiki for default operations; the targeted space if the user named one — per CONVENTIONS / Per-space convention auto-detection):
+Append a line via the CLI when `log.md` exists at the **scope root** (the wiki for default operations; the targeted space if the user named one — per CONVENTIONS / Per-space convention auto-detection):
 
+```sh
+wiki-spaces space log "- [TIMESTAMP] TEND mode=<status|audit|normalize|colorize|full> issues_found=N fixed=M"
 ```
-- [TIMESTAMP] TEND mode=<status|audit|normalize|colorize|full> issues_found=N fixed=M
-```
+
+Use the CLI rather than writing `log.md` directly. The `space log` command wraps `_limits.append_log_with_rotation`, holding a `fcntl.flock` across the whole check-rotate-append sequence — concurrent skill invocations never lose lines. Add `--wiki <path>` when the scope is a named sub-space.

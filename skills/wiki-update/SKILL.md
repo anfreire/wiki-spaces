@@ -68,7 +68,14 @@ When step 1 of the procedure finds no usable wiki (config missing or wiki path i
    - **Write cap.** If more than ~10 pages would change, summarize the plan and ask before writing.
 9. **Update tracking.** Per CONVENTIONS / `index.md`, `## Spaces` is the exhaustive navigation contract:
    - **`## Spaces` (exhaustive when present).** If you created a new space (a folder with its own `index.md`), prefer the CLI: `wiki-spaces space add <relative-path>` creates the folder, writes a minimal `index.md` (with `## Spaces` from t=0), and updates the nearest ancestor's `## Spaces` automatically. Use `wiki-spaces space remove <relative-path>` to delete in symmetric fashion. **Both commands atomically refuse** when the nearest ancestor's `index.md` has no `## Spaces` section — they exit non-zero and touch nothing. When that happens: ask the user whether to add the section. On yes, add an empty `## Spaces` section to the ancestor's `index.md` directly (one heading line, blank line after), then retry the CLI command. On no, fall back to manual filesystem ops (create / remove the directory yourself) and leave the ancestor as-is. If the CLI is unavailable entirely, do it manually: find the **nearest ancestor space** — the wiki root, or an intermediate space whose folder carries an `index.md`. Plain grouping folders (no `index.md`) are skipped on the walk up. If the ancestor has `## Spaces`, add the entry there in the same operation. When you remove a contained space whose entry is listed, remove the entry.
-   - **`.manifest.json` (if present):** update `source_cwd`, `last_synced`, `last_commit_synced`, `pages_in_vault`.
+   - **`.manifest.json` (auto-created on first project sync if absent).** Use `wiki-spaces space manifest set <project> <key> <value>` for each field — atomic read-modify-write under `fcntl.flock`. Pass `--json` when the value needs a non-string type (e.g. `--json 42` for `pages_in_vault`, `--json null` for `last_commit_synced`); plain strings (`source_cwd`, `last_synced`) need no flag. Typical sequence after a project sync:
+       ```sh
+       wiki-spaces space manifest set <project> source_cwd "<abs/path>"
+       wiki-spaces space manifest set <project> last_synced "<ISO-8601>"
+       wiki-spaces space manifest set <project> last_commit_synced --json '"<sha>"'
+       wiki-spaces space manifest set <project> pages_in_vault 42
+       ```
+       Never write `.manifest.json` directly — concurrent skill invocations would race.
 10. **Confirm.**
 
 ```
@@ -109,8 +116,10 @@ A `.md` file that has grown into multiple distinct topics, accreted siblings, or
 
 ## Logging
 
-Append to `log.md` only if it exists at the **scope root** (the wiki for default operations; the targeted space if the user named one — per CONVENTIONS / Per-space convention auto-detection):
+Append a line via the CLI when `log.md` exists at the **scope root** (the wiki for default operations; the targeted space if the user named one — per CONVENTIONS / Per-space convention auto-detection). On the **first** log call in a session where `log.md` is absent, create it implicitly: `space log` creates the file if missing, so a single CLI call gets you both — no separate touch step.
 
+```sh
+wiki-spaces space log "- [TIMESTAMP] UPDATE mode=<mode> project=<name|-> pages_updated=X pages_created=Y"
 ```
-- [TIMESTAMP] UPDATE mode=<mode> project=<name|-> pages_updated=X pages_created=Y
-```
+
+Use the CLI rather than writing `log.md` directly. `space log` wraps `_limits.append_log_with_rotation`, holding a `fcntl.flock` for the whole check-rotate-append sequence — concurrent skill invocations never lose lines, and rotation to `log.archive-<YYYYMMDD-HHMMSS>.md` happens automatically when the file would exceed its cap (default 100,000 chars). Add `--wiki <path>` when the scope is a named sub-space, not the canonical wiki.

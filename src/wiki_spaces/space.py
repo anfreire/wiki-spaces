@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import json
 import os
 import shutil
 import subprocess
@@ -1566,6 +1567,152 @@ def cmd_promote(args: argparse.Namespace) -> int:
         return 2
     finally:
         shutil.rmtree(snapshot_dir, ignore_errors=True)
+def cmd_log(args: argparse.Namespace) -> int:
+    """Append a line to <wiki>/log.md atomically, rotating if over cap.
+
+    Race-safe: a single `fcntl.flock` on the log file covers the whole
+    check-rotate-append sequence (`_limits.append_log_with_rotation`).
+    Skills call this rather than writing `log.md` directly so concurrent
+    skill invocations never lose lines.
+    """
+    wiki_root = _resolve_wiki(args.wiki)
+    if wiki_root is None:
+        print(
+            "  ! no wiki resolved. Pass --wiki <path> or set `wiki` in config.",
+            file=sys.stderr,
+        )
+        return 2
+
+    from . import _limits as _limits_module
+
+    log_path = wiki_root / "log.md"
+    limits = _limits_module.read_limits(wiki_root)
+    cap = _limits_module.cap_for(log_path, wiki_root, limits)
+
+    # Ensure the message ends with a newline; preserve the user's text otherwise.
+    message = args.message
+    archive = _limits_module.append_log_with_rotation(log_path, message, cap=cap)
+    if archive is not None:
+        print(f"  ~ {log_path.relative_to(wiki_root)} rotated → {archive.name}")
+    return 0
+
+
+_MANIFEST_INT_FIELDS = {"pages_in_vault"}
+_MANIFEST_NULLABLE_FIELDS = {"last_commit_synced"}
+
+
+def _coerce_manifest_value(key: str, raw: str, as_json: bool):
+    """Convert a CLI value string to the right type for the manifest schema.
+
+    - With `--json`: parse `raw` as a JSON literal (`42`, `null`, `"foo"`).
+    - Without: documented typed fields get light coercion (int for
+      `pages_in_vault`; `null` for `last_commit_synced` when the user
+      types the literal "null"). Everything else is treated as a string.
+    """
+    if as_json:
+        return json.loads(raw)
+    if key in _MANIFEST_INT_FIELDS:
+        return int(raw)
+    if key in _MANIFEST_NULLABLE_FIELDS and raw.strip().lower() == "null":
+        return None
+    return raw
+
+
+def cmd_manifest_set(args: argparse.Namespace) -> int:
+    """Atomic read-modify-write on `<wiki>/.manifest.json` under flock.
+
+    Reads `.manifest.json` (creates with `{"projects": {}}` when missing),
+    sets `projects[<project>][<key>] = <value>` (typed per the schema or
+    `--json`), writes via tempfile + `os.replace`. POSIX-only locking;
+    on Windows, best-effort (a one-time stderr notice per process).
+    """
+    wiki_root = _resolve_wiki(args.wiki)
+    if wiki_root is None:
+        print(
+            "  ! no wiki resolved. Pass --wiki <path> or set `wiki` in config.",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        value = _coerce_manifest_value(args.key, args.value, args.json)
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"  ! invalid value for {args.key!r}: {e}", file=sys.stderr)
+        return 2
+
+    manifest_path = wiki_root / ".manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Open with O_RDWR | O_CREAT so we can lock; flock POSIX-only.
+    fd = os.open(manifest_path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        if sys.platform != "win32":
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        else:
+            # Best-effort on Windows. Reuses the one-time notice helper
+            # from `_limits` to avoid duplicate stderr spam.
+            from . import _limits as _limits_module
+            _limits_module._maybe_emit_win32_notice()
+
+        # Read current contents (treat empty file as the default schema).
+        raw = b""
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            raw += chunk
+        if raw.strip():
+            try:
+                manifest = json.loads(raw.decode("utf-8"))
+            except json.JSONDecodeError as e:
+                print(
+                    f"  ! {manifest_path.relative_to(wiki_root)} is not valid JSON ({e}); refusing to overwrite",
+                    file=sys.stderr,
+                )
+                return 2
+            if not isinstance(manifest, dict) or "projects" not in manifest:
+                # Treat malformed/missing-projects as a reset.
+                manifest = {"projects": {}}
+        else:
+            manifest = {"projects": {}}
+
+        projects = manifest.setdefault("projects", {})
+        if not isinstance(projects, dict):
+            projects = {}
+            manifest["projects"] = projects
+        proj_entry = projects.setdefault(args.project, {})
+        if not isinstance(proj_entry, dict):
+            proj_entry = {}
+            projects[args.project] = proj_entry
+        proj_entry[args.key] = value
+
+        # Atomic write via tempfile + os.replace.
+        new_text = json.dumps(manifest, indent=2) + "\n"
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            prefix=f".{manifest_path.name}.tmp-",
+            dir=str(manifest_path.parent),
+        )
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                f.write(new_text)
+            os.replace(tmp_path, manifest_path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+
+        print(f"  ~ {manifest_path.relative_to(wiki_root)}: projects[{args.project!r}][{args.key!r}] = {value!r}")
+        return 0
+    finally:
+        try:
+            if sys.platform != "win32":
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="wiki-spaces space",
@@ -1687,6 +1834,48 @@ def main(argv: list[str] | None = None) -> int:
         help="print the plan + link-rewrite counts; touch nothing",
     )
     p_promote.set_defaults(func=cmd_promote)
+
+    p_log = sub.add_parser(
+        "log",
+        help="append a line to <wiki>/log.md atomically (rotates if over cap)",
+    )
+    p_log.add_argument(
+        "message",
+        help="the log line to append. Convention per CONVENTIONS / log.md: "
+        "`- [TIMESTAMP] OPERATION key=value ...`",
+    )
+    p_log.set_defaults(func=cmd_log)
+
+    p_manifest = sub.add_parser(
+        "manifest",
+        help="manage <wiki>/.manifest.json (project sync state)",
+    )
+    manifest_sub = p_manifest.add_subparsers(dest="manifest_op", required=True)
+    p_manifest_set = manifest_sub.add_parser(
+        "set",
+        help="atomic read-modify-write of one manifest field",
+    )
+    p_manifest_set.add_argument(
+        "project",
+        help="project slug under `projects.<project>`",
+    )
+    p_manifest_set.add_argument(
+        "key",
+        help="manifest field name (e.g. last_synced, last_commit_synced, pages_in_vault, source_cwd)",
+    )
+    p_manifest_set.add_argument(
+        "value",
+        help="new value. Treated as a string by default; pass --json to parse "
+        "as a JSON literal (42, null, \"foo\"). Documented typed fields get "
+        "light coercion (int for pages_in_vault; the literal 'null' for "
+        "last_commit_synced).",
+    )
+    p_manifest_set.add_argument(
+        "--json",
+        action="store_true",
+        help="parse <value> as a JSON literal instead of a string",
+    )
+    p_manifest_set.set_defaults(func=cmd_manifest_set)
 
     args = parser.parse_args(argv)
     return args.func(args)
