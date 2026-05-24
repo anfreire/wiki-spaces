@@ -2791,6 +2791,16 @@ def cmd_promote(args: argparse.Namespace) -> int:
                 tag = "added"
             else:
                 tag = "noop"
+            # PR-L: the outer preflight projects the cap against the
+            # OUTER-read ancestor text. A concurrent writer can grow the
+            # ancestor between preflight and lock — re-check inside the
+            # locked region against the actual projected text. Cap rejection
+            # returns the `(None, rc, reason)` abort tuple per the
+            # `_atomic_mutate_index` protocol.
+            try:
+                _enforce_size_cap(ancestor_index, final, wiki_root)
+            except SizeCapExceeded as e:
+                return (None, 2, f"size cap: {e}")
             return (final, tag)
 
         rc_a, info = _atomic_mutate_index(

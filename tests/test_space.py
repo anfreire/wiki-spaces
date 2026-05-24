@@ -1424,6 +1424,37 @@ def test_promote_outgoing_link_does_not_rewrite_frontmatter(tmp_path):
     assert "[ref](../sibling.md)" not in moved
 
 
+def test_promote_in_lock_size_check_catches_concurrent_growth(tmp_path, monkeypatch):
+    """The outer preflight projects against the OUTER-read ancestor text.
+    A concurrent writer can grow the ancestor between preflight and lock,
+    so `_promote_mutate` re-checks inside the locked region against the
+    actual projected text. Inject a concurrent write that pushes the
+    ancestor over the cap right before the mutate fn runs; assert the
+    helper aborts via the `(None, rc, reason)` tuple."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "page.md").write_text("# page\n\nbody\n")
+
+    real_atomic = space._atomic_mutate_index
+    target_index = (wiki / "index.md").resolve()
+
+    def patched_atomic(ancestor, ancestor_index, mutate_fn):
+        # Only sabotage the ancestor write; other index writes (e.g. the
+        # new space's own index.md) flow through unchanged.
+        if ancestor_index.resolve() == target_index:
+            existing = ancestor_index.read_text(encoding="utf-8")
+            # Push the ancestor close to the cap so the entry add tips over.
+            bulky = "x" * 4980
+            ancestor_index.write_text(existing + bulky + "\n", encoding="utf-8")
+        return real_atomic(ancestor, ancestor_index, mutate_fn)
+
+    monkeypatch.setattr(space, "_atomic_mutate_index", patched_atomic)
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc != 0
+    assert "size cap" in err
+    # Source is restored (snapshot rollback ran).
+    assert (wiki / "page.md").is_file()
+
+
 def test_init_refuses_over_cap_description(tmp_path):
     """init's `--description` writes to `index.md` whose cap is 5000.
     A 6000-char description is refused; no `index.md` is left behind."""
