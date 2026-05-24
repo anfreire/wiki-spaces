@@ -2,7 +2,7 @@
 
 Three mechanisms; pick by use case. The source can be any space — someone's whole wiki, a subtree they extracted, a reference snapshot. From your perspective it lands as a space inside your wiki.
 
-**Shortcut.** `wiki-spaces space mount <source> [path] --mode {submodule|clone|symlink}` runs the branch below for you — it executes the chosen mechanism, verifies the mount has `index.md`, registers it in the nearest ancestor's `## Spaces` atomically (advisory `fcntl.flock` on the ancestor directory + tempfile + `os.replace`), and rolls back the mount if registration fails. It refuses on a Tier 1 parent (no `## Spaces`), exactly like `space add`. `path` is optional — default is `shared/<basename-of-source>/`, which gives the read-only / external trust-scope semantics by convention. If the mount turns out not to be a wiki (no `index.md`) it is not registered: a failed symlink or clone is removed, but a failed submodule must be undone by hand — the command prints the exact commands. The branch-by-branch steps below are the manual equivalent and the reference for what the command does and why.
+**Shortcut.** `wiki-spaces space mount <source> [path] --mode {submodule|clone|symlink}` runs the branch below for you — it executes the chosen mechanism, verifies the mount has `index.md`, registers it in the nearest ancestor's `## Spaces` atomically (advisory `fcntl.flock` on the ancestor directory + tempfile + `os.replace`), and rolls back the mount if registration fails. It refuses when the parent's `index.md` has no `## Spaces` section, exactly like `space add`. `path` is optional — default is `shared/<basename-of-source>/`, which gives the read-only / external trust-scope semantics by convention. If the mount turns out not to be a wiki (no `index.md`) it is not registered: a failed symlink or clone is removed, but a failed submodule must be undone by hand — the command prints the exact commands. The branch-by-branch steps below are the manual equivalent and the reference for what the command does and why.
 
 ## Decision
 
@@ -26,7 +26,7 @@ wiki-spaces space mount <source> [path] --mode submodule|clone|symlink \
 - `--mode` — required. Mount mechanism changes trust semantics, so the choice is explicit.
 - `--dry-run` — print the plan; touch nothing.
 
-**The CLI atomically refuses** when the nearest ancestor is Tier 1 (no `## Spaces`): exits non-zero, touches nothing. Resolution: add `## Spaces` to the ancestor's `index.md` first (a single heading line), then rerun. The mount step itself also refuses when the mounted source has no `index.md` — it rolls back per-mode and exits non-zero. If rollback fails, you get a clear "manual cleanup required" message.
+**The CLI atomically refuses** when the nearest ancestor's `index.md` has no `## Spaces` section: exits non-zero, touches nothing. Resolution: add `## Spaces` to the ancestor's `index.md` first (a single heading line), then rerun. The mount step itself also refuses when the mounted source has no `index.md` — it rolls back per-mode and exits non-zero. If rollback fails, you get a clear "manual cleanup required" message.
 
 Examples:
 
@@ -44,7 +44,7 @@ wiki-spaces space mount /home/me/personal-notes --mode symlink
 ## Before mounting (any branch)
 
 - **Trust-scope classification depends on placement.** The heuristic in `CONVENTIONS.md / Owned vs external` marks a space as external only if it's under `<wiki>/shared/`, is a git submodule with a foreign origin, or is a symlink resolving outside the wiki tree. **A plain clone under `<wiki>/projects/<name>/` is classified as *owned* by the heuristic — writes are allowed by default.** The `space mount` default (`shared/<basename>/`) opts you into the external semantics; pass an explicit `[path]` to override.
-- **Parent's tier matters.** `space mount` refuses on Tier 1 parents (no `## Spaces`). Either upgrade the parent first (add a `## Spaces` heading) or use the manual mechanism below and accept that the mount isn't navigable from the parent's index.
+- **Parent must have `## Spaces`.** `space mount` refuses when the parent's `index.md` lacks the navigation-contract heading. Either add `## Spaces` to the parent first or use the manual mechanism below and accept that the mount isn't navigable from the parent's index.
 
 ## Underlying mechanism (if you need to do it manually)
 

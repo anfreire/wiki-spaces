@@ -29,11 +29,14 @@ The agent reads [`SETUP.md`](references/SETUP.md), asks what the wiki is for and
 
 ```bash
 uvx wiki-spaces install                  # link skills into detected harnesses
-uvx wiki-spaces init ~/Wiki              # scaffold a wiki + register it
+uvx wiki-spaces init ~/Wiki              # scaffold a fresh wiki + register it
+uvx wiki-spaces init ~/notes --adopt     # OR adopt an existing folder of notes
 uvx wiki-spaces doctor --no-net          # verify
 ```
 
 `install` auto-detects and links the skills into whichever of **Claude Code, Codex, Gemini CLI, Antigravity, Hermes, and Kiro** are present (`--all` pre-positions for every one). Cursor, Windsurf, GitHub Copilot, and Aider have no global skills directory — they integrate via a rule-file snippet (`wiki-spaces install --bridge <key>`; see [`HARNESS_INTEGRATION.md`](references/HARNESS_INTEGRATION.md)). For a permanent install, `pip install wiki-spaces` or `uv tool install wiki-spaces`, then drop the `uvx` prefix.
+
+`init` always emits `## Spaces` in the new wiki's `index.md` from t=0 so the `space` subcommands work immediately. `--adopt` walks the existing folder and registers every nested space (a folder with `index.md`) in its ancestor's `## Spaces` — zero drift on the first audit. External subtrees (`shared/`, foreign submodules, escaping symlinks) are skipped with a per-skip notice; pass `--include-external` to override.
 
 Once a wiki exists, the `space` subcommands manage its structure:
 
@@ -58,7 +61,7 @@ A folder with `index.md` is already a complete wiki — the whole spec is one pa
 Three reference skills your AI agent uses to work with the wiki:
 
 - `wiki-search` — find content
-- `wiki-update` — capture / save / sync
+- `wiki-update` — capture / save / sync, with per-file size discipline (hard caps at write time, see [`CONVENTIONS.md` § `_meta/limits.md`](CONVENTIONS.md))
 - `wiki-tend` — audit, normalize tags, cross-link
 
 Cursor / Windsurf / Copilot / Aider integration is covered under [Install](#install) above and in [`HARNESS_INTEGRATION.md`](references/HARNESS_INTEGRATION.md).

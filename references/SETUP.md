@@ -27,13 +27,13 @@ If the config is missing or `wiki` is unset, the user has not set up yet — dri
 
 ## Preflight (before anything)
 
-This briefing drives the **full installation** (skills + scaffold). For a no-install Tier 1 start — folder + `index.md` — see the README's `## Install` § "No tooling at all" subsection. The skills resolve the target wiki via **explicit path → config → CWD ancestor**, so a no-install wiki still works as long as the agent invokes the skills with the wiki path or from inside it.
+This briefing drives the **full installation** (skills + scaffold). For a no-install start — folder + `index.md` — see the README's `## Install` § "No tooling at all" subsection. The skills resolve the target wiki via **explicit path → config → CWD ancestor**, so a no-install wiki still works as long as the agent invokes the skills with the wiki path or from inside it.
 
 For the full installation, verify the user's machine has one of:
 - **Recommended:** [`uv`](https://docs.astral.sh/uv/) on PATH (`curl -LsSf https://astral.sh/uv/install.sh | sh` or `brew install uv`). Used for `uvx wiki-spaces …` (no install) or `uv tool install wiki-spaces` (permanent). uv provisions Python automatically.
 - **Fallback:** plain Python `>=3.11` + `pip` (or `pipx`). Use `pip install --user wiki-spaces` (or `pipx install wiki-spaces`) if uv is unavailable.
 
-`git` is **optional** — recommended for backing up the wiki and for the dev-from-source flow, but not required for install. If the user only wants the Tier 1 path, redirect them to the README; preflight isn't needed.
+`git` is **optional** — recommended for backing up the wiki and for the dev-from-source flow, but not required for install. If the user only wants the no-install path, redirect them to the README; preflight isn't needed.
 
 ## Default path
 
@@ -64,15 +64,15 @@ The commands below show the recommended `uvx` form (no install). If wiki-spaces 
 
    Present the result in one plain-language block — never enumerate internal files like `log.md` or `.manifest.json` as menu items: *"I'll &lt;create a wiki at ~/Wiki | adopt your folder at ~/notes&gt;, set up &lt;folders&gt;, &lt;a tag vocabulary and an audit log / nothing extra&gt;, and &lt;initialize git / skip git&gt;, then link the skills into your AI tools. Sound right, or adjust anything?"* Take adjustments in the user's own words (*"rename recipes to desserts"*, *"skip git"*) and re-present until confirmed. If they ask what an opt-in does, answer in 1-2 sentences. Flat wikis (no folders) are fully valid — the proposal can be just `index.md`. See `references/EXAMPLES.md` for full shape examples.
 
-   **Adopting an existing folder.** If the user pointed at a folder they already have, the wiki *is* that folder. Adopt it with `wiki-spaces init <their-path> --tier1`: it adds `index.md` only if missing and never touches existing files. `--tier1` makes that added `index.md` a plain Tier 1 root (no `## Spaces` section) — important, because any folders the user already nests would otherwise read as unregistered spaces and an audit would report immediate drift. A fresh wiki, by contrast, omits `--tier1` and gets the usual Tier 2 `## Spaces` from t=0.
-   - *Port as-is* (default) — `init <path> --tier1` with no `--folders`: leaves their structure untouched.
+   **Adopting an existing folder.** If the user pointed at a folder they already have, the wiki *is* that folder. Adopt it with `wiki-spaces init <their-path> --adopt`: it adds `index.md` if missing (with `## Spaces` from t=0), then walks every nested folder containing `index.md` and registers each in the appropriate ancestor's `## Spaces` — so audit reports zero drift on day 1. External subtrees (under `shared/`, foreign-origin submodules, escaping symlinks) are skipped with a per-skip stderr notice; pass `--include-external` to opt back in. A fresh wiki omits `--adopt` (nothing to enumerate); it still gets `## Spaces` from t=0.
+   - *Port as-is* (default) — `init <path> --adopt` with no `--folders`: leaves their structure untouched, just registers what's already there.
    - *Reorganize* — only if the user asks. Add `--folders` for new folders; moving existing files into them is a follow-up you do by hand after `init`, with the user's say-so.
 
    Offer this choice once, inside the step-2 proposal (*"adopt it as-is, or also organize it into folders?"*) — never a separate round.
 
 3. **Execute — you run all of it, no user commands.** In sequence:
    1. `uvx wiki-spaces install` (detected harnesses only; add `--all` only if the user wants skills pre-positioned for every supported harness). It installs `wiki-search`/`wiki-update`/`wiki-tend` plus vendored kepano skills, copies `AGENTS.md`/`CONVENTIONS.md`/`references/` to `~/.local/share/wiki-spaces/`, and writes that as `repo` in the config. Verify it printed "Wrote repo path to ...".
-   2. `uvx wiki-spaces init <wiki-path> [--name <display-name>] [--description "<one-sentence purpose>"] [--with <opt-ins>] [--folders <names>] [--git] [--tier1]`. `<wiki-path>` is the new location for a fresh wiki, or the user's existing folder for an adoption — pass `--tier1` for an adoption (a Tier 1 root with no `## Spaces`, so folders the user already nests don't read as drift). Pass the user's one-sentence purpose as `--description` so it lands in `index.md`'s "What this space is" verbatim. `init` creates `index.md` (skipped if already present), writes `--with` opt-in files, creates each `--folders` directory (with a `.gitkeep` under `--git`), runs `git init -b main` under `--git`, and writes `wiki = <wiki-path>` to the config. Omit `--folders` for a flat wiki or a port-as-is adoption. Verify it printed "registered as canonical wiki in ...".
+   2. `uvx wiki-spaces init <wiki-path> [--name <display-name>] [--description "<one-sentence purpose>"] [--with <opt-ins>] [--folders <names>] [--git] [--adopt] [--include-external]`. `<wiki-path>` is the new location for a fresh wiki, or the user's existing folder for an adoption — pass `--adopt` for an adoption so every pre-existing nested space gets registered in its ancestor's `## Spaces` (zero day-1 drift). Pass the user's one-sentence purpose as `--description` so it lands in `index.md`'s "What this space is" verbatim; omit it to skip that section entirely (no placeholder text). `init` creates `index.md` if missing (always with `## Spaces` from t=0), writes `--with` opt-in files, creates each `--folders` directory (with a `.gitkeep` under `--git`), runs `git init -b main` under `--git`, and writes `wiki = <wiki-path>` to the config. Omit `--folders` for a flat wiki or a port-as-is adoption. Verify it printed "registered as canonical wiki in ...".
    3. `uvx wiki-spaces doctor --no-net`. Both `wiki` and `repo` should be `OK`.
 
 4. **Confirm.** "Setup complete. Your wiki is at `<wiki-path>`. Just ask me to search, save to, or audit your wiki from anywhere — I'll find it via the config."
@@ -85,7 +85,7 @@ See [`MOUNT.md`](MOUNT.md) for the full playbook and trade-offs. Quick summary:
 2. Identify the external wiki: a git URL, a local clone, or a folder with `index.md`.
 3. Decide the mount mechanism with the user: submodule (collaborative; recommended), clone (read-only one-time fetch), or symlink (local convenience).
 4. Decide the path inside the canonical wiki: typically `<wiki>/shared/<name>/` for team wikis.
-5. Run `uvx wiki-spaces space mount <source> --mode <mechanism>` — one command that executes the mount, verifies the result has `index.md`, and adds the `## Spaces` entry atomically. The destination path defaults to `shared/<basename-of-source>/`; pass an explicit path (e.g., `shared/<custom-name>`) only when the default doesn't fit. It refuses on a Tier 1 parent (no `## Spaces`); if that happens, add `## Spaces` to the parent's `index.md` and rerun. Use `--dry-run` to preview without touching anything, `--name "Display Label"` to override the registered entry label.
+5. Run `uvx wiki-spaces space mount <source> --mode <mechanism>` — one command that executes the mount, verifies the result has `index.md`, and adds the `## Spaces` entry atomically. The destination path defaults to `shared/<basename-of-source>/`; pass an explicit path (e.g., `shared/<custom-name>`) only when the default doesn't fit. It refuses when the parent's `index.md` lacks `## Spaces`; if that happens, add the section and rerun. Use `--dry-run` to preview without touching anything, `--name "Display Label"` to override the registered entry label.
 
 ## Edge cases
 

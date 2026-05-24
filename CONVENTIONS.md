@@ -1,6 +1,6 @@
 # Conventions
 
-This is the opt-in catalog. Every section is independent. The [spec](AGENTS.md) defines three tiers — Valid (just `index.md`), Navigable (adds `## Spaces`), and Conventional (any marker from this catalog). Adopt only what you want; tools degrade where a marker is absent.
+This is the opt-in catalog of conventions a wiki may adopt. Every section is independent — pick the markers that fit your use case; tools degrade where a marker is absent. The [spec](AGENTS.md) defines `index.md` as the only required file and `## Spaces` as the navigation contract; everything in this catalog is layered on top.
 
 **"Tools" in this catalog** means the three reference skills (`wiki-search`, `wiki-update`, `wiki-tend`) — LLM-driven procedures that read these markers and degrade gracefully. The `wiki-spaces` CLI handles `install` / `init` / `doctor` / `space` / `vendor-kepano` only; runtime knowledge operations (search, capture, audit, normalize, colorize) live in the skills.
 
@@ -8,24 +8,22 @@ This is the opt-in catalog. Every section is independent. The [spec](AGENTS.md) 
 
 ---
 
-## Knowledge-capture pack
+## Memory-aid conventions
 
-A recommended bundle for wikis used as a *memory aid* (research notes, developer notebooks, technical wikis) rather than a *content store* (recipes, journals, runbooks, contact lists, curricula). The four conventions below are designed to compose — they work best together, but each is independently usable; pick any subset.
-
-The bundle:
+Four conventions compose well for wikis used as a *memory aid* (research notes, developer notebooks, technical wikis) rather than a *content store* (recipes, journals, runbooks, contact lists, curricula). Each is independently usable; pick any subset.
 
 - [Frontmatter schema](#frontmatter-schema) — `title`, `tags`, `summary`, `sources`, etc.
 - [Page template](#page-template) — `## Key Ideas` / `## Open Questions` body shape
 - [Provenance markers](#provenance-markers) — `%%inferred%%` / `%%ambiguous%%` on claims
 - [Noise filter](#noise-filter) — "skip what code answers; capture what took 30 minutes"
 
-Content-store wikis typically skip the whole bundle. Either flavor of wiki can still adopt the rest of the catalog (`log.md`, `_meta/taxonomy.md`, `.manifest.json`, `.obsidian/`, etc.) independently.
+Content-store wikis typically skip these four. Both flavors can still adopt the rest of the catalog (`log.md`, `_meta/taxonomy.md`, `_meta/limits.md`, `.manifest.json`, `.obsidian/`, etc.) independently.
 
 ---
 
 ## Example opt-in bundles
 
-A new wiki only needs `index.md` (per spec) to be valid. Beyond that, the bundle of opt-in markers that's useful varies by use case. Examples — none are required:
+A new wiki only needs `index.md` to be valid. Beyond that, the bundle of opt-in markers that's useful varies by use case. Examples — none are required:
 
 | Use case | Suggested bundle |
 |---|---|
@@ -60,7 +58,7 @@ Both keys are absolute paths. `wiki` points to a folder containing `index.md`; `
 
 Bootstrap: `wiki-spaces install` writes the `repo` key automatically; `wiki-spaces init` writes the `wiki` key when scaffolding (unless `--no-config`).
 
-**Resolution order.** Skills resolve the target wiki in three steps: (1) an explicit path or named space in the user's request; (2) the `wiki` value in the config, when it points at a folder containing `index.md`; (3) **CWD ancestor** — the nearest ancestor of the current working directory that contains `index.md`. Step 3 lets a no-install Tier 1 wiki (folder + `index.md`, no config) work whenever the agent runs from inside it; skills note once when step 3 was the source and suggest `wiki-spaces init` to register it.
+**Resolution order.** Skills resolve the target wiki in three steps: (1) an explicit path or named space in the user's request; (2) the `wiki` value in the config, when it points at a folder containing `index.md`; (3) **CWD ancestor** — the nearest ancestor of the current working directory that contains `index.md`. Step 3 lets a no-install wiki (folder + `index.md`, no config) work whenever the agent runs from inside it; skills note once when step 3 was the source and suggest `wiki-spaces init` to register it.
 
 When all three miss — no config *and* the CWD is not inside any wiki — every skill drives the setup flow inline before doing its own work. `wiki-update` owns the canonical Initialization procedure (`wiki-update/SKILL.md` § Initialization, which mirrors `references/SETUP.md`); `wiki-search` and `wiki-tend` follow the same flow (reading `<repo>/references/SETUP.md` directly when `repo` is set, the raw GitHub URL otherwise) and resume the user's original request once `wiki-spaces init` has registered the wiki.
 
@@ -68,7 +66,7 @@ When all three miss — no config *and* the CWD is not inside any wiki — every
 
 ## Per-space convention auto-detection
 
-Each space is autonomous: optional conventions (frontmatter, `_meta/taxonomy.md`, `log.md`, etc.) are detected by file presence *within that space*. Parent conventions do not propagate to children. Each space picks its own tier independently — a Tier 3 root may contain a Tier 1 space and vice versa.
+Each space is autonomous: optional conventions (frontmatter, `_meta/taxonomy.md`, `log.md`, etc.) are detected by file presence *within that space*. Parent conventions do not propagate to children. Each space picks its own conventions independently — a heavily-customized root may contain a bare-`index.md` child and vice versa.
 
 **Scope-root operations.** When a tool operates on a specific space (the wiki, or a space the user named), every convention check happens at *that scope's root* — not at an ancestor. The `log.md` appended to is the one at the scope being operated on. The taxonomy enforced is the one at that scope. The `.manifest.json` consulted is that scope's. Skip the marker at that scope and the corresponding step degrades for that scope only.
 
@@ -214,6 +212,43 @@ Aliases are mappings the normalizer uses to rewrite non-canonical tags to canoni
 
 ---
 
+## `_meta/limits.md`
+
+**Size discipline is default-on, configurable via this file.** Per-file character caps enforced at write time (by `wiki-update` and the `wiki-spaces space log` / `space manifest set` CLI helpers) and audited by `wiki-tend` / `wiki-spaces space audit`. The pattern is Hermes's: hard caps, errors on overflow, no silent truncation — the producer must consolidate, split, or promote before the next write.
+
+**Defaults (override via this file):**
+
+| Pattern | Cap (chars) |
+|---|---|
+| `index.md` | 5,000 |
+| `log.md` | 100,000 (auto-rotates) |
+| `*.md` | 15,000 |
+
+`index.md` gets a small cap because it's the navigation hub — read often, should stay light. Content pages get a "single readable page" cap that triggers `space promote --split` when exceeded. `log.md` is append-only with automatic entry-based rotation to `log.archive-<YYYYMMDD-HHMMSS>.md` when the cap is reached.
+
+**Char counting:** `len(text)` with YAML frontmatter excluded. Frontmatter is metadata, not content. Everything else (headings, wikilinks, code blocks) counts — those are real bytes the consumer reads.
+
+**If present:** parses a markdown table of `(pattern, cap)` overrides. User patterns are checked **first**, in file order; built-in defaults fill in only what the user didn't cover. So a `concepts/*.md` cap of 8000 wins over the broader `*.md` default of 15000.
+
+Example:
+
+```markdown
+# Size limits
+
+| Pattern          | Cap (chars) |
+|------------------|-------------|
+| concepts/*.md    |        8000 |
+| projects/**/*.md |       20000 |
+```
+
+**Match semantics** — patterns are matched via `fnmatch`. A pattern containing `/` matches against the wiki-root-relative path (`concepts/foo.md`); a pattern without `/` matches against the basename only (`index.md` matches every `index.md` at any depth).
+
+**Rejection guidance** — when a content page exceeds its cap, the producer (via `wiki-update`) suggests split → promote-with-`--split` → summarize, in that order. Splitting is preferred because a 15K content page would just become an over-cap 5K `index.md` after a plain promote.
+
+**If absent:** the built-in defaults apply unchanged.
+
+---
+
 ## `_template.md`
 
 **If present in any folder:** New pages created by `wiki-update` in that folder use this file as their boilerplate (frontmatter + body skeleton). The closest ancestor `_template.md` wins.
@@ -224,7 +259,7 @@ Aliases are mappings the normalizer uses to rewrite non-canonical tags to canoni
 
 ## Frontmatter schema
 
-*Part of the [Knowledge-capture pack](#knowledge-capture-pack).*
+*Part of the [memory-aid conventions](#memory-aid-conventions).*
 
 **If used (any content page in the wiki has YAML frontmatter):** The opt-in schema is:
 
@@ -253,7 +288,7 @@ Timestamps are UTC ISO-8601. `>-` folded scalar avoids YAML quoting issues for `
 
 ## Page template
 
-*Part of the [Knowledge-capture pack](#knowledge-capture-pack).*
+*Part of the [memory-aid conventions](#memory-aid-conventions).*
 
 **If used:** Body structure for content pages:
 
@@ -279,7 +314,7 @@ Unresolved items.
 
 ## Provenance markers
 
-*Part of the [Knowledge-capture pack](#knowledge-capture-pack).*
+*Part of the [memory-aid conventions](#memory-aid-conventions).*
 
 **If used:** Inline markers attached to claims indicate epistemic status. The syntax is Obsidian's comment form — invisible in rendered preview, parseable from raw markdown.
 
@@ -328,7 +363,7 @@ Slugs for new pages are lowercase, hyphen-separated, ≤50 chars, descriptive.
 
 ## Retrieval primitives
 
-Cost-tiered lookup table for `wiki-search`. Use the cheapest primitive that answers the question; escalate only when it cannot.
+Cost-ordered lookup table for `wiki-search`. Use the cheapest primitive that answers the question; escalate only when it cannot.
 
 | Need | Primitive | Cost |
 |---|---|---|
@@ -366,7 +401,7 @@ Wikilink and markdown-link syntax: see [obsidian-markdown](vendor/kepano/obsidia
 
 ## Noise filter
 
-*Part of the [Knowledge-capture pack](#knowledge-capture-pack).*
+*Part of the [memory-aid conventions](#memory-aid-conventions).*
 
 A heuristic for **knowledge-capture use cases** (research notes, technical wikis, developer notebooks) where the goal is "store what was hard to derive." Before writing a page, apply:
 

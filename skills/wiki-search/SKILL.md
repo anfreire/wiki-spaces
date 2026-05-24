@@ -19,7 +19,7 @@ Find content in the user's canonical wiki and answer using only what's stored. C
 1. **Resolve the target wiki**, in this order:
    1. Explicit path or named space from the user's request.
    2. The `wiki` value in `${XDG_CONFIG_HOME:-~/.config}/wiki-spaces/config`, if that path has `index.md`.
-   3. **CWD discovery** — the nearest ancestor of the current working directory containing `index.md`. This makes Tier 1 no-install wikis work without a config.
+   3. **CWD discovery** — the nearest ancestor of the current working directory containing `index.md`. This makes no-install wikis (folder + `index.md`, no config) work whenever the agent runs from inside one.
    4. If none of the above resolves to a folder with `index.md`, **drive the setup flow inline** before answering: read `<repo>/references/SETUP.md` (or fall back to the canonical URL https://raw.githubusercontent.com/anfreire/wiki-spaces/main/references/SETUP.md when `repo` is unknown) and follow its Branch A "Fresh install + scaffold" steps. The shorter equivalent is in [`wiki-update/SKILL.md` § Initialization](../wiki-update/SKILL.md#initialization). Once `wiki-spaces init` has registered the wiki, resume from step 1 of this procedure with the user's original query.
 
    When CWD discovery was the source used (config missing), say so once: "Operating on the wiki at `<path>` (found via CWD; no config registered)."
@@ -34,7 +34,7 @@ Find content in the user's canonical wiki and answer using only what's stored. C
 
    Don't gate retrieval on any specific backend. If qmd is available, use it for the index and section passes below; otherwise grep is fine. **At scale, the choice of backend changes the procedure** — see step 5.1's conditional glob.
 
-5. **Tiered retrieval** per CONVENTIONS / Retrieval primitives. Use the cheapest primitive that answers; escalate only when it cannot.
+5. **Cost-ordered retrieval** per CONVENTIONS / Retrieval primitives. Use the cheapest primitive that answers; escalate only when it cannot.
    1. **Index pass.** Build the candidate set. Where frontmatter is in use, grep the frontmatter fields (`title`, `tags`, `aliases`, `summary`) across pages — a fast signal that surfaces and ranks likely candidates. **The `**/*.md` glob backstop is conditional:** skip it when the backend is an indexed MCP (qmd or equivalent) *and* the wiki has uniform frontmatter adoption (every owned content page has at least one frontmatter field — the index pass is then complete on its own). Otherwise — partial frontmatter, or a grep-only backend — glob `**/*.md` (minus the subtrees excluded in step 6) as the completeness backstop, ranking globbed files by filename and path-segment match. Above ~5k owned pages, prefer an indexed backend and skip the glob; note the choice in the answer when it matters. Collect the top 5–10 candidates overall: exact title/alias > tag match > summary/path match. *(Quick lookup stops here — candidates only, no page bodies read.)*
    2. **Section pass.** For each top candidate: grep with context (e.g., `grep -A 10 -B 2 "<term>" <file>` or your harness's equivalent grep tool). If this gives a clear answer, skip to step 7.
    3. **Full read.** At most 3 candidates. Follow one wikilink hop only when needed.

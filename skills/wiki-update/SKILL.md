@@ -22,14 +22,14 @@ When step 1 of the procedure finds no usable wiki (config missing or wiki path i
 
 2. **Infer the layout and present one proposal.** `references/SETUP.md` (Branch A, step 2) is the single source for the per-use-case layout priors — developer notebook, research, writing, recipe, personal, team, each with suggested folders, opt-in bundle, and git default. Match the description to a prior, or derive 3-6 folders from the recurring kinds mentioned (then default to no opt-in bundle, git "ask"). Present it in one plain-language block — never enumerate internal files like `log.md` as menu items. If the user named an existing folder, the wiki *is* that folder: `init` adopts it (adds `index.md` only if missing, never touches existing files) — offer "adopt as-is, or also organize into folders?" inside this same proposal. Take adjustments in the user's words and re-present until confirmed. Flat wikis (no folders) are fully valid.
 
-3. **Execute.** Run `uvx wiki-spaces install` (drop `uvx` if wiki-spaces is installed permanently via `uv tool install` / `pip install`), then `uvx wiki-spaces init <wiki-path> [--name <display-name>] [--description <text>] [--with <opt-ins>] [--folders <names>] [--git] [--tier1]`. `<wiki-path>` is the new location for a fresh wiki, or the user's existing folder for an adoption — pass `--tier1` when adopting (a Tier 1 root with no `## Spaces`, so folders the user already nests don't read as drift). Pass the user's one-sentence description as `--description` so it lands in `index.md`'s "What this space is" verbatim. `init` creates `index.md` (skipped if already present), writes opt-in files, creates `--folders` directories (with `.gitkeep` under `--git`), runs `git init -b main` under `--git`, and writes `wiki = <wiki-path>` to `~/.config/wiki-spaces/config`. Omit `--folders` for a flat wiki or a port-as-is adoption. Then return to step 1 of the Procedure.
+3. **Execute.** Run `uvx wiki-spaces install` (drop `uvx` if wiki-spaces is installed permanently via `uv tool install` / `pip install`), then `uvx wiki-spaces init <wiki-path> [--name <display-name>] [--description <text>] [--with <opt-ins>] [--folders <names>] [--git] [--adopt] [--include-external]`. `<wiki-path>` is the new location for a fresh wiki, or the user's existing folder for an adoption — pass `--adopt` when adopting so every nested space already on disk gets registered in its ancestor's `## Spaces` (zero day-1 drift). Pass the user's one-sentence description as `--description` so it lands in `index.md`'s "What this space is" verbatim; omit it to skip that section entirely (no placeholder). `init` creates `index.md` if missing (always with `## Spaces` from t=0), writes opt-in files, creates `--folders` directories (with `.gitkeep` under `--git`), runs `git init -b main` under `--git`, and writes `wiki = <wiki-path>` to `~/.config/wiki-spaces/config`. Omit `--folders` for a flat wiki or a port-as-is adoption. Then return to step 1 of the Procedure.
 
 ## Procedure
 
 1. **Resolve the target wiki**, in this order:
    1. Explicit path or named space from the user's request.
    2. The `wiki` value in `${XDG_CONFIG_HOME:-~/.config}/wiki-spaces/config`, if that path has `index.md`.
-   3. **CWD discovery** — the nearest ancestor of the current working directory containing `index.md`. This makes Tier 1 no-install wikis work without a config.
+   3. **CWD discovery** — the nearest ancestor of the current working directory containing `index.md`. This makes no-install wikis (folder + `index.md`, no config) work whenever the agent runs from inside one.
    4. If still nothing, run [`## Initialization`](#initialization) and resume.
 
    When CWD discovery was the source used (config missing), proceed normally and mention once in the confirmation: "Wrote to the wiki at `<path>` (found via CWD; no config registered). Run `wiki-spaces init <path>` to make this the default target."
@@ -52,7 +52,7 @@ When step 1 of the procedure finds no usable wiki (config missing or wiki path i
    - **Global content** — pick the best-fitting candidate: a sourdough recipe → a folder named or described for recipes; a character bio → `characters/`; a Python typing pattern → `concepts/` or `notes/`, whichever the wiki uses. A global concept captured from a project CWD still goes here, not under the project folder.
    - **Multiple candidates equally plausible** — pick the more specific if descriptions disambiguate; otherwise surface the candidates to the user before writing.
    - **No candidate fits** — ask the user. If the content represents a recurring kind, offer to create a new folder; if that folder gets its own `index.md`, its `## Spaces` entry flows through step 8.
-   - **Tier 1 wiki with no folders at all** — write at the wiki root or ask.
+   - **Flat wiki (no folders at all)** — write at the wiki root or ask.
 
    Slugs are lowercase, hyphen-separated, ≤50 chars, descriptive. Mounting an external wiki as a space (e.g., `<wiki>/shared/team-foo/`) is a separate flow — see `references/MOUNT.md`.
 7. **Write pages.**
@@ -60,7 +60,7 @@ When step 1 of the procedure finds no usable wiki (config missing or wiki path i
    - **Updates.** Merge new info; preserve manual content; update `updated:` timestamp; deduplicate `sources:`. Don't overwrite unrelated sections.
    - **Write cap.** If more than ~10 pages would change, summarize the plan and ask before writing.
 8. **Update tracking.** Per CONVENTIONS / `index.md`, `## Spaces` is the exhaustive navigation contract:
-   - **`## Spaces` (exhaustive when present).** If you created a new space (a folder with its own `index.md`), prefer the CLI: `wiki-spaces space add <relative-path>` creates the folder, writes a minimal `index.md`, and updates the nearest ancestor's `## Spaces` automatically. Use `wiki-spaces space remove <relative-path>` to delete in symmetric fashion. **Both commands atomically refuse** when the nearest ancestor has no `## Spaces` section (Tier 1 parent) — they exit non-zero and touch nothing. When that happens: ask the user whether to upgrade the parent. On yes, add an empty `## Spaces` section to the ancestor's `index.md` directly (one heading line, blank line after), then retry the CLI command. On no, fall back to manual filesystem ops (create / remove the directory yourself) and leave the parent at Tier 1. If the CLI is unavailable entirely, do it manually: find the **nearest ancestor space** — the wiki root, or an intermediate space whose folder carries an `index.md`. Plain grouping folders without `index.md` are not tier-bearing and are skipped on the walk up. If the ancestor has `## Spaces`, add the entry there in the same operation. When you remove a contained space whose entry is listed, remove the entry.
+   - **`## Spaces` (exhaustive when present).** If you created a new space (a folder with its own `index.md`), prefer the CLI: `wiki-spaces space add <relative-path>` creates the folder, writes a minimal `index.md` (with `## Spaces` from t=0), and updates the nearest ancestor's `## Spaces` automatically. Use `wiki-spaces space remove <relative-path>` to delete in symmetric fashion. **Both commands atomically refuse** when the nearest ancestor's `index.md` has no `## Spaces` section — they exit non-zero and touch nothing. When that happens: ask the user whether to add the section. On yes, add an empty `## Spaces` section to the ancestor's `index.md` directly (one heading line, blank line after), then retry the CLI command. On no, fall back to manual filesystem ops (create / remove the directory yourself) and leave the ancestor as-is. If the CLI is unavailable entirely, do it manually: find the **nearest ancestor space** — the wiki root, or an intermediate space whose folder carries an `index.md`. Plain grouping folders (no `index.md`) are skipped on the walk up. If the ancestor has `## Spaces`, add the entry there in the same operation. When you remove a contained space whose entry is listed, remove the entry.
    - **`.manifest.json` (if present):** update `source_cwd`, `last_synced`, `last_commit_synced`, `pages_in_vault`.
 9. **Confirm.**
 
@@ -92,13 +92,13 @@ A `.md` file that has grown into multiple distinct topics, accreted siblings, or
    - rewrites wikilinks pointing to the promoted file (all forms — bare, display, anchored, pathful — with display preserved),
    - adjusts the promoted file's outgoing relative links for its new depth (one extra `../`),
    - adds `aliases: [<basename>]` to the new `index.md` for forward-compatible wikilink resolution (skip with `--skip-aliases` if another page already claims the alias),
-   - ensures the new `index.md` has `## Spaces` (Tier 2 by default — matches `space add`),
+   - ensures the new `index.md` has `## Spaces` from t=0 — matches `space add`,
    - registers the new space's `## Spaces` entry in the nearest ancestor (uses the file's frontmatter `summary` for the description if present).
 4. Read the new `index.md`. If sections read like standalone children, capture them as separate `.md` files under the new space in a follow-up `wiki-update` cycle. The CLI deliberately does not split content — that's authorship, not mechanics.
 
 **Atomicity.** The CLI snapshots every affected file to a system tempdir (outside the wiki tree) before mutating disk and restores from the snapshot if anything fails. Works on both git-tracked and untracked wikis. The snapshot dir is always cleaned, success or failure.
 
-**Refuses if.** Target dir exists with content; parent is Tier 1; path is external (or descends from an external scope); another owned page already claims the alias `<basename>` case-insensitively (use `--skip-aliases` to bypass).
+**Refuses if.** Target dir exists with content; parent's `index.md` has no `## Spaces` section; path is external (or descends from an external scope); another owned page already claims the alias `<basename>` case-insensitively (use `--skip-aliases` to bypass).
 
 ## Logging
 

@@ -9,7 +9,7 @@ Concrete shapes the canonical wiki can take. None are special — the spec doesn
 └── index.md
 ```
 
-A folder + `index.md`. That's a complete Tier 1 wiki. Add files at the root or under any subfolder as you go. Works for any use case where you don't yet know the shape — start here, let folders emerge from what you actually write.
+A folder + `index.md`. That's a complete wiki. Add files at the root or under any subfolder as you go. Works for any use case where you don't yet know the shape — start here, let folders emerge from what you actually write.
 
 The `wiki = /home/<user>/Wiki` entry in `~/.config/wiki-spaces/config` makes this discoverable from anywhere. Paths in the config are absolute (no `~/` shell expansion).
 

@@ -18,7 +18,7 @@ One-shot maintenance for the user's canonical wiki: status, audit (read-only), n
 1. **Resolve the target wiki**, in this order:
    1. Explicit path or named space from the user's request.
    2. The `wiki` value in `${XDG_CONFIG_HOME:-~/.config}/wiki-spaces/config`, if that path has `index.md`.
-   3. **CWD discovery** — the nearest ancestor of the current working directory containing `index.md`. This makes Tier 1 no-install wikis work without a config.
+   3. **CWD discovery** — the nearest ancestor of the current working directory containing `index.md`. This makes no-install wikis (folder + `index.md`, no config) work whenever the agent runs from inside one.
    4. If none of the above resolves to a folder with `index.md`, **drive the setup flow inline** before doing maintenance: read `<repo>/references/SETUP.md` (or fall back to the canonical URL https://raw.githubusercontent.com/anfreire/wiki-spaces/main/references/SETUP.md when `repo` is unknown) and follow its Branch A "Fresh install + scaffold" steps. The shorter equivalent is in [`wiki-update/SKILL.md` § Initialization](../wiki-update/SKILL.md#initialization). Once `wiki-spaces init` has registered the wiki, resume from step 1 of this procedure with the user's original request. (A freshly scaffolded wiki has nothing to tend — say so plainly: `status` reports the empty layout, `audit` finds zero issues. No need to invent work.)
 
    When CWD discovery was the source used (config missing), say so once in the report.
@@ -37,7 +37,7 @@ One-shot maintenance for the user's canonical wiki: status, audit (read-only), n
    For `audit` and `status`: report only. For `normalize`, `colorize`, and full sweep: preview changes and ask before modifying unless the user explicitly said "fix" or "apply".
 4. **Status.** Glob `**/*.md` within the SCOPE. For *read operations* (status, audit), descend through owned spaces; exclude *external* spaces (under `<wiki>/shared/`, git submodules with foreign origins, symlinks resolving outside the wiki tree — see CONVENTIONS / Owned vs external) unless the user opts in. For *write operations* (normalize, colorize), stay within the targeted scope; other spaces are written to only with explicit instruction. Always exclude `.obsidian/` and `_archives/`. Count pages per top-level folder; report `.manifest.json` synced projects (if present); count tags and top 10 by usage (if frontmatter in use); show last `log.md` entry (if present).
 5. **Audit (report only).** Run `wiki-spaces space audit` (add `--wiki <path>` when the scope is a named sub-space, not the canonical wiki) for the structural facts. It walks owned scope and reports three things:
-   - **`## Spaces` drift** — listed entries with no space on disk, and sub-folders with `index.md` not listed (Tier 2 contract per AGENTS.md; `## Items` is human-maintained and not audited).
+   - **`## Spaces` drift** — listed entries with no space on disk, and sub-folders with `index.md` not listed (the navigation contract per AGENTS.md; `## Items` is human-maintained and not audited).
    - **Broken `[[wikilinks]]`** — links resolving to no page by path, filename, or frontmatter alias; links inside fenced/inline code and frontmatter are ignored.
    - **Orphan pages** — zero incoming wikilinks, `index.md` / `log.md` exempt. Reported as informational.
 
