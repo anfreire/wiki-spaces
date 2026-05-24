@@ -47,7 +47,7 @@ def _validate_wiki(wiki: str) -> str:
     p = Path(wiki)
     if not p.exists():
         return "MISSING ON DISK"
-    if not (p / "index.md").exists():
+    if not (p / "index.md").is_file():
         return "no index.md"
     return "OK"
 

@@ -9,3 +9,6 @@ The three reference skills that ship with wiki-spaces. Each defers to the [spec]
 - [wiki-search/SKILL.md](wiki-search/SKILL.md) — find content in the current wiki
 - [wiki-update/SKILL.md](wiki-update/SKILL.md) — capture and place new content
 - [wiki-tend/SKILL.md](wiki-tend/SKILL.md) — one-shot maintenance: audit, normalize, cross-link, colorize
+
+## Spaces
+

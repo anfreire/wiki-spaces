@@ -1,8 +1,8 @@
 """Size discipline primitives for wiki-spaces.
 
-Hermes-pattern hard caps enforced at write time on the projected post-write
-size. Errors on overflow, never silent truncation. The producer must consolidate,
-split, or promote before the next write — predictability is the value.
+Hard char caps at write time on the projected post-write size. Errors on
+overflow, never silent truncation. The producer must consolidate, split, or
+promote before the next write — predictability is the value.
 
 This module is pure computation (no I/O in the predicate) so callers retain
 control over the "shrinking write" escape hatch and any per-skill policy

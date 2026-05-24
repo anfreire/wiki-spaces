@@ -14,3 +14,6 @@ The two skills below are plain folders (no `index.md`), not spaces. They are ven
 - [obsidian-bases/SKILL.md](obsidian-bases/SKILL.md) — Obsidian Bases: views, filters, formulas, summaries
 - [COMMIT](COMMIT) — pinned upstream SHA + vendoring date
 - [LICENSE](LICENSE) — upstream MIT license (Steph Ango / @kepano), retained per its terms
+
+## Spaces
+

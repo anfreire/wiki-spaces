@@ -12,3 +12,6 @@ Kiro is NOT here because it has a skills concept and is handled by `install.py`.
 - [windsurf/wiki-spaces.md](windsurf/wiki-spaces.md) — Windsurf rule (copy to `.windsurf/rules/wiki-spaces.md`)
 
 Why manual instead of auto-installed? wiki-spaces deliberately doesn't modify per-project state. The canonical wiki is the only state we care about. Copying a one-line rule into your project is a 30-second task; auto-installation would create per-project files that drift from the wiki-spaces source over time.
+
+## Spaces
+

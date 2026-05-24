@@ -20,3 +20,6 @@ package modules.
 Invocation: `./scripts/<name>.py [args]`. Each shim declares its inline
 metadata for uv; first run on a fresh box may take a moment while `uv`
 resolves Python ≥3.11.
+
+## Spaces
+

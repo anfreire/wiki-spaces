@@ -114,8 +114,7 @@ def test_repo_sentinels_includes_all_three_wiki_skills():
 
 
 def test_repo_sentinels_includes_both_kepano_skills():
-    """v0.7.0 added obsidian-bases alongside obsidian-markdown. AGENTS.md
-    names both kepano skills as the syntax reference, so doctor must require
-    both to consider the install valid."""
+    """AGENTS.md names both kepano skills as the syntax reference, so doctor
+    must require both to consider the install valid."""
     assert "vendor/kepano/obsidian-markdown/SKILL.md" in doctor.REPO_SENTINELS
     assert "vendor/kepano/obsidian-bases/SKILL.md" in doctor.REPO_SENTINELS

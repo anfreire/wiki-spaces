@@ -13,7 +13,7 @@ requires-python = ">=3.11"
 authors = [{ name = "André Ferreira", email = "anfreire.dev@gmail.com" }]
 keywords = ["wiki", "markdown", "obsidian", "knowledge-base", "notes", "personal-wiki", "ai-agents", "ai-coding-harness", "claude-code", "codex", "cursor"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Intended Audience :: Information Technology",

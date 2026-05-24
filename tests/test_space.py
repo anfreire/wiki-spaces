@@ -730,7 +730,7 @@ def test_mount_symlink_creates_link_and_registers(tmp_path):
     wiki = _make_wiki(tmp_path)
     src = _make_space_dir(tmp_path / "external-src", "team")
     rc, out, _ = _run(
-        ["--wiki", str(wiki), "mount", str(src), "shared/team", "--as", "symlink"]
+        ["--wiki", str(wiki), "mount", str(src), "shared/team", "--mode", "symlink"]
     )
     assert rc == 0, out
     link = wiki / "shared" / "team"
@@ -748,7 +748,7 @@ def test_mount_symlink_source_without_index_refused(tmp_path):
     src.mkdir()
     (src / "notes.md").write_text("# notes")
     rc, _, err = _run(
-        ["--wiki", str(wiki), "mount", str(src), "shared/x", "--as", "symlink"]
+        ["--wiki", str(wiki), "mount", str(src), "shared/x", "--mode", "symlink"]
     )
     assert rc == 1
     assert "index.md" in err
@@ -762,7 +762,7 @@ def test_mount_refused_when_parent_lacks_spaces_section(tmp_path):
     wiki = _make_wiki(tmp_path, with_spaces_section=False)
     src = _make_space_dir(tmp_path / "src")
     rc, _, err = _run(
-        ["--wiki", str(wiki), "mount", str(src), "team", "--as", "symlink"]
+        ["--wiki", str(wiki), "mount", str(src), "team", "--mode", "symlink"]
     )
     assert rc == 2
     assert "## Spaces" in err
@@ -774,7 +774,7 @@ def test_mount_refused_when_dest_exists(tmp_path):
     (wiki / "occupied").mkdir()
     src = _make_space_dir(tmp_path / "src")
     rc, _, err = _run(
-        ["--wiki", str(wiki), "mount", str(src), "occupied", "--as", "symlink"]
+        ["--wiki", str(wiki), "mount", str(src), "occupied", "--mode", "symlink"]
     )
     assert rc == 2
     assert "already exists" in err
@@ -784,17 +784,17 @@ def test_mount_rejects_dotdot_path(tmp_path):
     wiki = _make_wiki(tmp_path)
     src = _make_space_dir(tmp_path / "src")
     rc, _, _ = _run(
-        ["--wiki", str(wiki), "mount", str(src), "../escape", "--as", "symlink"]
+        ["--wiki", str(wiki), "mount", str(src), "../escape", "--mode", "symlink"]
     )
     assert rc == 2
 
 
 def test_mount_submodule_refused_when_wiki_not_git(tmp_path):
-    """`--as submodule` needs the wiki itself to be a git repo."""
+    """`--mode submodule` needs the wiki itself to be a git repo."""
     wiki = _make_wiki(tmp_path)
     rc, _, err = _run(
         ["--wiki", str(wiki), "mount", "https://example.invalid/x.git",
-         "shared/x", "--as", "submodule"]
+         "shared/x", "--mode", "submodule"]
     )
     assert rc == 2
     assert "git repo" in err
@@ -805,7 +805,7 @@ def test_mount_clone_copies_and_registers(tmp_path):
     wiki = _make_wiki(tmp_path)
     src = _make_git_repo(tmp_path / "src-repo", "team-wiki")
     rc, out, _ = _run(
-        ["--wiki", str(wiki), "mount", str(src), "shared/team", "--as", "clone"]
+        ["--wiki", str(wiki), "mount", str(src), "shared/team", "--mode", "clone"]
     )
     assert rc == 0, out
     assert (wiki / "shared" / "team" / "index.md").is_file()
@@ -820,7 +820,7 @@ def test_mount_symlink_bad_source_leaves_no_parent_dir(tmp_path):
     wiki = _make_wiki(tmp_path)
     rc, _, _ = _run(
         ["--wiki", str(wiki), "mount", str(tmp_path / "nope"), "shared/team",
-         "--as", "symlink"]
+         "--mode", "symlink"]
     )
     assert rc == 2
     assert not (wiki / "shared").exists()
@@ -833,7 +833,7 @@ def test_mount_clone_without_index_is_cleaned_up(tmp_path):
     wiki = _make_wiki(tmp_path)
     src = _make_git_repo(tmp_path / "src-repo", with_index=False)
     rc, _, err = _run(
-        ["--wiki", str(wiki), "mount", str(src), "shared/team", "--as", "clone"]
+        ["--wiki", str(wiki), "mount", str(src), "shared/team", "--mode", "clone"]
     )
     assert rc == 1
     assert "index.md" in err
@@ -905,7 +905,7 @@ def test_derive_default_strips_dot_git_suffix_only_not_when_tail_is_dot_git():
     assert err2 is not None
 
 
-# ---------- mount: --mode vs --as alias ----------
+# ---------- mount: --mode ----------
 
 def test_mount_mode_works_canonically(tmp_path):
     wiki = _make_wiki(tmp_path)
@@ -917,27 +917,7 @@ def test_mount_mode_works_canonically(tmp_path):
     assert (wiki / "shared" / "team").is_symlink()
 
 
-def test_mount_as_alias_still_works(tmp_path):
-    """--as is the deprecated alias; still functional for one release."""
-    wiki = _make_wiki(tmp_path)
-    src = _make_space_dir(tmp_path / "src", "team")
-    rc, out, _ = _run(
-        ["--wiki", str(wiki), "mount", str(src), "shared/team", "--as", "symlink"]
-    )
-    assert rc == 0, out
-
-
-def test_mount_mode_and_as_mutually_exclusive(tmp_path):
-    wiki = _make_wiki(tmp_path)
-    src = _make_space_dir(tmp_path / "src", "team")
-    with pytest.raises(SystemExit):
-        _run([
-            "--wiki", str(wiki), "mount", str(src), "shared/team",
-            "--mode", "symlink", "--as", "clone",
-        ])
-
-
-def test_mount_neither_mode_nor_as_fails(tmp_path):
+def test_mount_missing_mode_fails(tmp_path):
     wiki = _make_wiki(tmp_path)
     src = _make_space_dir(tmp_path / "src", "team")
     with pytest.raises(SystemExit):
@@ -1610,7 +1590,7 @@ def test_find_alias_owners_case_insensitive(tmp_path):
 
 # ---------- cmd_promote: happy path ----------
 
-def test_promote_moves_file_and_creates_tier2_index(tmp_path):
+def test_promote_moves_file_and_creates_index_with_spaces(tmp_path):
     wiki = _make_wiki(tmp_path)
     page = wiki / "page.md"
     page.write_text("# page\n\nbody text\n")
@@ -1622,7 +1602,7 @@ def test_promote_moves_file_and_creates_tier2_index(tmp_path):
     new_text = new.read_text()
     assert "# page" in new_text
     assert "body text" in new_text
-    assert "## Spaces" in new_text  # Tier-2 by default
+    assert "## Spaces" in new_text  # navigation contract from t=0
     assert "aliases:" in new_text
     assert "page" in _md.parse_frontmatter_aliases(new_text)
     # Parent ## Spaces has the entry
@@ -1675,7 +1655,7 @@ def test_promote_refuses_existing_target_dir(tmp_path):
     assert (wiki / "page.md").exists()  # source untouched
 
 
-def test_promote_refuses_tier1_parent(tmp_path):
+def test_promote_refuses_no_spaces_parent(tmp_path):
     wiki = _make_wiki(tmp_path, with_spaces_section=False)
     (wiki / "page.md").write_text("# page")
     rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])

@@ -22,8 +22,7 @@ Operations:
                              `space add`. `path` is optional; defaults to
                              `shared/<basename-of-source>/`. Use `--dry-run`
                              to preview; `--name` to override the registered
-                             label; `--as` is a deprecated alias for
-                             `--mode` (removed in v1.1).
+                             label.
 - `space audit`              walk owned spaces; report `## Spaces` drift,
                              broken `[[wikilinks]]`, and orphan pages.
                              Always-on summary header (space count, page
@@ -49,9 +48,6 @@ from pathlib import Path
 
 from . import _md
 from ._common import nearest_space_root, wiki_path
-
-
-DEFAULT_DESCRIPTION = "<one paragraph describing this space>"
 
 
 # ---------- Helpers ----------
@@ -434,17 +430,21 @@ def _walk_owned_spaces(wiki_root: Path, *, include_external: bool = False):
             yield path
 
 
-def _new_index_md(name: str, description: str) -> str:
+def _new_index_md(name: str, description: str | None = None) -> str:
     """index.md body for a freshly created space.
 
-    Includes an empty `## Spaces` heading so the navigation contract is live
-    from t=0 (matches `init_wiki.build_index_md`). Every CLI-rolled space gets
-    a `## Spaces` section, so `space add foo/bar` works on a fresh `foo`
-    without a second step.
+    Always emits title + `## Spaces` (the navigation contract — present from
+    t=0 on every CLI-created space, so `space add foo/bar` works immediately
+    on a fresh `foo`). When `description` is provided, also emits
+    `## What this space is` with the description. Omitting `description`
+    skips that section entirely rather than writing a placeholder string.
+    Mirrors `init_wiki.build_index_md`.
     """
-    return (
-        f"# {name}\n\n## What this space is\n\n{description}\n\n## Spaces\n\n"
-    )
+    if description and description.strip():
+        return (
+            f"# {name}\n\n## What this space is\n\n{description.strip()}\n\n## Spaces\n\n"
+        )
+    return f"# {name}\n\n## Spaces\n\n"
 
 
 def _spaces_href_to_dir(href: str) -> str:
@@ -564,7 +564,7 @@ def cmd_add(args: argparse.Namespace) -> int:
         new_index = new_space / "index.md"
         created_index_this_call = not new_index.exists()
         new_index.write_text(
-            _new_index_md(display_name, description_for_body or "<one paragraph describing this space>"),
+            _new_index_md(display_name, description_for_body),
             encoding="utf-8",
         )
         print(f"  + {rel}/index.md")
@@ -1421,9 +1421,7 @@ def _rewrite_links_pointing_at(
     # Mask code spans and frontmatter for the SCAN — offset-preserving so
     # span positions from `parse_*` are valid against the ORIGINAL text. This
     # prevents the rewrite from touching `[[wikilinks]]` inside fenced code
-    # examples or YAML frontmatter (those aren't real links). Defect #3 from
-    # the v0.7.0 validation pass: the previous code parsed the raw text, so
-    # a code example like ``` [[foo]] ``` would be rewritten.
+    # examples or YAML frontmatter (those aren't real links).
     fm_text, _ = _md.split_frontmatter(text)
     if fm_text is not None:
         # Replace the frontmatter region with spaces (same length) so any
@@ -2011,19 +2009,13 @@ def main(argv: list[str] | None = None) -> int:
         "Optional; default is shared/<basename-of-source>/ — the shared/ prefix "
         "opts the mount into external trust-scope semantics.",
     )
-    mech_group = p_mount.add_mutually_exclusive_group(required=True)
-    mech_group.add_argument(
+    p_mount.add_argument(
         "--mode",
         dest="mechanism",
+        required=True,
         choices=("submodule", "clone", "symlink"),
         help="mount mechanism: submodule (collaborative, push changes back), "
         "clone (read-only one-time copy), symlink (local folder)",
-    )
-    mech_group.add_argument(
-        "--as",
-        dest="mechanism",
-        choices=("submodule", "clone", "symlink"),
-        help=argparse.SUPPRESS,  # deprecated alias for --mode; removed in v0.9.0
     )
     p_mount.add_argument(
         "--description", help="one-line description for the `## Spaces` entry"
