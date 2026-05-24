@@ -110,3 +110,74 @@ def test_install_main_exits_nonzero_on_missing_source(tmp_path, monkeypatch):
     assert rc == 1, "missing skill source must exit nonzero"
     assert "source missing" in err
     assert "completed with errors" in err
+
+
+def test_bridge_warns_when_repo_unset(monkeypatch, tmp_path):
+    """`--bridge cursor` emits a stderr warning when the `repo` key is unset
+    in the config. The snippet still goes to stdout unchanged — only the
+    warning is added. Defect #5: bridge snippets reference the repo path,
+    and a snippet emitted before any `wiki-spaces install` run would land
+    in a broken state."""
+    from wiki_spaces import _common
+    # Point the config at a path with no `repo` key.
+    cfg_path = tmp_path / "config"
+    monkeypatch.setattr(_common, "CONFIG_PATH", cfg_path)
+    rc, out, err = _run(["--bridge", "cursor"])
+    assert rc == 0
+    # stdout still has the snippet (byte-for-byte; verified by the
+    # existing `test_bridge_cursor_emits_exact_file_content`).
+    assert out  # non-empty
+    # stderr carries the warning.
+    assert "warning" in err.lower()
+    assert "repo" in err
+    assert "unset" in err
+
+
+def test_bridge_no_warning_when_repo_set(monkeypatch, tmp_path):
+    """When `repo` is set, `--bridge` emits no warning — stderr stays clean."""
+    from wiki_spaces import _common
+    cfg_path = tmp_path / "config"
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text("repo = /tmp/fake\n")
+    monkeypatch.setattr(_common, "CONFIG_PATH", cfg_path)
+    rc, out, err = _run(["--bridge", "cursor"])
+    assert rc == 0
+    assert "warning" not in err.lower()
+
+
+def test_install_unowned_dst_exits_nonzero_without_force(tmp_path, monkeypatch):
+    """Defect #6: when a destination is user-owned (not wiki-spaces-installed)
+    and `--force` is not passed, the per-skill action is recorded and the
+    final exit code is nonzero. Previously the action printed but `had_fatal`
+    stayed False, so a silently-partial install exited 0."""
+    from wiki_spaces import _common
+
+    fake_skills = tmp_path / "claude-skills"
+    fake_skills.mkdir()
+    # Pre-create a user-owned (no OWNED_MARKER) directory at the install
+    # destination — install must refuse without --force.
+    for skill in ("wiki-search", "wiki-update", "wiki-tend",
+                  "obsidian-markdown", "obsidian-bases"):
+        d = fake_skills / skill
+        d.mkdir()
+        (d / "SKILL.md").write_text("user content")  # not our marker
+
+    h = Harness(key="claude", detect=(tmp_path / "claude-marker",), skills_dir=fake_skills)
+    (tmp_path / "claude-marker").mkdir()
+    # Provide a valid source tree so `source missing` doesn't kick in first.
+    read_root = tmp_path / "src"
+    for skill in ("wiki-search", "wiki-update", "wiki-tend"):
+        (read_root / "skills" / skill).mkdir(parents=True)
+        (read_root / "skills" / skill / "SKILL.md").write_text("ok")
+    for skill in ("obsidian-markdown", "obsidian-bases"):
+        (read_root / "vendor" / "kepano" / skill).mkdir(parents=True)
+        (read_root / "vendor" / "kepano" / skill / "SKILL.md").write_text("ok")
+    monkeypatch.setattr(install, "HARNESSES", (h,))
+    monkeypatch.setattr(install, "_resolve_install_root",
+                        lambda *, dry_run: (read_root, read_root))
+    monkeypatch.setattr(install, "_ensure_vendor_dev", lambda *, dry_run: None)
+    monkeypatch.setattr(_common, "CONFIG_PATH", tmp_path / "config")
+
+    rc, out, err = _run([])
+    assert rc == 1, "refused-unowned destinations must exit nonzero"
+    assert "refusing to overwrite unowned" in out

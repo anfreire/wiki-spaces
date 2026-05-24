@@ -147,6 +147,7 @@ def install_harness(
                 f"  {h.key}: ! refusing to overwrite unowned {dst} "
                 "(pass --force to replace)"
             )
+            had_fatal = True  # partial install — caller should exit non-zero
             continue
         if dry:
             future_src = write_root / rel
@@ -170,6 +171,21 @@ def _emit_bridge(key: str) -> int:
     if not src.is_file():
         print(f"  ! bridge file missing on disk: {src}", file=sys.stderr)
         return 1
+    # Bridge snippets reference the `repo` config key (so the harness can
+    # locate AGENTS.md / CONVENTIONS.md / skills on demand). When `repo`
+    # is unset, the snippet would land in a broken state — warn so the
+    # user runs the full install before relying on the snippet. Warning
+    # goes to stderr; stdout stays clean for the shell-redirect pipe.
+    from ._common import read_config
+    cfg = read_config()
+    if not cfg.get("repo"):
+        print(
+            "warning: `repo` key unset in ~/.config/wiki-spaces/config; "
+            "the bridge snippet references that path. Run "
+            "`wiki-spaces install` (without --bridge) at least once to "
+            "set it before relying on this snippet.",
+            file=sys.stderr,
+        )
     sys.stdout.write(src.read_text(encoding="utf-8"))
     return 0
 
