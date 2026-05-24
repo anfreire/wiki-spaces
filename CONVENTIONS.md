@@ -38,6 +38,8 @@ A new wiki only needs `index.md` (per spec) to be valid. Beyond that, the bundle
 
 Each opt-in is independent — adopt any combination. Frontmatter (see § Frontmatter schema) is per-page rather than a bundle file; mixed adoption is permitted. The catalog below explains what each marker enables; skip any of them and the corresponding tooling step degrades. The scaffold command takes any subset: `wiki-spaces init <path> --with log.md _meta/taxonomy.md` (prefix with `uvx` for no-install runs).
 
+> See `references/SETUP.md` for the combined install priors (folders + opt-ins + git) presented per use case.
+
 ---
 
 ## Discovery via config
@@ -309,6 +311,8 @@ A few example shapes:
 | **Recipe collection** | `recipes/`, `ingredients/`, `techniques/`, `meal-plans/` |
 | **Personal knowledge** | `journal/`, `learning/`, `contacts/`, `places/`, `interests/` |
 | **Team reference** | `runbooks/`, `decisions/`, `services/`, `people/`, `clients/` |
+
+> See `references/SETUP.md` for the combined install priors (folders + opt-ins + git) presented per use case.
 
 Project-scoped content nests inside the wiki's project-grouping folder (commonly `projects/<name>/<sub-folder>/`, but `clients/<name>/` or `work/<name>/` follow the same pattern). Shared / external content typically lives under `shared/<name>/` (per `## Sharing & permissions`). `_archives/` is a conventional name for retired content / snapshots.
 
