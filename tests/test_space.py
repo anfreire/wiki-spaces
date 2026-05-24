@@ -1696,13 +1696,59 @@ def test_promote_refuses_existing_target_dir(tmp_path):
     assert (wiki / "page.md").exists()  # source untouched
 
 
-def test_promote_refuses_no_spaces_parent(tmp_path):
+def test_promote_inserts_spaces_when_ancestor_bare(tmp_path):
+    """Promote against a bare-`index.md` ancestor inserts `## Spaces` and
+    registers the new space — no refuse, no manual setup step. The atomic
+    mutate fn does both under a single flock."""
     wiki = _make_wiki(tmp_path, with_spaces_section=False)
     (wiki / "page.md").write_text("# page")
+    rc, out, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc == 0, err
+    # Source moved.
+    assert not (wiki / "page.md").exists()
+    assert (wiki / "page" / "index.md").is_file()
+    # Ancestor now has `## Spaces` and an entry for the promoted space.
+    root_text = (wiki / "index.md").read_text()
+    assert "## Spaces" in root_text
+    entries = _md.parse_section_entries(root_text, "Spaces")
+    assert any(e.href and "page/" in e.href for e in entries)
+
+
+def test_promote_ancestor_uses_atomic_mutate_index(tmp_path, monkeypatch):
+    """The ancestor write must happen under flock against FRESH text — not
+    against the text read at command start. Inject a concurrent modification
+    via monkeypatch and assert the rewrite is applied against the fresh text,
+    not the stale one. Otherwise a parallel `space add` could clobber our
+    rewrites or our entry could clobber theirs."""
+    wiki = _make_wiki(tmp_path)
+    page = wiki / "page.md"
+    page.write_text("# page\n")
+    # Wrap _atomic_mutate_index: inject a sibling `## Spaces` entry into the
+    # ancestor's text BEFORE the mutate fn runs. The fn must see this fresh
+    # text (containing the injection) and add `page/` AFTER it without losing
+    # the injected entry.
+    real_atomic = space._atomic_mutate_index
+
+    def patched_atomic(ancestor, ancestor_index, mutate_fn):
+        original = ancestor_index.read_text(encoding="utf-8")
+        new = original.replace(
+            "## Spaces\n", "## Spaces\n\n- [concurrent/](concurrent/index.md)\n"
+        )
+        ancestor_index.write_text(new, encoding="utf-8")
+        return real_atomic(ancestor, ancestor_index, mutate_fn)
+
+    monkeypatch.setattr(space, "_atomic_mutate_index", patched_atomic)
+
     rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
-    assert rc == 2
-    assert "## Spaces" in err
-    assert (wiki / "page.md").exists()
+    assert rc == 0, err
+    root_text = (wiki / "index.md").read_text()
+    # The injection must survive (mutate fn saw fresh text) AND `page/` must
+    # be added.
+    assert "concurrent/index.md" in root_text
+    entries = _md.parse_section_entries(root_text, "Spaces")
+    hrefs = [e.href for e in entries if e.href]
+    assert any("page/" in h for h in hrefs)
+    assert any("concurrent/" in h for h in hrefs)
 
 
 def test_promote_refuses_external_root(tmp_path):

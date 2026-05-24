@@ -1585,18 +1585,8 @@ def cmd_promote(args: argparse.Namespace) -> int:
     ancestor_text = ancestor_index.read_text(encoding="utf-8")
     ancestor_rel = ancestor.relative_to(wiki_root)
     printable = "<wiki>/" if str(ancestor_rel) == "." else f"<wiki>/{ancestor_rel}/"
-    if not _md.has_section(ancestor_text, "Spaces"):
-        print(
-            f"  ! cannot register the promoted space: nearest ancestor "
-            f"{printable}index.md has no `## Spaces` section.",
-            file=sys.stderr,
-        )
-        print(
-            f"    Add `## Spaces` to {printable}index.md first, then retry. "
-            "See AGENTS.md for the navigation contract.",
-            file=sys.stderr,
-        )
-        return 2
+    # If the ancestor's `## Spaces` is missing, `_promote_mutate` (below) inserts
+    # it inside the locked region — no separate refuse path.
 
     basename = source.stem
     source_resolved = source.resolve()
@@ -1668,11 +1658,17 @@ def cmd_promote(args: argparse.Namespace) -> int:
     if not args.skip_aliases:
         new_source_text, aliases_added = _md.frontmatter_add_alias(new_source_text, basename)
 
+    rel_from_ancestor = target.parent.relative_to(ancestor)
+    label = f"{rel_from_ancestor}/"
+    href = f"{rel_from_ancestor}/index.md"
+
     if args.dry_run:
         print(f"  . (dry-run) would move {rel} -> {target_rel}")
         print(f"  . (dry-run) would rewrite links in {rewrite_files} file(s)")
         if aliases_added:
             print(f"  . (dry-run) would add alias '{basename}' to {target_rel}")
+        if not _md.has_section(ancestor_text, "Spaces"):
+            print(f"  . (dry-run) would insert `## Spaces` into {printable}index.md")
         print(f"  . (dry-run) would register entry under {printable}index.md ## Spaces")
         return 0
 
@@ -1712,25 +1708,55 @@ def cmd_promote(args: argparse.Namespace) -> int:
 
         target.write_text(new_source_text, encoding="utf-8")
 
-        # Apply planned rewrites EXCEPT the ancestor's index.md — we need to
-        # fold the entry-add into the same write so link rewrites aren't
-        # clobbered by a later `_add_space_entry(stale_text)`.
+        # Apply planned rewrites EXCEPT the ancestor's index.md — the ancestor
+        # mutation runs under flock via `_atomic_mutate_index`, recomputing
+        # link rewrites against the FRESH text it reads inside the lock so a
+        # concurrent `space add` can't clobber our rewrites.
         ancestor_index_resolved = ancestor_index.resolve()
-        ancestor_text_after_rewrites = ancestor_text
         for page, new_text in planned:
             if page.resolve() == ancestor_index_resolved:
-                ancestor_text_after_rewrites = new_text
                 continue
             page.write_text(new_text, encoding="utf-8")
 
-        rel_from_ancestor = target.parent.relative_to(ancestor)
-        label = f"{rel_from_ancestor}/"
-        href = f"{rel_from_ancestor}/index.md"
-        new_ancestor_text = _add_space_entry(
-            ancestor_text_after_rewrites, label, href, description
+        def _promote_mutate(fresh_text: str) -> tuple:
+            text = fresh_text
+            inserted = False
+            if not _md.has_section(text, "Spaces"):
+                if text and not text.endswith("\n"):
+                    text += "\n"
+                text += "\n## Spaces\n\n"
+                inserted = True
+            # Re-apply the link rewrite against fresh text so a concurrent
+            # writer can't clobber what we just rewrote.
+            rewritten = _rewrite_links_pointing_at(
+                text=text,
+                page=ancestor_index,
+                old_target=source_resolved,
+                new_target=new_target_abs,
+                new_target_wikilink=new_target_wikilink,
+                wiki_root=wiki_root,
+                candidates=candidates,
+            )
+            final = _add_space_entry(rewritten, label, href, description)
+            entry_added = final != rewritten
+            if inserted and entry_added:
+                tag = "inserted-and-added"
+            elif inserted:
+                tag = "inserted"
+            elif entry_added:
+                tag = "added"
+            else:
+                tag = "noop"
+            return (final, tag)
+
+        rc_a, info = _atomic_mutate_index(
+            ancestor, ancestor_index, _promote_mutate
         )
-        if new_ancestor_text != ancestor_text:
-            ancestor_index.write_text(new_ancestor_text, encoding="utf-8")
+        if rc_a != 0:
+            raise RuntimeError(f"ancestor mutation failed: {info}")
+        if info in ("inserted", "inserted-and-added"):
+            print(f"  ~ {printable}index.md  +inserted `## Spaces`")
+        if info in ("added", "inserted-and-added"):
             print(f"  ~ {printable}index.md ## Spaces  += [{label}]")
 
         print(f"  + promoted {rel} -> {target_rel}")
