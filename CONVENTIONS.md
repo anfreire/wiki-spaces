@@ -83,6 +83,8 @@ Per [`AGENTS.md / Sharing & nesting`](AGENTS.md#sharing--nesting), tools disting
 
 **Write operations** stay within the targeted space. Other spaces — owned or external — are written to only with explicit instruction.
 
+**Why does `mount` work without `--force-external` but `add shared/...` requires it?** Intentional. `mount` opts into external scope by construction — the command exists to set up external mounts, and the default destination (`shared/<basename>/`) is itself an external path. `add shared/...` requires `--force-external` because the user typed an owned-add verb against an externally-classified path, which is almost always a mistake; the flag is the explicit acknowledgement.
+
 **Traversal safeguards** (when crossing into other spaces):
 - Track visited realpaths (resolve symlinks) to break cycles.
 - Skip broken symlinks and uninitialized git submodules with a one-line notice; don't error out on them.
@@ -224,7 +226,7 @@ Aliases are mappings the normalizer uses to rewrite non-canonical tags to canoni
 | `log.md` | 100,000 (auto-rotates) |
 | `*.md` | 15,000 |
 
-`index.md` gets a small cap because it's the navigation hub — read often, should stay light. Content pages get a "single readable page" cap that triggers `space promote --split` when exceeded. `log.md` is append-only with automatic entry-based rotation to `log.archive-<YYYYMMDD-HHMMSS>.md` when the cap is reached.
+`index.md` gets a small cap because it's the navigation hub — read often, should stay light. Content pages get a "single readable page" cap that triggers `space promote` (then split by hand) when exceeded. `log.md` is append-only with automatic entry-based rotation to `log.archive-<YYYYMMDD-HHMMSS>.md` when the cap is reached.
 
 **Char counting:** `len(text)` with YAML frontmatter excluded. Frontmatter is metadata, not content. Everything else (headings, wikilinks, code blocks) counts — those are real bytes the consumer reads.
 
@@ -243,7 +245,7 @@ Example:
 
 **Match semantics** — patterns are matched via `fnmatch`. A pattern containing `/` matches against the wiki-root-relative path (`concepts/foo.md`); a pattern without `/` matches against the basename only (`index.md` matches every `index.md` at any depth).
 
-**Rejection guidance** — when a content page exceeds its cap, the producer (via `wiki-update`) suggests split → promote-with-`--split` → summarize, in that order. Splitting is preferred because a 15K content page would just become an over-cap 5K `index.md` after a plain promote.
+**Rejection guidance** — when a content page exceeds its cap, the producer (via `wiki-update`) suggests split → promote-then-split-by-hand → summarize, in that order. Splitting is preferred because a 15K content page would just become an over-cap 5K `index.md` after a plain promote.
 
 **If absent:** the built-in defaults apply unchanged.
 

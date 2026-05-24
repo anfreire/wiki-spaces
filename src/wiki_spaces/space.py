@@ -566,6 +566,18 @@ def cmd_add(args: argparse.Namespace) -> int:
         )
         return 2
 
+    if getattr(args, "dry_run", False):
+        already_space = (new_space / "index.md").is_file()
+        if already_space and not args.force_index:
+            print(f"  . (dry-run) {rel}/ already a space; would ensure ancestor entry")
+        else:
+            print(f"  . (dry-run) would create {rel}/index.md")
+        print(
+            f"  . (dry-run) would auto-insert `## Spaces` into ancestors "
+            f"as needed and register {rel}/ in the nearest ancestor."
+        )
+        return 0
+
     # Already exists?
     already_space = (new_space / "index.md").is_file()
     created_dir_this_call = False
@@ -1143,7 +1155,8 @@ def cmd_audit(args: argparse.Namespace) -> int:
     print(
         f"{errors} issue(s) found: {' + '.join(parts)}. Re-run after fixing, "
         "or use `wiki-spaces space add/remove` for `## Spaces` entries, "
-        "and `space promote --split` (or shrink) for size violations."
+        "and `space promote` then split sections by hand (or shrink the page) "
+        "for size violations."
     )
     return 1
 
@@ -2322,6 +2335,13 @@ def main(argv: list[str] | None = None) -> int:
         help="permit operating on a space outside the owned tree "
         "(under shared/, a foreign-origin submodule, or a symlink "
         "that escapes the wiki). Default: refuse.",
+    )
+    p_add.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the plan; touch nothing. Includes the chain-helper "
+        "preview (which ancestors would have `## Spaces` inserted and which "
+        "would gain the new entry).",
     )
     p_add.set_defaults(func=cmd_add)
 

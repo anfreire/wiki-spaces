@@ -44,6 +44,7 @@ wiki-spaces space mount /home/me/personal-notes --mode symlink
 ## Before mounting (any branch)
 
 - **Trust-scope classification depends on placement.** The heuristic in `CONVENTIONS.md / Owned vs external` marks a space as external only if it's under `<wiki>/shared/`, is a git submodule with a foreign origin, or is a symlink resolving outside the wiki tree. **A plain clone under `<wiki>/projects/<name>/` is classified as *owned* by the heuristic — writes are allowed by default.** The `space mount` default (`shared/<basename>/`) opts you into the external semantics; pass an explicit `[path]` to override.
+- **Why does `mount` work without `--force-external` but `add shared/...` requires it?** Intentional. `mount` opts into external scope by construction — the command exists to set up external mounts, and the default destination is itself an external path. `add shared/...` requires `--force-external` because the user typed an owned-add verb against an externally-classified path, which is almost always a mistake; the flag is the explicit acknowledgement.
 - **Parent's `## Spaces` is auto-inserted.** When the parent's `index.md` lacks the heading, `space mount` inserts it as the first step of the mount mutation — no prior setup required. The mounted target itself, however, must already carry `## Spaces` (wiki-spaces does not write into external mounts); see "Common pitfalls" below.
 
 ## Underlying mechanism (if you need to do it manually)

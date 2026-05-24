@@ -231,6 +231,20 @@ def test_cmd_add_existing_target_ensures_target_has_spaces_section(tmp_path):
     assert "## Spaces" in (wiki / "foo" / "index.md").read_text()
 
 
+def test_add_dry_run_prints_plan_no_fs_changes(tmp_path):
+    """`space add --dry-run` previews the chain-helper plan and touches
+    nothing on disk — no new directory, no `## Spaces` insertion into a
+    bare ancestor."""
+    wiki = _make_wiki(tmp_path, with_spaces_section=False)
+    before = (wiki / "index.md").read_text()
+    rc, out, _ = _run(["--wiki", str(wiki), "add", "newproj", "--dry-run"])
+    assert rc == 0
+    assert "(dry-run)" in out
+    assert not (wiki / "newproj").exists()
+    # Ancestor's bare `index.md` was NOT touched (dry-run preview only).
+    assert (wiki / "index.md").read_text() == before
+
+
 def test_cmd_add_description_goes_to_child_not_parent_entry(tmp_path):
     """v1 behavior: `space add foo --description X` writes X into foo's
     `## What this space is`, NOT into the parent's `## Spaces` entry

@@ -157,3 +157,32 @@ def test_doctor_wiki_flag_rejects_missing_index(tmp_path, capsys):
     assert rc == 1
     err = capsys.readouterr().err
     assert "no index.md" in err
+
+
+# ---------- PR-F: CLI help surface ----------
+
+def test_cli_help_hides_vendor_kepano_when_packaged(monkeypatch, capsys):
+    """`vendor-kepano` is a dev-only subcommand — the install refuses it on
+    packaged wheels (`vendor_kepano.main` checks `is_packaged()`). It must
+    not appear in the packaged `--help` text either; users would otherwise
+    see a command they cannot actually run."""
+    from wiki_spaces import cli, _common
+    monkeypatch.setattr(_common, "is_packaged", lambda: True)
+    assert "vendor-kepano" not in cli._help_text()
+
+
+def test_cli_help_includes_vendor_kepano_in_dev(monkeypatch, capsys):
+    """In a dev checkout (`is_packaged()` False), `vendor-kepano` IS
+    listed — that's the audience for the command."""
+    from wiki_spaces import cli, _common
+    monkeypatch.setattr(_common, "is_packaged", lambda: False)
+    assert "vendor-kepano" in cli._help_text()
+
+
+def test_cli_help_no_longer_mentions_update():
+    """`update` was removed in PR-F; the help text should not advertise it."""
+    from wiki_spaces import cli
+    help_text = cli._help_text()
+    # Match the column "update" line specifically; "updated" / "updating"
+    # prose elsewhere would be fine.
+    assert "  update " not in help_text

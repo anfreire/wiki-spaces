@@ -5,7 +5,6 @@ Dispatches to a subcommand module's `main()`:
   wiki-spaces install [--all] [--dry-run] [--copy] [--harness <key>]
   wiki-spaces init <path> [--with ...] [--folders ...] [--git] [--name <n>]
   wiki-spaces doctor [--no-net]
-  wiki-spaces update [flags forwarded to install]
   wiki-spaces vendor-kepano [--ref <git-ref>]    # dev only
 
 Each subcommand owns its own argparse — pass --help to any subcommand for
@@ -20,30 +19,31 @@ from __future__ import annotations
 import importlib
 import sys
 
+from . import _common
+
 COMMANDS: dict[str, str] = {
     "install": "wiki_spaces.install",
     "init": "wiki_spaces.init_wiki",
     "doctor": "wiki_spaces.doctor",
-    "update": "wiki_spaces.update",
     "space": "wiki_spaces.space",
     "vendor-kepano": "wiki_spaces.vendor_kepano",
 }
 
 
 def _help_text() -> str:
-    return (
+    base = (
         "usage: wiki-spaces <command> [args...]\n"
         "\n"
         "Commands:\n"
         "  install         install skills into detected harnesses; set repo path\n"
         "  init            scaffold a new wiki and register it as canonical\n"
         "  doctor          audit config + harness installs + vendored kepano\n"
-        "  update          re-vendor (dev) + re-run install\n"
         "  space           add/remove/mount/promote/audit spaces; maintains ## Spaces contract\n"
-        "  vendor-kepano   re-vendor kepano upstream (dev only)\n"
-        "\n"
-        "Pass --help to any subcommand for its flags."
     )
+    if not _common.is_packaged():
+        base += "  vendor-kepano   re-vendor kepano upstream (dev only)\n"
+    base += "\nPass --help to any subcommand for its flags."
+    return base
 
 
 def main(argv: list[str] | None = None) -> int:

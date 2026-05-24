@@ -14,8 +14,7 @@ package modules.
 - [`install.py`](install.py) — `wiki-spaces install`: link wiki + kepano skills into detected harnesses; write `repo = <data-path>` to the config.
 - [`init_wiki.py`](init_wiki.py) — `wiki-spaces init`: scaffold a new canonical wiki at a given path; writes `wiki = <path>` to the config (unless `--no-config`).
 - [`doctor.py`](doctor.py) — `wiki-spaces doctor`: read-only audit of config validity, vendor pin, per-harness skill install state.
-- [`update.py`](update.py) — `wiki-spaces update`: re-vendor kepano (dev) + re-run install (idempotent superset).
-- [`vendor_kepano.py`](vendor_kepano.py) — `wiki-spaces vendor-kepano`: shallow-clone kepano upstream and refresh `vendor/kepano/`. Dev-only; refuses to run from a packaged install.
+- [`vendor_kepano.py`](vendor_kepano.py) — `wiki-spaces vendor-kepano`: shallow-clone kepano upstream and refresh `vendor/kepano/`. Dev-only; refuses to run from a packaged install. The dev refresh workflow is `./scripts/vendor_kepano.py && ./scripts/install.py`.
 
 Invocation: `./scripts/<name>.py [args]`. Each shim declares its inline
 metadata for uv; first run on a fresh box may take a moment while `uv`
