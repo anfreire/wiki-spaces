@@ -1672,12 +1672,21 @@ def cmd_promote(args: argparse.Namespace) -> int:
         print(f"  . (dry-run) would register entry under {printable}index.md ## Spaces")
         return 0
 
-    # Snapshot every affected file outside the wiki tree.
+    # Snapshot every affected file outside the wiki tree. We DELIBERATELY
+    # exclude `ancestor_index` here — it is mutated only inside
+    # `_atomic_mutate_index` (lock-protected atomic write). Including a
+    # pre-lock snapshot of it in the rollback set would let `_restore_from_snapshot`
+    # overwrite concurrent writes that committed between our outer read at
+    # the top of `cmd_promote` and the lock acquisition inside the helper.
+    ancestor_index_resolved = ancestor_index.resolve()
     snapshot_dir = Path(tempfile.mkdtemp(prefix="wiki-spaces-promote-"))
     try:
-        snapshot_set = {source.resolve(), ancestor_index.resolve()}
+        snapshot_set = {source.resolve()}
         for p, _new in planned:
-            snapshot_set.add(p.resolve())
+            p_resolved = p.resolve()
+            if p_resolved == ancestor_index_resolved:
+                continue
+            snapshot_set.add(p_resolved)
         wiki_root_resolved = wiki_root.resolve()
         for p in snapshot_set:
             try:
@@ -1712,7 +1721,6 @@ def cmd_promote(args: argparse.Namespace) -> int:
         # mutation runs under flock via `_atomic_mutate_index`, recomputing
         # link rewrites against the FRESH text it reads inside the lock so a
         # concurrent `space add` can't clobber our rewrites.
-        ancestor_index_resolved = ancestor_index.resolve()
         for page, new_text in planned:
             if page.resolve() == ancestor_index_resolved:
                 continue

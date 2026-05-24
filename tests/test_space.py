@@ -1751,6 +1751,47 @@ def test_promote_ancestor_uses_atomic_mutate_index(tmp_path, monkeypatch):
     assert any("concurrent/" in h for h in hrefs)
 
 
+def test_promote_rollback_does_not_clobber_concurrent_ancestor_write(tmp_path, monkeypatch):
+    """Promote takes a snapshot of every affected file at the start so it
+    can roll back on failure. The snapshot is taken BEFORE the lock is
+    acquired on the ancestor, so a concurrent process can commit a sibling
+    entry to the ancestor's `## Spaces` after our snapshot but before our
+    locked write. If `_atomic_mutate_index` then fails (after the concurrent
+    write has landed), the rollback path must NOT restore the pre-snapshot
+    ancestor text — doing so would silently overwrite the concurrent change.
+
+    This regression test patches `_atomic_mutate_index` to (1) inject a
+    concurrent `## Spaces` entry into the ancestor and (2) return a write
+    failure. Assert the concurrent entry survives the resulting rollback."""
+    wiki = _make_wiki(tmp_path)
+    page = wiki / "page.md"
+    page.write_text("# page\n")
+
+    def patched_atomic(ancestor, ancestor_index, mutate_fn):
+        # Step 1: simulate a concurrent writer committing a sibling entry
+        # between our outer ancestor_text read and our lock acquisition.
+        original = ancestor_index.read_text(encoding="utf-8")
+        new = original.replace(
+            "## Spaces\n", "## Spaces\n\n- [concurrent/](concurrent/index.md)\n"
+        )
+        ancestor_index.write_text(new, encoding="utf-8")
+        # Step 2: fail the locked write. Caller raises and rolls back.
+        return 1, "simulated lock-time write failure"
+
+    monkeypatch.setattr(space, "_atomic_mutate_index", patched_atomic)
+
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc != 0
+    # Source must be restored (other planned files use snapshot-restore).
+    assert (wiki / "page.md").exists()
+    # Ancestor must NOT have been restored from the stale snapshot — the
+    # concurrent entry survives the rollback.
+    root_text = (wiki / "index.md").read_text()
+    assert "concurrent/index.md" in root_text
+    # The promote entry was never committed (atomic helper returned rc=1).
+    assert "page/index.md" not in root_text
+
+
 def test_promote_refuses_external_root(tmp_path):
     wiki = _make_wiki(tmp_path)
     (wiki / "shared").mkdir()
