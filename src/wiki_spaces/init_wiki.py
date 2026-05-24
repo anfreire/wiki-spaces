@@ -214,6 +214,19 @@ def main(argv: list[str] | None = None) -> int:
         if f.exists() and not args.force:
             skipped.append(rel)
             return
+        # PR-L: framework writes route through `_enforce_size_cap`. `init`
+        # never silently truncates a too-long description — refuse so the
+        # user can shorten it. Late import to keep the cold-start path light.
+        if rel.endswith(".md") and rel != "log.md":
+            from . import space as _space
+            try:
+                _space._enforce_size_cap(f, content, root)
+            except _space.SizeCapExceeded as e:
+                # Surface and skip this single write; the caller already
+                # returns 1 on git_failed; emit the same shape here.
+                print(f"  ! size cap: {e}", file=sys.stderr)
+                skipped.append(rel + " (over cap)")
+                return
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(content)
         written.append(rel)

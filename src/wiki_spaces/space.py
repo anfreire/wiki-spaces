@@ -713,8 +713,18 @@ def cmd_add(args: argparse.Namespace) -> int:
         )
         return 0
 
-    # Already exists?
+    # PR-L: size-cap check BEFORE mkdir, so an over-cap description aborts
+    # cleanly without leaving an empty directory + a stranded `index.md`.
     already_space = (new_space / "index.md").is_file()
+    if not already_space or args.force_index:
+        display_name = args.name or new_space.name
+        description_for_body = (args.description or "").strip() or None
+        projected_text = _new_index_md(display_name, description_for_body)
+        try:
+            _enforce_size_cap(new_space / "index.md", projected_text, wiki_root)
+        except SizeCapExceeded as e:
+            print(f"  ! size cap: {e}", file=sys.stderr)
+            return 2
     created_dir_this_call = False
     created_index_this_call = False
     # Track every directory THIS call creates (the leaf and any intermediate
@@ -2111,6 +2121,29 @@ def _is_git_tracked(path: Path, wiki_root: Path) -> bool:
         return False
 
 
+def _mask_for_link_scan(text: str) -> str:
+    """Return an offset-preserving mask of `text` that hides code spans and
+    YAML frontmatter from a link scanner.
+
+    Shared by `_rewrite_links_pointing_at` and `_adjust_outgoing_links_for_depth`
+    so the scan is consistent across both promote-time rewriters — without
+    this, the outgoing-link adjustment would happily rewrite `[[wikilinks]]`
+    inside fenced code or frontmatter (a producer/consumer break of the
+    same shape as the v0.7 defect, different code path).
+
+    Uses `_md.FRONTMATTER_RE.match` to locate the frontmatter span instead
+    of `text.index("---", 4)` so atypical leading newlines / malformed
+    fences don't throw.
+    """
+    m = _md.FRONTMATTER_RE.match(text)
+    if m is not None:
+        body_start = m.start(2)
+        return (" " * body_start) + _md.mask_code_spans_offset_preserving(
+            text[body_start:]
+        )
+    return _md.mask_code_spans_offset_preserving(text)
+
+
 def _rewrite_links_pointing_at(
     *,
     text: str,
@@ -2137,21 +2170,7 @@ def _rewrite_links_pointing_at(
     rewrite the promote step makes can never be misread as broken by a
     subsequent audit.
     """
-    # Mask code spans and frontmatter for the SCAN — offset-preserving so
-    # span positions from `parse_*` are valid against the ORIGINAL text. This
-    # prevents the rewrite from touching `[[wikilinks]]` inside fenced code
-    # examples or YAML frontmatter (those aren't real links).
-    fm_text, _ = _md.split_frontmatter(text)
-    if fm_text is not None:
-        # Replace the frontmatter region with spaces (same length) so any
-        # wikilink-shaped strings inside frontmatter are invisible to the
-        # scan. The fence delimiters (`---\n` … `---\n`) are short; the
-        # easiest correct mask is to overwrite the whole leading region
-        # with spaces of the same length.
-        fm_block_end = text.index("---", 4) + len("---\n")
-        masked = (" " * fm_block_end) + _md.mask_code_spans_offset_preserving(text[fm_block_end:])
-    else:
-        masked = _md.mask_code_spans_offset_preserving(text)
+    masked = _mask_for_link_scan(text)
 
     replacements: list[tuple[int, int, str]] = []
     for link in _md.parse_markdown_links(masked):
@@ -2204,8 +2223,13 @@ def _adjust_outgoing_links_for_depth(
         new_file_resolved = new_file.resolve()
     except OSError:
         pass
+    # Mask code spans + frontmatter for the scan — same protection as
+    # `_rewrite_links_pointing_at` (§29). Without this, a `[label](file.md)`
+    # inside a fenced code block or YAML frontmatter would be rewritten as
+    # if it were a real markdown link.
+    masked = _mask_for_link_scan(text)
     replacements: list[tuple[int, int, str]] = []
-    for link in _md.parse_markdown_links(text):
+    for link in _md.parse_markdown_links(masked):
         target = _md.resolve_markdown_link(link.href, original_file, wiki_root)
         if target is None:
             continue
@@ -2267,6 +2291,63 @@ def _entry_label_description_map(
                 continue
             out[child_real] = (entry.label or href_dir, entry.description)
     return out
+
+
+def cmd_check_size(args: argparse.Namespace) -> int:
+    """Print a size-cap verdict for a projected post-write text.
+
+    Usage:
+      wiki-spaces space check-size <rel-path> --projected-file <text-file>
+      wiki-spaces space check-size <rel-path> --projected-stdin
+      cat new-content.md | wiki-spaces space check-size <rel-path>
+
+    Prints `OK <chars>/<cap>`, `OK-SHRINKING <chars>/<cap>`, or
+    `OVER <chars>/<cap>`. Exit 0 for OK and OK-SHRINKING (the shrinking-
+    write hatch from legacy bloat); exit 1 for OVER.
+
+    The point of the CLI: skills compute projected content in memory,
+    then shell out for the verdict — no more "the LLM did the math
+    wrong" as a defect class (§S3). Same `_size_check_outcome` helper
+    the framework writers use, so verdicts always agree.
+    """
+    wiki_root = _resolve_wiki_strict(args.wiki)
+    if wiki_root is None:
+        print(
+            "  ! no wiki resolved (or wiki has no `## Spaces` section). "
+            "Pass --wiki <path> or set `wiki` in config.",
+            file=sys.stderr,
+        )
+        return 2
+    if args.path.startswith("/") or ".." in Path(args.path).parts:
+        print("  ! path must be wiki-root-relative", file=sys.stderr)
+        return 2
+    target = wiki_root / args.path
+    if args.projected_stdin:
+        projected = sys.stdin.read()
+    elif args.projected_file:
+        try:
+            projected = Path(args.projected_file).read_text(encoding="utf-8")
+        except OSError as e:
+            print(
+                f"  ! could not read {args.projected_file}: {e}",
+                file=sys.stderr,
+            )
+            return 2
+    else:
+        # Sensible default: read stdin if it isn't a TTY.
+        if not sys.stdin.isatty():
+            projected = sys.stdin.read()
+        else:
+            print(
+                "  ! pass --projected-stdin or --projected-file <path>, or "
+                "pipe content into stdin",
+                file=sys.stderr,
+            )
+            return 2
+    outcome, chars, cap = _size_check_outcome(target, projected, wiki_root)
+    label = {"ok": "OK", "ok-shrinking": "OK-SHRINKING", "over": "OVER"}[outcome]
+    print(f"{label} {chars}/{cap}")
+    return 1 if outcome == "over" else 0
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -2590,6 +2671,42 @@ def cmd_promote(args: argparse.Namespace) -> int:
             print(f"  . (dry-run) would insert `## Spaces` into {printable}index.md")
         print(f"  . (dry-run) would register entry under {printable}index.md ## Spaces")
         return 0
+
+    # PR-L: preflight EVERY projected write against its size cap BEFORE we
+    # touch the filesystem. Promote produces several mutations (the new
+    # `index.md`, the planned rewrites, the ancestor's `## Spaces` entry);
+    # without the preflight, a cap rejection mid-mutation would leave a
+    # half-promoted tree. Project the ancestor's `_add_space_entry` result
+    # against the OUTER-read ancestor text — a concurrent writer could
+    # change ancestor text between this check and `_atomic_mutate_index`,
+    # but the in-helper cap check (PR-D) catches that.
+    try:
+        _enforce_size_cap(target, new_source_text, wiki_root)
+        for page, new_text in planned:
+            _enforce_size_cap(page, new_text, wiki_root)
+        # Project the ancestor entry add (ignoring concurrent rewrites for
+        # this preflight — the in-helper check below catches mid-flight
+        # concurrent growth).
+        if _md.has_section(ancestor_text, "Spaces"):
+            projected_ancestor = _add_space_entry(
+                ancestor_text, label, href, description
+            )
+        else:
+            projected_ancestor = (
+                ancestor_text
+                + ("\n" if ancestor_text and not ancestor_text.endswith("\n") else "")
+                + "\n## Spaces\n\n"
+            )
+            projected_ancestor = _add_space_entry(
+                projected_ancestor, label, href, description
+            )
+        _enforce_size_cap(ancestor_index, projected_ancestor, wiki_root)
+    except SizeCapExceeded as e:
+        print(
+            f"  ! size cap: {e}. Aborted before any FS write.",
+            file=sys.stderr,
+        )
+        return 2
 
     # Snapshot every affected file outside the wiki tree. We DELIBERATELY
     # exclude `ancestor_index` here — it is mutated only inside
@@ -2964,6 +3081,26 @@ def main(argv: list[str] | None = None) -> int:
         help="print the plan; touch nothing",
     )
     p_mount.set_defaults(func=cmd_mount)
+
+    p_check_size = sub.add_parser(
+        "check-size",
+        help="print a size-cap verdict for a projected post-write text",
+    )
+    p_check_size.add_argument(
+        "path",
+        help="wiki-root-relative path of the target file (used to look up "
+        "the per-pattern cap from `_meta/limits.md`).",
+    )
+    p_check_size.add_argument(
+        "--projected-file",
+        help="read the projected post-write content from this file.",
+    )
+    p_check_size.add_argument(
+        "--projected-stdin",
+        action="store_true",
+        help="read the projected post-write content from stdin.",
+    )
+    p_check_size.set_defaults(func=cmd_check_size)
 
     p_list = sub.add_parser(
         "list",

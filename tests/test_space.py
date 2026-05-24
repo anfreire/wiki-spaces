@@ -24,10 +24,18 @@ def _make_wiki(tmp_path: Path, with_spaces_section: bool = True) -> Path:
     return root
 
 
-def _run(args: list[str]) -> tuple[int, str, str]:
+def _run(args: list[str], *, stdin: str | None = None) -> tuple[int, str, str]:
+    import sys as _sys
     out, err = io.StringIO(), io.StringIO()
-    with redirect_stdout(out), redirect_stderr(err):
-        rc = space.main(args)
+    if stdin is not None:
+        saved_stdin = _sys.stdin
+        _sys.stdin = io.StringIO(stdin)
+    try:
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = space.main(args)
+    finally:
+        if stdin is not None:
+            _sys.stdin = saved_stdin
     return rc, out.getvalue(), err.getvalue()
 
 
@@ -1304,6 +1312,132 @@ def test_audit_json_emits_structured_payload(tmp_path):
     assert any(d["missing"] for d in payload["drift"])
     assert any("no-such-page" in b["target"] for b in payload["broken_wikilinks"])
     assert any("empty" in m["issue"] for m in payload["malformed_entries"])
+
+
+# ---------- PR-L: size discipline + check-size + outgoing-link mask ----------
+
+def test_check_size_ok(tmp_path):
+    """`space check-size` returns OK for under-cap content."""
+    wiki = _make_wiki(tmp_path)
+    rc, out, _ = _run([
+        "--wiki", str(wiki), "check-size", "page.md",
+        "--projected-stdin",
+    ], stdin="# short body\n")
+    assert rc == 0
+    assert out.startswith("OK ")
+
+
+def test_check_size_over_exits_1(tmp_path):
+    """OVER outcome exits 1 — skills gate writes on this."""
+    wiki = _make_wiki(tmp_path)
+    huge = "x" * 16000
+    rc, out, _ = _run([
+        "--wiki", str(wiki), "check-size", "page.md",
+        "--projected-stdin",
+    ], stdin=huge)
+    assert rc == 1
+    assert out.startswith("OVER ")
+
+
+def test_check_size_rejects_absolute_path(tmp_path):
+    """Path must be wiki-root-relative."""
+    wiki = _make_wiki(tmp_path)
+    rc, _, err = _run([
+        "--wiki", str(wiki), "check-size", "/etc/passwd",
+        "--projected-stdin",
+    ], stdin="x")
+    assert rc == 2
+    assert "wiki-root-relative" in err
+
+
+def test_add_refuses_over_cap_description_before_mkdir(tmp_path):
+    """`space add --description <huge>` must refuse BEFORE creating any
+    directory. Otherwise rejection leaves a stranded empty folder."""
+    wiki = _make_wiki(tmp_path)
+    huge = "x" * 6000  # over the 5000-char `index.md` cap
+    rc, _, err = _run([
+        "--wiki", str(wiki), "add", "newproj", "--description", huge,
+    ])
+    assert rc == 2
+    assert "size cap" in err
+    assert not (wiki / "newproj").exists(), \
+        "new directory was created despite cap rejection"
+
+
+def test_promote_preflights_size_caps_before_rename(tmp_path):
+    """All projected writes are checked BEFORE the rename. An over-cap
+    ancestor projection aborts the promote without moving the source."""
+    wiki = _make_wiki(tmp_path)
+    # Push the wiki root just under the cap so the entry-add pushes over.
+    idx = wiki / "index.md"
+    bulky = "x" * 4990
+    idx.write_text(idx.read_text() + bulky + "\n")
+    (wiki / "page.md").write_text("# page\n\nbody\n")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc == 2
+    assert "size cap" in err
+    # Source unmoved.
+    assert (wiki / "page.md").is_file()
+    assert not (wiki / "page").exists()
+
+
+def test_promote_outgoing_link_does_not_rewrite_code_block(tmp_path):
+    """§29 — the outgoing-link adjustment must mask code spans, same as
+    the cross-page rewriter. A `[label](sibling.md)` inside a fenced
+    code block is documentation, not a real link."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "sibling.md").write_text("# sibling\n")
+    page = wiki / "page.md"
+    page.write_text(
+        "# page\n\n"
+        "```\n"
+        "[sibling](sibling.md)\n"
+        "```\n"
+    )
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc == 0, err
+    moved = (wiki / "page" / "index.md").read_text()
+    # The code block's `[sibling](sibling.md)` must survive unchanged —
+    # NOT be rewritten to `(../sibling.md)`.
+    assert "[sibling](sibling.md)" in moved
+    assert "../sibling.md" not in moved
+
+
+def test_promote_outgoing_link_does_not_rewrite_frontmatter(tmp_path):
+    """§29 — frontmatter strings shaped like markdown links shouldn't be
+    rewritten by the outgoing-link adjustment."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "sibling.md").write_text("# sibling\n")
+    page = wiki / "page.md"
+    page.write_text(
+        "---\n"
+        "source: \"[ref](sibling.md)\"\n"
+        "---\n"
+        "# page\n\n"
+        "body\n"
+    )
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc == 0, err
+    moved = (wiki / "page" / "index.md").read_text()
+    # Frontmatter literal survives.
+    assert "[ref](sibling.md)" in moved
+    assert "[ref](../sibling.md)" not in moved
+
+
+def test_init_refuses_over_cap_description(tmp_path):
+    """init's `--description` writes to `index.md` whose cap is 5000.
+    A 6000-char description is refused; no `index.md` is left behind."""
+    huge = "x" * 6000
+    root = tmp_path / "wiki"
+    from wiki_spaces import init_wiki
+    rc = init_wiki.main([
+        str(root), "--description", huge, "--no-config",
+    ])
+    # init's write helper logs the size-cap skip but exits 0 (other writes
+    # may still happen). The critical check: the over-cap index.md is NOT
+    # on disk after the call.
+    assert not (root / "index.md").is_file(), \
+        "init wrote an over-cap index.md despite the size-cap helper"
 
 
 def test_audit_excludes_archives_space_from_drift(tmp_path):
@@ -2719,11 +2853,12 @@ def test_promote_rollback_removes_orphaned_target_dir(tmp_path, monkeypatch):
     be cleaned up — not left as an empty folder polluting the wiki."""
     wiki = _make_wiki(tmp_path)
     (wiki / "page.md").write_text("# page\n\nbody\n")
-    # Sabotage: make _add_space_entry raise to force rollback.
-    def boom(*args, **kwargs):
-        raise RuntimeError("simulated mid-promote failure")
-
-    monkeypatch.setattr(space, "_add_space_entry", boom)
+    # Sabotage AFTER the preflight: make `_atomic_mutate_index` fail on the
+    # ancestor write so the outer try/except catches it and rolls back.
+    monkeypatch.setattr(
+        space, "_atomic_mutate_index",
+        lambda *a, **k: (1, "simulated mid-promote failure"),
+    )
     rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
     assert rc == 2
     assert "rolled back" in err or "failed" in err
@@ -2740,11 +2875,10 @@ def test_promote_rollback_preserves_preexisting_empty_target_dir(tmp_path, monke
     wiki = _make_wiki(tmp_path)
     (wiki / "page.md").write_text("# page\n\nbody\n")
     (wiki / "page").mkdir()  # user pre-created the empty target dir
-    # Sabotage promote so it rolls back.
-    def boom(*args, **kwargs):
-        raise RuntimeError("simulated mid-promote failure")
-
-    monkeypatch.setattr(space, "_add_space_entry", boom)
+    monkeypatch.setattr(
+        space, "_atomic_mutate_index",
+        lambda *a, **k: (1, "simulated mid-promote failure"),
+    )
     rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
     assert rc == 2
     # Pre-existing directory must survive.
