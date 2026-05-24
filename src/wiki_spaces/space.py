@@ -1087,6 +1087,15 @@ def cmd_audit(args: argparse.Namespace) -> int:
     # ensure-section pass on the root before we enumerate drift.
     fix = getattr(args, "fix", False)
     remove_stale = getattr(args, "remove_stale", False)
+    json_mode = getattr(args, "json", False)
+    # JSON mode buffers stdout so the inline drift/broken/etc. lines don't
+    # appear in the structured output. Errors still go to stderr.
+    if json_mode:
+        import io
+        from contextlib import redirect_stdout
+        _buf = io.StringIO()
+        _redirect = redirect_stdout(_buf)
+        _redirect.__enter__()
     if remove_stale and not fix:
         print(
             "  ! --remove-stale requires --fix",
@@ -1312,6 +1321,91 @@ def cmd_audit(args: argparse.Namespace) -> int:
         + len(malformed)
         + len(duplicate_aliases)
     )
+    if json_mode:
+        # Drop the captured human output; emit a single JSON object.
+        _redirect.__exit__(None, None, None)
+        import json as _json
+        exit_code = 0 if errors == 0 else 1
+        # Rebuild `missing_by_space` / `stale_by_space` from the per-space loop
+        # results above (we accumulated them inline; for JSON, walk again
+        # cheaply since the data is fast to recompute and avoids carrying
+        # state through 100+ lines).
+        drift_payload: list[dict] = []
+        for space_p in all_spaces:
+            try:
+                text = (space_p / "index.md").read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if not _md.has_section(text, "Spaces"):
+                continue
+            listed = {
+                _spaces_href_to_dir(e.href)
+                for e in _md.parse_section_entries(text, "Spaces")
+                if e.href
+            }
+            miss = sorted(expected[space_p] - listed)
+            stl = sorted(
+                d for d in listed if not (space_p / d / "index.md").is_file()
+            )
+            if miss or stl:
+                drift_payload.append({
+                    "ancestor": str(space_p.relative_to(wiki_root).as_posix()) or ".",
+                    "missing": miss,
+                    "stale": stl,
+                })
+        out = {
+            "wiki": str(wiki_root),
+            "summary": {
+                "spaces": len(all_spaces),
+                "include_external": include_external,
+            },
+            "drift": drift_payload,
+            "broken_wikilinks": [
+                {
+                    "page": str(p.relative_to(wiki_root).as_posix()),
+                    "target": link,
+                }
+                for p, link in broken
+            ],
+            "size_violations": [
+                {
+                    "path": str(p.relative_to(wiki_root).as_posix()),
+                    "chars": chars,
+                    "cap": cap,
+                }
+                for p, chars, cap in over_cap
+            ],
+            "approaching_cap": [
+                {
+                    "path": str(p.relative_to(wiki_root).as_posix()),
+                    "chars": chars,
+                    "cap": cap,
+                }
+                for p, chars, cap in approaching
+            ],
+            "orphans": [
+                str(p.relative_to(wiki_root).as_posix()) for p in orphans
+            ],
+            "malformed_entries": [
+                {
+                    "space": str(sp.relative_to(wiki_root).as_posix()) or ".",
+                    "issue": issue,
+                }
+                for sp, issue in malformed
+            ],
+            "duplicate_aliases": [
+                {
+                    "alias": alias,
+                    "pages": [
+                        str(p.relative_to(wiki_root).as_posix()) for p in pages
+                    ],
+                }
+                for alias, pages in duplicate_aliases
+            ],
+            "exit_code": exit_code,
+        }
+        print(_json.dumps(out, indent=2))
+        return exit_code
     print()
     if errors == 0:
         info_parts: list[str] = []
@@ -2141,6 +2235,220 @@ def _restore_from_snapshot(snapshot_dir: Path, wiki_root: Path) -> None:
         shutil.copy2(snap_file, dest)
 
 
+def _entry_label_description_map(
+    wiki_root: Path, *, include_external: bool
+) -> dict[Path, tuple[str, str | None]]:
+    """Build `child_resolved_path -> (label, description)` by walking the
+    contract and collecting each parent's `## Spaces` entry metadata.
+
+    Used by `cmd_list --json` so the JSON output carries label and
+    description fields the placement classifier (skills) consumes.
+    """
+    out: dict[Path, tuple[str, str | None]] = {}
+    for parent, _ext in _walk_via_spaces_contract(
+        wiki_root, include_external=include_external
+    ):
+        try:
+            text = (parent / "index.md").read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for entry in _md.parse_section_entries(text, "Spaces"):
+            if not entry.href:
+                continue
+            href_dir = _spaces_href_to_dir(entry.href)
+            if not href_dir:
+                continue
+            href_path = Path(href_dir)
+            if href_path.is_absolute() or ".." in href_path.parts:
+                continue
+            try:
+                child_real = (parent / href_dir).resolve()
+            except OSError:
+                continue
+            out[child_real] = (entry.label or href_dir, entry.description)
+    return out
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    """List spaces reachable via the `## Spaces` contract.
+
+    Default: tab-separated `path\\tclassification` lines for shell use.
+    With `--json`: structured `{path, label, description, external}` per
+    space (the root is excluded — placement classifiers want children
+    only). With `--include-boundaries --include-external`: also surfaces
+    external boundary folders without `index.md` (foreign submodules,
+    escaping symlinks). The placement classifier in `wiki-update` uses
+    that combination to enumerate every external path to exclude.
+    """
+    wiki_root = _resolve_wiki_strict(args.wiki)
+    if wiki_root is None:
+        print(
+            "  ! no wiki resolved (or wiki has no `## Spaces` section). "
+            "Pass --wiki <path> or set `wiki` in config.",
+            file=sys.stderr,
+        )
+        return 2
+
+    if args.include_boundaries and not args.include_external:
+        print(
+            "  ! --include-boundaries requires --include-external",
+            file=sys.stderr,
+        )
+        return 2
+
+    spaces = list(
+        _walk_via_spaces_contract(
+            wiki_root, include_external=args.include_external
+        )
+    )
+    if args.include_boundaries:
+        # Surface external boundary folders that `_walk_via_spaces_contract`
+        # missed because they lack `index.md` (foreign submodules, escaping
+        # symlinks). Dedupe on resolved path; emit lexical path so callers
+        # can do `.relative_to(wiki_root)` (an escaping symlink's resolved
+        # path is outside the wiki tree).
+        seen_real: set[Path] = set()
+        for s, _ in spaces:
+            try:
+                seen_real.add(s.resolve())
+            except OSError:
+                continue
+        for path, classification, _reason in _walk_classified(
+            wiki_root, include_external=True
+        ):
+            if classification != "external":
+                continue
+            try:
+                if path.resolve() in seen_real:
+                    continue
+            except OSError:
+                continue
+            spaces.append((path, True))
+
+    label_map = _entry_label_description_map(
+        wiki_root, include_external=args.include_external
+    )
+
+    if args.json:
+        import json
+        out: list[dict] = []
+        for s, is_ext in spaces:
+            if s == wiki_root:
+                continue
+            try:
+                s_real = s.resolve()
+            except OSError:
+                s_real = s
+            rel = s.relative_to(wiki_root).as_posix()
+            label, description = label_map.get(s_real, (f"{rel}/", None))
+            out.append({
+                "path": rel,
+                "label": label,
+                "description": description,
+                "external": is_ext,
+            })
+        print(json.dumps(out, indent=2))
+    else:
+        for s, is_ext in spaces:
+            rel = "." if s == wiki_root else s.relative_to(wiki_root).as_posix()
+            tag = "external" if is_ext else "owned"
+            print(f"{rel}\t{tag}")
+    return 0
+
+
+def cmd_files(args: argparse.Namespace) -> int:
+    """List `.md` files reachable via the `## Spaces` contract.
+
+    Walks owned scope by default; `--include-external` opts external
+    subtrees in. With a `space` argument, scopes output to files under
+    that wiki-root-relative space (which must be contract-reachable —
+    unregistered subspaces are refused with a hint to run `space audit`).
+
+    The walker runs from `wiki_root` even when a scope is given; output
+    is filtered lexically afterward so an opted-in external symlink
+    whose resolved path leaves the tree is still included.
+    """
+    wiki_root = _resolve_wiki_strict(args.wiki)
+    if wiki_root is None:
+        print(
+            "  ! no wiki resolved (or wiki has no `## Spaces` section). "
+            "Pass --wiki <path> or set `wiki` in config.",
+            file=sys.stderr,
+        )
+        return 2
+
+    scope_root: Path | None = None
+    if args.space:
+        if args.space.startswith("/") or ".." in Path(args.space).parts:
+            print("  ! space must be wiki-root-relative", file=sys.stderr)
+            return 2
+        scope_root = wiki_root / args.space
+        if not scope_root.is_dir():
+            print(f"  ! {args.space}: not a directory", file=sys.stderr)
+            return 2
+        # Contract-reachable check: build the reachable set via
+        # `_walk_via_spaces_contract` and refuse on unregistered scopes
+        # (the consumer-side traversal must respect the contract).
+        reachable: set[Path] = set()
+        for s, _ in _walk_via_spaces_contract(
+            wiki_root, include_external=args.include_external
+        ):
+            try:
+                reachable.add(s.resolve())
+            except OSError:
+                continue
+        try:
+            scope_real = scope_root.resolve()
+        except OSError:
+            print(f"  ! {args.space}: cannot resolve", file=sys.stderr)
+            return 2
+        if scope_real not in reachable:
+            print(
+                f"  ! {args.space}: not reachable via parent `## Spaces`; "
+                "unregistered spaces are not consumer-visible. Run "
+                "`wiki-spaces space audit` to surface drift.",
+                file=sys.stderr,
+            )
+            return 2
+
+    all_files = list(
+        _walk_md_files_via_contract(
+            wiki_root, include_external=args.include_external
+        )
+    )
+    if scope_root is None or scope_root == wiki_root:
+        files = all_files
+    else:
+        # Filter lexically — external symlinks live lexically under
+        # wiki_root even when their resolved path doesn't.
+        scope_str = str(scope_root) + os.sep
+        files = [
+            (f, is_ext)
+            for f, is_ext in all_files
+            if str(f).startswith(scope_str) or f == scope_root
+        ]
+
+    if args.json:
+        import json
+        print(
+            json.dumps(
+                [
+                    {
+                        "path": f.relative_to(wiki_root).as_posix(),
+                        "external": is_ext,
+                    }
+                    for f, is_ext in files
+                ],
+                indent=2,
+            )
+        )
+    else:
+        for f, is_ext in files:
+            tag = "\texternal" if is_ext else ""
+            print(f"{f.relative_to(wiki_root)}{tag}")
+    return 0
+
+
 def cmd_promote(args: argparse.Namespace) -> int:
     wiki_root = _resolve_wiki_for_repair(args.wiki)
     if wiki_root is None:
@@ -2612,6 +2920,14 @@ def main(argv: list[str] | None = None) -> int:
         "`--include-external` together with `--remove-stale` so legitimate "
         "external mounts are not silently unregistered.",
     )
+    p_audit.add_argument(
+        "--json",
+        action="store_true",
+        help="emit findings as JSON (drift, broken wikilinks, size "
+        "violations, approaching cap, orphans, malformed entries, "
+        "duplicate aliases). Skills consume this rather than parsing "
+        "the human-readable output.",
+    )
     p_audit.set_defaults(func=cmd_audit)
 
     p_mount = sub.add_parser(
@@ -2648,6 +2964,53 @@ def main(argv: list[str] | None = None) -> int:
         help="print the plan; touch nothing",
     )
     p_mount.set_defaults(func=cmd_mount)
+
+    p_list = sub.add_parser(
+        "list",
+        help="list spaces reachable via the `## Spaces` contract",
+    )
+    p_list.add_argument(
+        "--json",
+        action="store_true",
+        help="emit `{path, label, description, external}` per space.",
+    )
+    p_list.add_argument(
+        "--include-external",
+        action="store_true",
+        help="include externally-classified spaces (under shared/, foreign "
+        "submodules, escaping symlinks).",
+    )
+    p_list.add_argument(
+        "--include-boundaries",
+        action="store_true",
+        help="also surface external boundary folders that lack `index.md` "
+        "(foreign submodules without one, escaping symlinks). Requires "
+        "--include-external. Used by the placement classifier to enumerate "
+        "every external path to exclude.",
+    )
+    p_list.set_defaults(func=cmd_list)
+
+    p_files = sub.add_parser(
+        "files",
+        help="list .md files reachable via the `## Spaces` contract",
+    )
+    p_files.add_argument(
+        "space",
+        nargs="?",
+        help="wiki-root-relative space to scope to (must be contract-"
+        "reachable). Omit to list every file in the wiki.",
+    )
+    p_files.add_argument(
+        "--json",
+        action="store_true",
+        help="emit `{path, external}` per file.",
+    )
+    p_files.add_argument(
+        "--include-external",
+        action="store_true",
+        help="include files inside externally-classified spaces.",
+    )
+    p_files.set_defaults(func=cmd_files)
 
     p_promote = sub.add_parser(
         "promote",

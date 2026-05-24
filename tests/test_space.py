@@ -1199,6 +1199,113 @@ def test_audit_duplicate_alias_respects_include_external(tmp_path):
     assert "duplicate alias" in out_ext
 
 
+# ---------- PR-L2: space list / space files / audit --json ----------
+
+def test_space_list_shows_registered_only(tmp_path):
+    """`space list` walks via `## Spaces` — registered children appear,
+    unregistered on-disk content does not."""
+    wiki = _make_wiki(tmp_path)
+    _run(["--wiki", str(wiki), "add", "registered"])
+    (wiki / "drift").mkdir()
+    (wiki / "drift" / "index.md").write_text("# drift\n\n## Spaces\n\n")
+
+    rc, out, _ = _run(["--wiki", str(wiki), "list"])
+    assert rc == 0
+    assert "registered" in out
+    assert "drift" not in out
+
+
+def test_space_list_include_external_shows_external_too(tmp_path):
+    """`--include-external` opts external mounts into the listing."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "shared" / "team").mkdir(parents=True)
+    (wiki / "shared" / "team" / "index.md").write_text("# t\n\n## Spaces\n\n")
+    idx = wiki / "index.md"
+    idx.write_text(idx.read_text() + "- [shared/team/](shared/team/index.md)\n")
+    rc_def, out_def, _ = _run(["--wiki", str(wiki), "list"])
+    assert "shared/team" not in out_def
+    rc_ext, out_ext, _ = _run(["--wiki", str(wiki), "list", "--include-external"])
+    assert rc_ext == 0
+    assert "shared/team\texternal" in out_ext
+
+
+def test_space_list_json_emits_path_label_description_external(tmp_path):
+    """JSON output carries label and description so the placement
+    classifier in skills can disambiguate."""
+    import json as _json
+    wiki = _make_wiki(tmp_path)
+    rc, _, _ = _run([
+        "--wiki", str(wiki), "add", "projects/foo",
+        "--description", "per-project content",
+    ])
+    assert rc == 0
+    rc2, out, _ = _run(["--wiki", str(wiki), "list", "--json"])
+    assert rc2 == 0
+    items = _json.loads(out)
+    # Wiki root is excluded from JSON list.
+    paths = {it["path"] for it in items}
+    assert "." not in paths
+    foo_entry = next(it for it in items if it["path"] == "projects/foo")
+    assert foo_entry["label"]
+    assert foo_entry["external"] is False
+
+
+def test_space_list_include_boundaries_requires_include_external(tmp_path):
+    """`--include-boundaries` alone is rejected — it's only meaningful when
+    we're already opted into externals."""
+    wiki = _make_wiki(tmp_path)
+    rc, _, err = _run(["--wiki", str(wiki), "list", "--include-boundaries"])
+    assert rc == 2
+    assert "--include-external" in err
+
+
+def test_space_files_scope_restricts_to_subspace(tmp_path):
+    """A `space` argument scopes output to files under that space only."""
+    wiki = _make_wiki(tmp_path)
+    rc, _, _ = _run(["--wiki", str(wiki), "add", "projects/foo"])
+    assert rc == 0
+    (wiki / "projects" / "foo" / "page.md").write_text("# p\n")
+    (wiki / "topnote.md").write_text("# top\n")
+    rc2, out, _ = _run(["--wiki", str(wiki), "files", "projects/foo"])
+    assert rc2 == 0
+    assert "projects/foo/page.md" in out
+    assert "topnote.md" not in out
+
+
+def test_space_files_refuses_unregistered_scope(tmp_path):
+    """An on-disk folder that isn't in any `## Spaces` is invisible to the
+    consumer — refusing here closes the back-door."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "drift").mkdir()
+    (wiki / "drift" / "index.md").write_text("# d\n\n## Spaces\n\n")
+    (wiki / "drift" / "page.md").write_text("# d\n")
+    rc, _, err = _run(["--wiki", str(wiki), "files", "drift"])
+    assert rc == 2
+    assert "not reachable" in err
+
+
+def test_audit_json_emits_structured_payload(tmp_path):
+    """`audit --json` emits one JSON document; exit code matches the
+    human-text run."""
+    import json as _json
+    wiki = _make_wiki(tmp_path)
+    # Seed drift, broken wikilink, malformed entry.
+    (wiki / "drift").mkdir()
+    (wiki / "drift" / "index.md").write_text("# d\n\n## Spaces\n\n")
+    (wiki / "page.md").write_text("# p\n\n[[no-such-page]]\n")
+    idx = wiki / "index.md"
+    idx.write_text(idx.read_text() + "- [empty]()\n")
+
+    rc_h, _, _ = _run(["--wiki", str(wiki), "audit"])
+    rc_j, out_j, _ = _run(["--wiki", str(wiki), "audit", "--json"])
+    assert rc_j == rc_h
+    payload = _json.loads(out_j)
+    assert payload["exit_code"] == rc_j
+    assert any(d["missing"] for d in payload["drift"])
+    assert any("no-such-page" in b["target"] for b in payload["broken_wikilinks"])
+    assert any("empty" in m["issue"] for m in payload["malformed_entries"])
+
+
 def test_audit_excludes_archives_space_from_drift(tmp_path):
     """A space under `_archives/` is retired content — not flagged as a
     missing `## Spaces` entry."""
