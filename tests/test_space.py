@@ -1204,6 +1204,84 @@ def test_space_manifest_set_refuses_malformed_json_file(tmp_path):
     assert "not valid JSON" in err
 
 
+def test_space_add_rollback_removes_created_dir_on_registration_failure(tmp_path, monkeypatch):
+    """Defect #2: when atomic registration fails after the new space dir has
+    been created, rollback must remove the dir and its index.md. Otherwise
+    the user is left with an orphaned space on disk + no `## Spaces` entry."""
+    wiki = _make_wiki(tmp_path)
+
+    # Force the atomic mutation to fail after the dir is created.
+    real_atomic = space._atomic_register_in_spaces
+
+    def failing_atomic(*args, **kwargs):
+        return 1, "simulated write failure"
+
+    monkeypatch.setattr(space, "_atomic_register_in_spaces", failing_atomic)
+
+    rc, _, err = _run(["--wiki", str(wiki), "add", "newproj"])
+    assert rc == 1
+    assert "simulated write failure" in err
+    # The created directory must be gone after rollback.
+    assert not (wiki / "newproj").exists(), "rollback failed to remove the orphaned space dir"
+    # The ancestor's ## Spaces should not have a stray entry.
+    root_index = (wiki / "index.md").read_text()
+    assert "newproj" not in root_index
+
+
+def test_space_add_rollback_preserves_preexisting_dir(tmp_path, monkeypatch):
+    """If the target dir EXISTED before the call, rollback must NOT delete
+    it — only the index.md we wrote (if we wrote it) should go away."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "newproj").mkdir()
+    (wiki / "newproj" / "user-file.txt").write_text("user content")
+
+    monkeypatch.setattr(
+        space, "_atomic_register_in_spaces",
+        lambda *a, **k: (1, "simulated write failure"),
+    )
+
+    rc, _, _ = _run(["--wiki", str(wiki), "add", "newproj"])
+    assert rc == 1
+    # Pre-existing user content must survive.
+    assert (wiki / "newproj").exists()
+    assert (wiki / "newproj" / "user-file.txt").read_text() == "user content"
+
+
+def test_space_remove_rollback_restores_dir_on_rmtree_failure(tmp_path, monkeypatch):
+    """Defect #2 part 2: when rmtree fails mid-delete (some files gone,
+    others remain), rollback restores the directory byte-for-byte AND
+    re-adds the index entry that was just removed."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "doomed").mkdir()
+    (wiki / "doomed" / "index.md").write_text("# Doomed\n\nstuff\n")
+    (wiki / "doomed" / "extra.md").write_text("user content here")
+    # Pre-register so the ancestor's ## Spaces has the entry to remove.
+    rc, _, _ = _run(["--wiki", str(wiki), "add", "doomed"])
+    assert rc == 0
+
+    real_rmtree = space.shutil.rmtree
+
+    def failing_rmtree(path, *args, **kwargs):
+        # Let the snapshot copytree call succeed (it goes elsewhere).
+        if "wiki-spaces-remove-" in str(path):
+            return real_rmtree(path, *args, **kwargs)
+        raise OSError("simulated rmtree failure")
+
+    monkeypatch.setattr(space.shutil, "rmtree", failing_rmtree)
+
+    rc, _, err = _run([
+        "--wiki", str(wiki), "remove", "doomed", "--force",
+    ])
+    assert rc == 2
+    assert "rmtree failed" in err
+    # Directory must be restored.
+    assert (wiki / "doomed").exists()
+    assert (wiki / "doomed" / "extra.md").read_text() == "user content here"
+    # Index entry must be restored.
+    root_index = (wiki / "index.md").read_text()
+    assert "doomed/" in root_index
+
+
 def test_promote_does_not_rewrite_links_inside_code_blocks(tmp_path):
     """Defect #3: promote's link rewrite must NOT touch `[[wikilinks]]` that
     appear inside fenced code blocks — those are code examples, not real

@@ -550,25 +550,63 @@ def cmd_add(args: argparse.Namespace) -> int:
 
     # Already exists?
     already_space = (new_space / "index.md").is_file()
+    created_dir_this_call = False
+    created_index_this_call = False
     if already_space and not args.force_index:
         print(f"  . {rel}/ already a space; ensuring ancestor entry")
     else:
+        # Track exactly what we create so rollback only undoes our own work,
+        # never the user's pre-existing content.
+        created_dir_this_call = not new_space.exists()
         new_space.mkdir(parents=True, exist_ok=True)
         display_name = args.name or new_space.name
-        description = (args.description or DEFAULT_DESCRIPTION).strip()
-        (new_space / "index.md").write_text(
-            _new_index_md(display_name, description), encoding="utf-8"
+        description_for_body = (args.description or "").strip() or None
+        new_index = new_space / "index.md"
+        created_index_this_call = not new_index.exists()
+        new_index.write_text(
+            _new_index_md(display_name, description_for_body or "<one paragraph describing this space>"),
+            encoding="utf-8",
         )
         print(f"  + {rel}/index.md")
 
     rel_from_ancestor = new_space.relative_to(ancestor)
     label = f"{rel_from_ancestor}/"
     href = f"{rel_from_ancestor}/index.md"
-    new_text = _add_space_entry(text, label, href, args.description)
-    if new_text == text:
+
+    # Atomic registration with wrapper-level rollback. If the mutation
+    # fails, undo any files / dirs we created in THIS call (never touch
+    # pre-existing user content).
+    rc, info = _atomic_register_in_spaces(
+        ancestor, ancestor_index, label, href, args.description
+    )
+    if rc != 0:
+        # Rollback our own filesystem side-effects, best-effort.
+        if created_index_this_call:
+            try:
+                (new_space / "index.md").unlink()
+            except OSError as e:
+                print(
+                    f"  ! ROLLBACK INCOMPLETE: created {rel}/index.md but "
+                    f"registration failed ({info}) and cleanup also failed: {e}. "
+                    f"Manual recovery: rm {new_space / 'index.md'}",
+                    file=sys.stderr,
+                )
+        if created_dir_this_call:
+            try:
+                shutil.rmtree(new_space)
+            except OSError as e:
+                print(
+                    f"  ! ROLLBACK INCOMPLETE: created {rel}/ but "
+                    f"registration failed ({info}) and cleanup also failed: {e}. "
+                    f"Manual recovery: rm -rf {new_space}",
+                    file=sys.stderr,
+                )
+        print(f"  ! {info}", file=sys.stderr)
+        return rc
+
+    if info == "noop":
         print(f"  . entry for {label} already in ancestor's ## Spaces")
         return 0
-    ancestor_index.write_text(new_text, encoding="utf-8")
     print(f"  ~ {printable}index.md ## Spaces  += [{label}]")
     return 0
 
@@ -637,20 +675,87 @@ def cmd_remove(args: argparse.Namespace) -> int:
         )
         return 2
 
-    new_text = _remove_space_entry(text, href)
-    if new_text != text:
-        if args.dry_run:
-            print(f"  ~ (dry-run) {printable}index.md ## Spaces  -= [{rel_from_ancestor}/]")
-        else:
-            ancestor_index.write_text(new_text, encoding="utf-8")
-            print(f"  ~ {printable}index.md ## Spaces  -= [{rel_from_ancestor}/]")
-
     if args.dry_run:
+        # Preview without mutation.
+        if _remove_space_entry(text, href) != text:
+            print(f"  ~ (dry-run) {printable}index.md ## Spaces  -= [{rel_from_ancestor}/]")
         print(f"  . (dry-run) would remove {rel}/")
         return 0
-    shutil.rmtree(target)
-    print(f"  - {rel}/")
-    return 0
+
+    # Snapshot the target directory's contents to a system tempdir before
+    # any mutation. Rollback restores byte-for-byte if rmtree fails.
+    snapshot_dir = Path(tempfile.mkdtemp(prefix="wiki-spaces-remove-"))
+    snapshot_ok = False
+    try:
+        try:
+            shutil.copytree(target, snapshot_dir / "target", symlinks=False)
+            snapshot_ok = True
+        except (OSError, shutil.Error) as e:
+            print(
+                f"  ! could not snapshot {rel}/ before removal: {e}. "
+                "Refusing to proceed without a recovery snapshot.",
+                file=sys.stderr,
+            )
+            return 2
+
+        # Atomic index update FIRST, under flock. If the registration removal
+        # fails, rmtree never runs and the directory stays put.
+        rc, info = _atomic_remove_from_spaces(ancestor, ancestor_index, href)
+        if rc != 0:
+            print(f"  ! {info}", file=sys.stderr)
+            return rc
+        if info == "removed":
+            print(f"  ~ {printable}index.md ## Spaces  -= [{rel_from_ancestor}/]")
+        # Now rmtree the target. On failure, restore from snapshot AND
+        # re-add the index entry we just removed.
+        try:
+            shutil.rmtree(target)
+        except OSError as rm_err:
+            # Restore directory contents byte-for-byte.
+            restore_ok = True
+            try:
+                if target.exists():
+                    shutil.rmtree(target, ignore_errors=True)
+                shutil.copytree(snapshot_dir / "target", target, symlinks=False)
+            except (OSError, shutil.Error) as restore_err:
+                restore_ok = False
+                print(
+                    f"  ! ROLLBACK INCOMPLETE: rmtree failed mid-delete ({rm_err}) "
+                    f"AND restore failed ({restore_err}). "
+                    f"Manual recovery from snapshot at {snapshot_dir}.",
+                    file=sys.stderr,
+                )
+            # Restore the index entry we removed (best effort — same flock).
+            if info == "removed":
+                rel_from_ancestor_str = str(rel_from_ancestor)
+                label = f"{rel_from_ancestor_str}/"
+                href_restore = f"{rel_from_ancestor_str}/index.md"
+                rc2, info2 = _atomic_register_in_spaces(
+                    ancestor, ancestor_index, label, href_restore, None
+                )
+                if rc2 != 0:
+                    print(
+                        f"  ! ROLLBACK INCOMPLETE: rmtree failed ({rm_err}) and "
+                        f"the index-entry restore also failed: {info2}. "
+                        f"Manual recovery: re-add `[{label}]({href_restore})` "
+                        f"to {printable}index.md ## Spaces.",
+                        file=sys.stderr,
+                    )
+                    restore_ok = False
+            if not restore_ok:
+                # Override the finally-clause cleanup so the user has the
+                # snapshot available for manual recovery.
+                snapshot_ok = False
+                return 2
+            print(f"  ! rmtree failed: {rm_err}. Rolled back from snapshot.", file=sys.stderr)
+            return 2
+        print(f"  - {rel}/")
+        return 0
+    finally:
+        # Clean up the snapshot unless we deliberately preserved it for
+        # manual recovery.
+        if snapshot_ok:
+            shutil.rmtree(snapshot_dir, ignore_errors=True)
 
 
 def _walk_owned_md_files(wiki_root: Path, *, include_external: bool = False) -> list[Path]:
@@ -1140,36 +1245,45 @@ def _rollback_mount(wiki_root: Path, dest: Path, rel: str, mechanism: str) -> No
         )
 
 
-def _atomic_register_in_spaces(
+def _atomic_mutate_index(
     ancestor: Path,
     ancestor_index: Path,
-    label: str,
-    href: str,
-    description: str | None,
-) -> tuple[int, str]:
-    """Atomically add a `## Spaces` entry under an `fcntl.flock` on the ancestor dir.
+    mutate_fn,
+):
+    """Atomically apply `mutate_fn` to the ancestor's index.md under flock.
 
-    Returns `(0, "added")` when the entry was inserted, `(0, "noop")` when it
-    was already present, `(1, "<reason>")` on write failure (caller should
-    roll back the mount), `(2, "<reason>")` when the index lost its
-    `## Spaces` section between the initial contract check and the lock
-    acquisition (concurrent removal — caller should roll back).
+    Generic primitive shared by add / remove / mount. `mutate_fn` takes the
+    current text and returns one of:
+    - `(new_text, info)` — replace the file with new_text; info is returned
+      to the caller. When new_text == current, the write is skipped.
+    - A tuple `(None, error_code, reason)` — abort with that error.
+
+    Returns `(rc, info_or_reason)`:
+    - `(0, info)` — wrote new_text (or no-op when mutate_fn returned the
+      original text). `info` is whatever mutate_fn passed back (e.g.
+      "added", "removed", "noop").
+    - `(1, reason)` — write failed.
+    - `(2, reason)` — mutate_fn returned an abort tuple (e.g. contract
+      missing).
 
     Locking note: the lock is on the ANCESTOR DIRECTORY's inode (stable
-    across our `os.replace` of the index file), so two concurrent CLI mounts
-    serialize correctly. Within the lock we re-read the index from disk to
-    pick up any changes that committed after our caller's initial read.
+    across our `os.replace` of the index file), so two concurrent CLI
+    callers serialize correctly. Within the lock we re-read the index
+    from disk to pick up any changes that committed after the caller's
+    initial read.
     """
     dir_fd = os.open(str(ancestor), os.O_RDONLY)
     try:
-        fcntl.flock(dir_fd, fcntl.LOCK_EX)
+        if sys.platform != "win32":
+            fcntl.flock(dir_fd, fcntl.LOCK_EX)
         fresh_text = ancestor_index.read_text(encoding="utf-8")
-        if not _md.has_section(fresh_text, "Spaces"):
-            return 2, "ancestor `## Spaces` section disappeared between contract check and registration"
-        new_text = _add_space_entry(fresh_text, label, href, description)
+        result = mutate_fn(fresh_text)
+        if isinstance(result, tuple) and len(result) == 3 and result[0] is None:
+            return result[1], result[2]
+        new_text, info = result
         if new_text == fresh_text:
-            return 0, "noop"
-        # Write via tempfile + os.replace (same pattern as cmd_promote).
+            return 0, info  # caller can interpret e.g. "noop"
+        # Write via tempfile + os.replace.
         tmp = tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
@@ -1191,13 +1305,52 @@ def _atomic_register_in_spaces(
             except OSError:
                 pass
             return 1, f"could not write {ancestor_index}: {e}"
-        return 0, "added"
+        return 0, info
     finally:
-        try:
-            fcntl.flock(dir_fd, fcntl.LOCK_UN)
-        except OSError:
-            pass
+        if sys.platform != "win32":
+            try:
+                fcntl.flock(dir_fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
         os.close(dir_fd)
+
+
+def _atomic_register_in_spaces(
+    ancestor: Path,
+    ancestor_index: Path,
+    label: str,
+    href: str,
+    description: str | None,
+) -> tuple[int, str]:
+    """Atomically add a `## Spaces` entry under an `fcntl.flock` on the ancestor dir.
+
+    Thin wrapper over `_atomic_mutate_index`. Returns `(0, "added")` /
+    `(0, "noop")` / `(1, reason)` / `(2, reason)` — same contract as before
+    so existing callers (cmd_mount) keep working.
+    """
+    def add_entry(fresh_text: str):
+        if not _md.has_section(fresh_text, "Spaces"):
+            return (None, 2, "ancestor `## Spaces` section disappeared between contract check and registration")
+        new_text = _add_space_entry(fresh_text, label, href, description)
+        return (new_text, "noop" if new_text == fresh_text else "added")
+
+    return _atomic_mutate_index(ancestor, ancestor_index, add_entry)
+
+
+def _atomic_remove_from_spaces(
+    ancestor: Path,
+    ancestor_index: Path,
+    href: str,
+) -> tuple[int, str]:
+    """Atomically remove a `## Spaces` entry under flock. Symmetric with
+    `_atomic_register_in_spaces`. Same return contract."""
+    def remove_entry(fresh_text: str):
+        if not _md.has_section(fresh_text, "Spaces"):
+            return (None, 2, "ancestor `## Spaces` section disappeared between contract check and removal")
+        new_text = _remove_space_entry(fresh_text, href)
+        return (new_text, "noop" if new_text == fresh_text else "removed")
+
+    return _atomic_mutate_index(ancestor, ancestor_index, remove_entry)
 
 
 def _find_alias_owners(wiki_root: Path) -> dict[str, list[Path]]:
