@@ -2142,8 +2142,8 @@ def _mask_for_link_scan(text: str) -> str:
     Shared by `_rewrite_links_pointing_at` and `_adjust_outgoing_links_for_depth`
     so the scan is consistent across both promote-time rewriters — without
     this, the outgoing-link adjustment would happily rewrite `[[wikilinks]]`
-    inside fenced code or frontmatter (a producer/consumer break of the
-    same shape as the v0.7 defect, different code path).
+    inside fenced code or frontmatter (producer/consumer break: the
+    promote step would emit content the audit step misreads).
 
     Uses `_md.FRONTMATTER_RE.match` to locate the frontmatter span instead
     of `text.index("---", 4)` so atypical leading newlines / malformed
