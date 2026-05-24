@@ -840,6 +840,227 @@ def test_mount_clone_without_index_is_cleaned_up(tmp_path):
     assert not (wiki / "shared" / "team").exists()
 
 
+# ---------- _derive_default_path (unit) ----------
+
+def test_derive_default_https_with_dot_git():
+    p, err = space._derive_default_path("https://github.com/foo/bar.git")
+    assert err is None
+    assert p == "shared/bar"
+
+
+def test_derive_default_https_with_query_dropped_first():
+    """Query is dropped BEFORE .git stripping, so .git?ref=main resolves to bar."""
+    p, err = space._derive_default_path("https://github.com/foo/bar.git?ref=main")
+    assert err is None
+    assert p == "shared/bar"
+
+
+def test_derive_default_scp_style_with_fragment():
+    """Fragment dropped first; scp-style tail split after `:`."""
+    p, err = space._derive_default_path("git@github.com:foo/bar.git#tag")
+    assert err is None
+    assert p == "shared/bar"
+
+
+def test_derive_default_local_trailing_slash():
+    p, err = space._derive_default_path("/home/me/notes/")
+    assert err is None
+    assert p == "shared/notes"
+
+
+def test_derive_default_local_path_no_slash_in_tail():
+    p, err = space._derive_default_path("/home/me/personal-notes")
+    assert err is None
+    assert p == "shared/personal-notes"
+
+
+def test_derive_default_rejects_empty_source():
+    p, err = space._derive_default_path("")
+    assert p is None
+    assert err is not None
+
+
+def test_derive_default_rejects_just_root_slash():
+    p, err = space._derive_default_path("/")
+    assert p is None
+    assert err is not None
+    assert "empty" in err.lower() or "basename" in err.lower()
+
+
+def test_derive_default_rejects_dot_git_basename():
+    """An input whose tail IS `.git` (not just ends in it) is rejected to avoid
+    pointing at a bare-repo directory."""
+    p, err = space._derive_default_path("/home/me/.git")
+    assert p is None
+    assert err is not None
+    assert "." in err  # mentions the dot-prefix problem
+
+
+def test_derive_default_strips_dot_git_suffix_only_not_when_tail_is_dot_git():
+    """`repo.git` → `repo`; but `.git` (tail equals `.git`) is rejected."""
+    p1, _ = space._derive_default_path("https://x/y/repo.git")
+    assert p1 == "shared/repo"
+    p2, err2 = space._derive_default_path("https://x/y/.git")
+    assert p2 is None
+    assert err2 is not None
+
+
+# ---------- mount: --mode vs --as alias ----------
+
+def test_mount_mode_works_canonically(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    src = _make_space_dir(tmp_path / "src", "team")
+    rc, out, _ = _run(
+        ["--wiki", str(wiki), "mount", str(src), "shared/team", "--mode", "symlink"]
+    )
+    assert rc == 0, out
+    assert (wiki / "shared" / "team").is_symlink()
+
+
+def test_mount_as_alias_still_works(tmp_path):
+    """--as is the deprecated alias; still functional for one release."""
+    wiki = _make_wiki(tmp_path)
+    src = _make_space_dir(tmp_path / "src", "team")
+    rc, out, _ = _run(
+        ["--wiki", str(wiki), "mount", str(src), "shared/team", "--as", "symlink"]
+    )
+    assert rc == 0, out
+
+
+def test_mount_mode_and_as_mutually_exclusive(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    src = _make_space_dir(tmp_path / "src", "team")
+    with pytest.raises(SystemExit):
+        _run([
+            "--wiki", str(wiki), "mount", str(src), "shared/team",
+            "--mode", "symlink", "--as", "clone",
+        ])
+
+
+def test_mount_neither_mode_nor_as_fails(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    src = _make_space_dir(tmp_path / "src", "team")
+    with pytest.raises(SystemExit):
+        _run(["--wiki", str(wiki), "mount", str(src), "shared/team"])
+
+
+# ---------- mount: optional path → default derivation ----------
+
+def test_mount_optional_path_derives_shared_basename(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    # The default-path basename is taken from the SOURCE path's tail, so
+    # we name the source directory itself `my-team-wiki`.
+    src = _make_space_dir(tmp_path / "my-team-wiki", "Team Wiki")
+    rc, out, _ = _run(
+        ["--wiki", str(wiki), "mount", str(src), "--mode", "symlink"]
+    )
+    assert rc == 0, out
+    # Default-derived path is `shared/my-team-wiki/`.
+    assert (wiki / "shared" / "my-team-wiki").is_symlink()
+
+
+def test_mount_optional_path_rejects_when_basename_starts_with_dot(tmp_path):
+    wiki = _make_wiki(tmp_path)
+    src_parent = tmp_path / "src-parent"
+    src_parent.mkdir()
+    rc, _, err = _run(
+        ["--wiki", str(wiki), "mount", str(src_parent / ".git"), "--mode", "symlink"]
+    )
+    # Default derivation rejects `.git` basename before symlink validation.
+    assert rc == 2
+    assert "." in err
+
+
+# ---------- mount: --dry-run ----------
+
+def test_mount_dry_run_no_fs_mutation_symlink(tmp_path):
+    """--dry-run prints the plan and touches nothing: no symlink, no parent
+    dir created, parent index byte-identical."""
+    wiki = _make_wiki(tmp_path)
+    src = _make_space_dir(tmp_path / "src", "team")
+    index_before = (wiki / "index.md").read_bytes()
+    assert not (wiki / "shared").exists()  # baseline
+    rc, out, _ = _run([
+        "--wiki", str(wiki), "mount", str(src), "shared/team",
+        "--mode", "symlink", "--dry-run",
+    ])
+    assert rc == 0
+    assert "(dry-run)" in out
+    assert not (wiki / "shared").exists()  # no mkdir
+    assert not (wiki / "shared" / "team").exists()  # no symlink
+    assert (wiki / "index.md").read_bytes() == index_before
+
+
+def test_mount_dry_run_still_refuses_tier1_parent(tmp_path):
+    """Dry-run does the read-only validations (Tier 1 refuse fires before
+    the dry-run print)."""
+    wiki = _make_wiki(tmp_path, with_spaces_section=False)
+    src = _make_space_dir(tmp_path / "src", "team")
+    rc, _, err = _run([
+        "--wiki", str(wiki), "mount", str(src), "team",
+        "--mode", "symlink", "--dry-run",
+    ])
+    assert rc == 2
+    assert "## Spaces" in err
+
+
+# ---------- mount: --name ----------
+
+def test_mount_name_overrides_parent_label_only(tmp_path):
+    """--name affects only the parent's ## Spaces entry label; the child's
+    index.md is untouched."""
+    wiki = _make_wiki(tmp_path)
+    src = _make_space_dir(tmp_path / "src", "external-team")
+    child_index_before = (src / "index.md").read_bytes()
+    rc, out, _ = _run([
+        "--wiki", str(wiki), "mount", str(src), "shared/team",
+        "--mode", "symlink", "--name", "Team Wiki",
+    ])
+    assert rc == 0, out
+    entries = _md.parse_section_entries((wiki / "index.md").read_text(), "Spaces")
+    assert any(e.label == "Team Wiki" for e in entries), \
+        f"expected 'Team Wiki' label, got entries: {[(e.label, e.href) for e in entries]}"
+    # Child untouched. (Symlink follows; reading via src is fine.)
+    assert (src / "index.md").read_bytes() == child_index_before
+
+
+# ---------- mount: atomicity ----------
+
+def test_mount_rolls_back_when_index_write_fails(tmp_path, monkeypatch):
+    """Force `os.replace` to fail during registration; assert the mount was
+    rolled back (symlink removed) and the parent index is unchanged."""
+    wiki = _make_wiki(tmp_path)
+    src = _make_space_dir(tmp_path / "src", "team")
+    index_before = (wiki / "index.md").read_bytes()
+
+    real_replace = space.os.replace
+    call_count = {"n": 0}
+
+    def boom(src_path, dst_path, *a, **kw):
+        # Only sabotage the index write (the .tmp → index.md replace),
+        # not any unrelated os.replace call.
+        if str(dst_path).endswith("index.md"):
+            call_count["n"] += 1
+            raise OSError("forced replace failure for atomicity test")
+        return real_replace(src_path, dst_path, *a, **kw)
+
+    monkeypatch.setattr(space.os, "replace", boom)
+    rc, _, err = _run(
+        ["--wiki", str(wiki), "mount", str(src), "shared/team", "--mode", "symlink"]
+    )
+    assert rc == 1
+    assert call_count["n"] == 1
+    assert "registration failed" in err
+    # Symlink rolled back.
+    assert not (wiki / "shared" / "team").exists()
+    assert not (wiki / "shared" / "team").is_symlink()
+    # Parent index byte-identical.
+    assert (wiki / "index.md").read_bytes() == index_before
+    # No leftover tempfile in the ancestor dir.
+    leftover_tmps = [p for p in wiki.iterdir() if p.name.startswith(".index.") and p.name.endswith(".tmp")]
+    assert leftover_tmps == [], f"tempfile leak: {leftover_tmps}"
+
+
 def test_audit_tier1_adopted_root_with_nested_space_no_drift(tmp_path):
     """Adopting a folder that already has a nested space: `init --tier1`
     makes a Tier 1 root carrying no `## Spaces` contract, so audit reports no

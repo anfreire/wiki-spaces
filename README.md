@@ -40,7 +40,7 @@ Once a wiki exists, the `space` subcommands manage its structure:
 ```bash
 uvx wiki-spaces space add projects/foo   # create a space + register it
 uvx wiki-spaces space audit              # audit drift, broken links, orphans
-uvx wiki-spaces space mount <url> shared/team --as submodule   # mount an external space
+uvx wiki-spaces space mount <url> --mode submodule              # mount an external space (default path: shared/<basename>/)
 ```
 
 `space add`, `space remove`, and `space mount` need a `## Spaces` section in the parent's `index.md`; `wiki-spaces init` scaffolds that automatically.

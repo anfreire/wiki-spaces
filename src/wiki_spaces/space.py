@@ -14,11 +14,15 @@ Operations:
                              Otherwise removes the entry and the directory.
                              Refuses without `--force` when the space
                              contains content beyond `index.md`.
-- `space mount <src> <rel>`  mount an external space — git clone, git
-                             submodule, or symlink (`--as`) — verify it has
+- `space mount <src> [path]` mount an external space — git clone, git
+                             submodule, or symlink (`--mode`) — verify it has
                              `index.md`, and register it in the nearest
                              ancestor's `## Spaces`. Refuses on a Tier 1
-                             parent like `space add`.
+                             parent like `space add`. `path` is optional;
+                             defaults to `shared/<basename-of-source>/`.
+                             Use `--dry-run` to preview; `--name` to override
+                             the registered label; `--as` is a deprecated
+                             alias for `--mode` (removed in v0.9.0).
 - `space audit`              walk owned spaces; report `## Spaces` drift,
                              broken `[[wikilinks]]`, and orphan pages.
                              Always-on summary header (tier breakdown, page
@@ -33,6 +37,8 @@ heuristic in CONVENTIONS.md / Owned vs external) are skipped on traversal.
 from __future__ import annotations
 
 import argparse
+import fcntl
+import os
 import shutil
 import subprocess
 import sys
@@ -84,6 +90,65 @@ def _validate_rel_path(rel: str) -> tuple[bool, str | None]:
         if part == ".git":
             return False, "path may not contain '.git' segments"
     return True, None
+
+
+def _derive_default_path(source: str) -> tuple[str | None, str | None]:
+    """Derive the default mount path `shared/<basename>/` from `source`.
+
+    Returns `(rel_path, None)` on success, `(None, error_message)` otherwise.
+
+    Ordering matters (regression-tested):
+    1. Drop `?query` and `#fragment` first — URLs like `repo.git?ref=main`
+       would otherwise mis-strip `.git` against the suffix `.git?ref=main`.
+    2. Trim trailing `/`.
+    3. Extract tail (last `/`-separated segment, or for scp-style
+       `git@host:org/repo` the slashed tail after `:`).
+    4. Strip a `.git` SUFFIX only — applies when tail ends with `.git`
+       (`repo.git` → `repo`), not when tail *is* `.git` (which is rejected
+       next as starting with `.`).
+    5. Reject if empty OR starts with `.`.
+
+    The derived path is always `shared/<basename>/` — the `shared/` prefix
+    is what opts the mount into external trust-scope semantics per
+    CONVENTIONS.md / Owned vs external.
+    """
+    if not source or not source.strip():
+        return None, "source is empty"
+    s = source.strip()
+    # 1. Drop query/fragment.
+    for marker in ("?", "#"):
+        idx = s.find(marker)
+        if idx >= 0:
+            s = s[:idx]
+    # 2. Trim trailing slashes.
+    s = s.rstrip("/")
+    if not s:
+        return None, (
+            f"cannot derive default path from {source!r}: empty after trimming. "
+            "Pass an explicit `path` argument."
+        )
+    # 3. Extract tail. Handle scp-style first (`user@host:path`) so the
+    # path-after-colon is what we tail-split.
+    if ":" in s and not s.startswith(("http://", "https://", "ssh://", "git://", "file://")):
+        # scp-style or local path with a colon in the prefix; take the part
+        # after the LAST colon (then split by `/`).
+        s = s.rsplit(":", 1)[-1]
+    tail = s.rsplit("/", 1)[-1]
+    # 4. Strip `.git` SUFFIX (not when tail IS `.git`).
+    if tail.endswith(".git") and tail != ".git":
+        tail = tail[: -len(".git")]
+    # 5. Reject empty / hidden.
+    if not tail:
+        return None, (
+            f"cannot derive default path from {source!r}: empty basename. "
+            "Pass an explicit `path` argument."
+        )
+    if tail.startswith("."):
+        return None, (
+            f"cannot derive default path from {source!r}: basename {tail!r} "
+            "starts with '.'. Pass an explicit `path` argument."
+        )
+    return f"shared/{tail}", None
 
 
 def _resolve_git_config(wiki_root: Path) -> Path | None:
@@ -787,10 +852,16 @@ def _run_git(cmd: list[str]) -> tuple[int, str]:
 def cmd_mount(args: argparse.Namespace) -> int:
     """Mount an external space (clone / submodule / symlink) and register it.
 
-    The mechanism is the caller's explicit choice (`--as`) — collaborative vs
-    read-only vs local is a judgment, not something the CLI guesses. The CLI
-    does the mechanical part: run the mount, verify the result is a
+    The mechanism is the caller's explicit choice (`--mode`) — collaborative
+    vs read-only vs local is a judgment, not something the CLI guesses. The
+    CLI does the mechanical part: run the mount, verify the result is a
     wiki-spaces space (`index.md` present), and add the `## Spaces` entry.
+
+    Registration is atomic against partial-write failures: an advisory
+    `fcntl.flock` on the ancestor directory serializes concurrent mounts,
+    and the parent `index.md` is written via tempfile + `os.replace` so a
+    crash mid-write cannot leave the file half-rewritten. If registration
+    fails after a successful mount, the mount is rolled back per-mode.
     """
     wiki_root = _resolve_wiki(args.wiki)
     if wiki_root is None:
@@ -799,12 +870,23 @@ def cmd_mount(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
-    ok, err = _validate_rel_path(args.path)
+
+    # Optional `path`: derive `shared/<basename>/` when omitted.
+    if args.path is None:
+        derived, derive_err = _derive_default_path(args.source)
+        if derived is None:
+            print(f"  ! {derive_err}", file=sys.stderr)
+            return 2
+        path_arg = derived
+    else:
+        path_arg = args.path
+
+    ok, err = _validate_rel_path(path_arg)
     if not ok:
         print(f"  ! invalid path: {err}", file=sys.stderr)
         return 2
 
-    rel = args.path.strip().rstrip("/")
+    rel = path_arg.strip().rstrip("/")
     dest = wiki_root / rel
     if dest.exists() or dest.is_symlink():
         print(
@@ -836,8 +918,8 @@ def cmd_mount(args: argparse.Namespace) -> int:
     mechanism = args.mechanism
     if mechanism == "submodule" and not (wiki_root / ".git").exists():
         print(
-            f"  ! --as submodule needs the wiki to be a git repo; "
-            f"{wiki_root}/.git not found. Use --as clone or --as symlink, "
+            f"  ! --mode submodule needs the wiki to be a git repo; "
+            f"{wiki_root}/.git not found. Use --mode clone or --mode symlink, "
             "or `git init` the wiki first.",
             file=sys.stderr,
         )
@@ -855,6 +937,20 @@ def cmd_mount(args: argparse.Namespace) -> int:
         if not src_resolved.is_dir():
             print(f"  ! symlink source is not a directory: {src}", file=sys.stderr)
             return 2
+
+    # Pre-compute the registration label/href so dry-run can print it.
+    rel_from_ancestor = dest.relative_to(ancestor)
+    label = args.name or f"{rel_from_ancestor}/"
+    href = f"{rel_from_ancestor}/index.md"
+
+    if args.dry_run:
+        print(f"  . (dry-run) would mount {args.source} -> {rel}/ via {mechanism}")
+        desc_part = f" — {args.description}" if args.description else ""
+        print(
+            f"  . (dry-run) would register entry [{label}]({href}){desc_part} "
+            f"in {printable}index.md ## Spaces"
+        )
+        return 0
 
     dest.parent.mkdir(parents=True, exist_ok=True)
 
@@ -890,34 +986,113 @@ def cmd_mount(args: argparse.Namespace) -> int:
             "space, so it was not registered in `## Spaces`.",
             file=sys.stderr,
         )
-        if mechanism == "symlink":
-            dest.unlink()
-            print(f"  - removed the symlink {rel}", file=sys.stderr)
-        elif mechanism == "clone":
-            shutil.rmtree(dest, ignore_errors=True)
-            print(f"  - removed the clone at {rel}/", file=sys.stderr)
-        else:  # submodule
-            print(
-                f"    `git submodule add` left files on disk, staged a "
-                f"gitlink, and edited .gitmodules. To undo:\n"
-                f"      git -C {wiki_root} submodule deinit -f {rel}\n"
-                f"      git -C {wiki_root} rm -f {rel}\n"
-                f"      rm -rf {wiki_root}/.git/modules/{rel}",
-                file=sys.stderr,
-            )
+        _rollback_mount(wiki_root, dest, rel, mechanism)
         return 1
 
-    # Register in the nearest ancestor's `## Spaces`.
-    rel_from_ancestor = dest.relative_to(ancestor)
-    label = f"{rel_from_ancestor}/"
-    href = f"{rel_from_ancestor}/index.md"
-    new_text = _add_space_entry(text, label, href, args.description)
-    if new_text != text:
-        ancestor_index.write_text(new_text, encoding="utf-8")
+    # Register in the nearest ancestor's `## Spaces`. Atomicity:
+    # - Lock the ancestor directory (its inode is stable across our write).
+    # - Re-read the index fresh (a concurrent op could have changed it).
+    # - Write via tempfile + os.replace (the pattern from cmd_promote).
+    # - If write fails for any reason, roll back the mount.
+    rc, message = _atomic_register_in_spaces(
+        ancestor, ancestor_index, label, href, args.description
+    )
+    if rc != 0:
+        print(f"  ! registration failed: {message}", file=sys.stderr)
+        _rollback_mount(wiki_root, dest, rel, mechanism)
+        return rc
+    if message == "added":
         print(f"  ~ {printable}index.md ## Spaces  += [{label}]")
-    else:
+    else:  # "noop"
         print(f"  . entry for {label} already in ancestor's ## Spaces")
     return 0
+
+
+def _rollback_mount(wiki_root: Path, dest: Path, rel: str, mechanism: str) -> None:
+    """Undo a partial mount so the filesystem doesn't keep an orphaned space.
+
+    Symlinks and clones are removable in one step; a submodule has already
+    staged a gitlink and edited .gitmodules, so we print the manual recovery
+    commands instead of guessing.
+    """
+    if mechanism == "symlink":
+        try:
+            dest.unlink()
+            print(f"  - removed the symlink {rel}", file=sys.stderr)
+        except OSError as e:
+            print(f"  ! manual cleanup required: could not remove {rel}: {e}", file=sys.stderr)
+    elif mechanism == "clone":
+        shutil.rmtree(dest, ignore_errors=True)
+        print(f"  - removed the clone at {rel}/", file=sys.stderr)
+    else:  # submodule
+        print(
+            f"    `git submodule add` left files on disk, staged a "
+            f"gitlink, and edited .gitmodules. To undo:\n"
+            f"      git -C {wiki_root} submodule deinit -f {rel}\n"
+            f"      git -C {wiki_root} rm -f {rel}\n"
+            f"      rm -rf {wiki_root}/.git/modules/{rel}",
+            file=sys.stderr,
+        )
+
+
+def _atomic_register_in_spaces(
+    ancestor: Path,
+    ancestor_index: Path,
+    label: str,
+    href: str,
+    description: str | None,
+) -> tuple[int, str]:
+    """Atomically add a `## Spaces` entry under an `fcntl.flock` on the ancestor dir.
+
+    Returns `(0, "added")` when the entry was inserted, `(0, "noop")` when it
+    was already present, `(1, "<reason>")` on write failure (caller should
+    roll back the mount), `(2, "<reason>")` when the index lost its
+    `## Spaces` section between the initial Tier-1 check and the lock
+    acquisition (concurrent demotion — caller should roll back).
+
+    Locking note: the lock is on the ANCESTOR DIRECTORY's inode (stable
+    across our `os.replace` of the index file), so two concurrent CLI mounts
+    serialize correctly. Within the lock we re-read the index from disk to
+    pick up any changes that committed after our caller's initial read.
+    """
+    dir_fd = os.open(str(ancestor), os.O_RDONLY)
+    try:
+        fcntl.flock(dir_fd, fcntl.LOCK_EX)
+        fresh_text = ancestor_index.read_text(encoding="utf-8")
+        if not _md.has_section(fresh_text, "Spaces"):
+            return 2, "ancestor `## Spaces` section disappeared between Tier-1 check and registration"
+        new_text = _add_space_entry(fresh_text, label, href, description)
+        if new_text == fresh_text:
+            return 0, "noop"
+        # Write via tempfile + os.replace (same pattern as cmd_promote).
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=str(ancestor_index.parent),
+            prefix=".index.",
+            suffix=".tmp",
+            delete=False,
+        )
+        tmp_path = tmp.name
+        try:
+            tmp.write(new_text)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+            tmp.close()
+            os.replace(tmp_path, ancestor_index)
+        except OSError as e:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            return 1, f"could not write {ancestor_index}: {e}"
+        return 0, "added"
+    finally:
+        try:
+            fcntl.flock(dir_fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        os.close(dir_fd)
 
 
 def _find_alias_owners(wiki_root: Path) -> dict[str, list[Path]]:
@@ -1418,18 +1593,38 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_mount.add_argument("source", help="git URL, or local path, of the space to mount")
     p_mount.add_argument(
-        "path", help="destination path relative to the wiki root (e.g. shared/team-foo)"
+        "path",
+        nargs="?",
+        default=None,
+        help="destination path relative to the wiki root (e.g. shared/team-foo). "
+        "Optional; default is shared/<basename-of-source>/ — the shared/ prefix "
+        "opts the mount into external trust-scope semantics.",
     )
-    p_mount.add_argument(
-        "--as",
+    mech_group = p_mount.add_mutually_exclusive_group(required=True)
+    mech_group.add_argument(
+        "--mode",
         dest="mechanism",
-        required=True,
         choices=("submodule", "clone", "symlink"),
         help="mount mechanism: submodule (collaborative, push changes back), "
         "clone (read-only one-time copy), symlink (local folder)",
     )
+    mech_group.add_argument(
+        "--as",
+        dest="mechanism",
+        choices=("submodule", "clone", "symlink"),
+        help=argparse.SUPPRESS,  # deprecated alias for --mode; removed in v0.9.0
+    )
     p_mount.add_argument(
         "--description", help="one-line description for the `## Spaces` entry"
+    )
+    p_mount.add_argument(
+        "--name",
+        help="override the `## Spaces` entry label (default: <relative-path>/)",
+    )
+    p_mount.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the plan; touch nothing",
     )
     p_mount.set_defaults(func=cmd_mount)
 

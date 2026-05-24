@@ -27,7 +27,7 @@ If the config is missing or `wiki` is unset, the user has not set up yet — dri
 
 ## Preflight (before anything)
 
-This briefing drives the **full installation** (skills + scaffold). For a no-install Tier 1 start — folder + `index.md` — see the README's `## Start` section. The skills resolve the target wiki via **explicit path → config → CWD ancestor**, so a no-install wiki still works as long as the agent invokes the skills with the wiki path or from inside it.
+This briefing drives the **full installation** (skills + scaffold). For a no-install Tier 1 start — folder + `index.md` — see the README's `## Install` § "No tooling at all" subsection. The skills resolve the target wiki via **explicit path → config → CWD ancestor**, so a no-install wiki still works as long as the agent invokes the skills with the wiki path or from inside it.
 
 For the full installation, verify the user's machine has one of:
 - **Recommended:** [`uv`](https://docs.astral.sh/uv/) on PATH (`curl -LsSf https://astral.sh/uv/install.sh | sh` or `brew install uv`). Used for `uvx wiki-spaces …` (no install) or `uv tool install wiki-spaces` (permanent). uv provisions Python automatically.
@@ -85,7 +85,7 @@ See [`MOUNT.md`](MOUNT.md) for the full playbook and trade-offs. Quick summary:
 2. Identify the external wiki: a git URL, a local clone, or a folder with `index.md`.
 3. Decide the mount mechanism with the user: submodule (collaborative; recommended), clone (read-only one-time fetch), or symlink (local convenience).
 4. Decide the path inside the canonical wiki: typically `<wiki>/shared/<name>/` for team wikis.
-5. Run `uvx wiki-spaces space mount <source> shared/<name> --as <mechanism>` — one command that executes the mount, verifies the result has `index.md`, and adds the `## Spaces` entry. It refuses on a Tier 1 parent (no `## Spaces`); if that happens, add `## Spaces` to the parent's `index.md` and rerun.
+5. Run `uvx wiki-spaces space mount <source> --mode <mechanism>` — one command that executes the mount, verifies the result has `index.md`, and adds the `## Spaces` entry atomically. The destination path defaults to `shared/<basename-of-source>/`; pass an explicit path (e.g., `shared/<custom-name>`) only when the default doesn't fit. It refuses on a Tier 1 parent (no `## Spaces`); if that happens, add `## Spaces` to the parent's `index.md` and rerun. Use `--dry-run` to preview without touching anything, `--name "Display Label"` to override the registered entry label.
 
 ## Edge cases
 
