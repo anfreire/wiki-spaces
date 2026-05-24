@@ -1104,6 +1104,50 @@ def test_adopt_skips_shared_with_stderr_notice(tmp_path):
     assert "shared/baz" in err.getvalue() or "shared/" in err.getvalue()
 # ---------- _is_in_external_scope: ancestor-walking trust-scope preflight ----------
 
+def test_audit_reports_size_violations(tmp_path):
+    """audit reports pages over their per-pattern cap and flips exit code.
+
+    Uses a `_meta/limits.md` with a tiny cap for a specific pattern so the
+    test doesn't depend on the 15K default. The default `index.md` cap of
+    5K is also exercised by writing a small over-cap index.
+    """
+    wiki = _make_wiki(tmp_path)
+    # Custom cap: 100 chars for any *.md in `bigpages/`
+    (wiki / "_meta").mkdir()
+    (wiki / "_meta" / "limits.md").write_text(
+        "| Pattern        | Cap (chars) |\n"
+        "|----------------|-------------|\n"
+        "| bigpages/*.md  |         100 |\n"
+    )
+    (wiki / "bigpages").mkdir()
+    (wiki / "bigpages" / "small.md").write_text("tiny content\n")  # under cap
+    (wiki / "bigpages" / "large.md").write_text("x" * 200 + "\n")  # over cap
+
+    rc, out, _ = _run(["--wiki", str(wiki), "audit"])
+    assert rc == 1
+    assert "size violation" in out
+    assert "bigpages/large.md" in out
+    assert "bigpages/small.md" not in out.split("size violation")[-1]
+
+
+def test_audit_reports_approaching_cap_informationally(tmp_path):
+    """A page at >=80% of its cap is reported as 'approaching' — informational,
+    does not flip the exit code."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "_meta").mkdir()
+    (wiki / "_meta" / "limits.md").write_text(
+        "| Pattern   | Cap (chars) |\n"
+        "|-----------|-------------|\n"
+        "| notes.md  |         100 |\n"
+    )
+    (wiki / "notes.md").write_text("x" * 85 + "\n")  # 85/100 = 85% — approaching
+
+    rc, out, _ = _run(["--wiki", str(wiki), "audit"])
+    assert rc == 0
+    assert "approaching cap" in out
+    assert "notes.md" in out
+
+
 def test_is_in_external_scope_returns_false_for_owned_path(tmp_path):
     wiki = _make_wiki(tmp_path)
     target = wiki / "projects" / "mine"

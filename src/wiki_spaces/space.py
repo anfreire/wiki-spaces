@@ -846,6 +846,38 @@ def cmd_audit(args: argparse.Namespace) -> int:
             for link in sorted(by_page[page]):
                 print(f"  ! broken wikilink [[{link}]]")
 
+    # Size violations — pages over their per-pattern cap. Reported alongside
+    # drift and broken links; flips the exit code like the other hard errors.
+    # Approaching-cap warnings (>= 80% but under cap) print here too but do
+    # NOT flip the exit code.
+    from . import _limits as _limits_module
+    limits = _limits_module.read_limits(wiki_root)
+    md_files = _walk_owned_md_files(wiki_root)
+    over_cap: list[tuple[Path, int, int]] = []  # (path, chars, cap)
+    approaching: list[tuple[Path, int, int]] = []  # (path, chars, cap)
+    for f in md_files:
+        chars = _limits_module.current_size(f)
+        cap = _limits_module.cap_for(f, wiki_root, limits)
+        if chars > cap:
+            over_cap.append((f, chars, cap))
+        elif chars >= int(cap * 0.8):
+            approaching.append((f, chars, cap))
+
+    if over_cap:
+        print()
+        for f, chars, cap in sorted(over_cap):
+            rel = f.relative_to(wiki_root)
+            print(f"<wiki>/{rel}: ! size {chars} > cap {cap}")
+    if approaching:
+        print()
+        print(
+            f"approaching cap (>= 80% full; informational, not an error):"
+        )
+        for f, chars, cap in sorted(approaching):
+            rel = f.relative_to(wiki_root)
+            pct = round(chars / cap * 100)
+            print(f"  . <wiki>/{rel}: {chars}/{cap} ({pct}%)")
+
     if orphans:
         print(
             f"\norphans: {len(orphans)} page(s) with no incoming wikilinks "
@@ -854,22 +886,31 @@ def cmd_audit(args: argparse.Namespace) -> int:
         for page in orphans:
             print(f"  . <wiki>/{page.relative_to(wiki_root)}")
 
-    # Orphans are a fact, not an error — they never flip the exit code.
-    # `## Spaces` drift and broken wikilinks do.
-    errors = drift_issues + len(broken)
+    # Orphans and approaching-cap are facts, not errors — they never flip the
+    # exit code. `## Spaces` drift, broken wikilinks, and over-cap size
+    # violations do.
+    errors = drift_issues + len(broken) + len(over_cap)
     print()
     if errors == 0:
-        tail = f" ({len(orphans)} orphan(s) reported above)" if orphans else ""
-        print(f"OK: no `## Spaces` drift, no broken wikilinks{tail}")
+        info_parts: list[str] = []
+        if approaching:
+            info_parts.append(f"{len(approaching)} approaching cap")
+        if orphans:
+            info_parts.append(f"{len(orphans)} orphan(s)")
+        tail = f" ({', '.join(info_parts)} reported above)" if info_parts else ""
+        print(f"OK: no drift, no broken wikilinks, no size violations{tail}")
         return 0
     parts: list[str] = []
     if drift_issues:
         parts.append(f"{drift_issues} `## Spaces` drift")
     if broken:
         parts.append(f"{len(broken)} broken wikilink(s)")
+    if over_cap:
+        parts.append(f"{len(over_cap)} size violation(s)")
     print(
         f"{errors} issue(s) found: {' + '.join(parts)}. Re-run after fixing, "
-        "or use `wiki-spaces space add/remove` for `## Spaces` entries."
+        "or use `wiki-spaces space add/remove` for `## Spaces` entries, "
+        "and `space promote --split` (or shrink) for size violations."
     )
     return 1
 

@@ -55,14 +55,21 @@ When step 1 of the procedure finds no usable wiki (config missing or wiki path i
    - **Flat wiki (no folders at all)** — write at the wiki root or ask.
 
    Slugs are lowercase, hyphen-separated, ≤50 chars, descriptive. Mounting an external wiki as a space (e.g., `<wiki>/shared/team-foo/`) is a separate flow — see `references/MOUNT.md`.
-7. **Write pages.**
+7. **Size discipline (pre-write check).** Before writing any page, materialize the FULL projected post-write content as a string (for an Edit, apply the edit in memory first). Compute `projected_chars = len(text_after_stripping_frontmatter)`. Look up the cap for this path via `CONVENTIONS / _meta/limits.md` (defaults: `index.md` = 5,000; `log.md` = 100,000; any other `*.md` = 15,000). If `projected_chars > cap`, **reject the write** unless the projected size is strictly smaller than the current on-disk size (the "shrinking write" escape hatch for legacy bloat). On rejection, do NOT silently truncate; surface the projected size and the cap to the producer and pick a remediation in this order:
+   1. **Split** — if the page has H2 boundaries that read as distinct topics, split sections out as new siblings (or children of a new space; see step 2). Move the relevant H2 sections verbatim; the original page becomes a hub with in-body wikilinks to the new pages.
+   2. **Promote-with-`--split`** — when the page is genuinely a hub of multiple distinct topics, run `wiki-spaces space promote <path> --split`. The CLI moves H2 sections into sibling content files under the new space; the new `index.md` is just H1 + summary + a "Sections" paragraph with wikilinks to the new siblings (NOT in `## Spaces`, which is reserved for child folder-spaces).
+   3. **Summarize** — only when neither split nor promote applies (the page IS already dense). Identify entries to merge or remove; the rejection forces consolidation now, not "later." This is the Hermes-style discipline that prevents day-30 bloat.
+
+   For `index.md` rejection specifically: never use `space promote` (refused by the CLI on `index.md`). Instead, push detail down into a relevant child space's `index.md` or a new content page, or collapse verbose `## Items` entries to wikilink-only references.
+
+8. **Write pages.**
    - **New pages.** Use the closest `_template.md` if any; otherwise the page template from CONVENTIONS if frontmatter is in use; otherwise plain markdown. Apply provenance markers (per CONVENTIONS) on inferred or ambiguous claims when in use. Add up to 2 relevant wikilinks per CONVENTIONS / Linking rules.
    - **Updates.** Merge new info; preserve manual content; update `updated:` timestamp; deduplicate `sources:`. Don't overwrite unrelated sections.
    - **Write cap.** If more than ~10 pages would change, summarize the plan and ask before writing.
-8. **Update tracking.** Per CONVENTIONS / `index.md`, `## Spaces` is the exhaustive navigation contract:
+9. **Update tracking.** Per CONVENTIONS / `index.md`, `## Spaces` is the exhaustive navigation contract:
    - **`## Spaces` (exhaustive when present).** If you created a new space (a folder with its own `index.md`), prefer the CLI: `wiki-spaces space add <relative-path>` creates the folder, writes a minimal `index.md` (with `## Spaces` from t=0), and updates the nearest ancestor's `## Spaces` automatically. Use `wiki-spaces space remove <relative-path>` to delete in symmetric fashion. **Both commands atomically refuse** when the nearest ancestor's `index.md` has no `## Spaces` section — they exit non-zero and touch nothing. When that happens: ask the user whether to add the section. On yes, add an empty `## Spaces` section to the ancestor's `index.md` directly (one heading line, blank line after), then retry the CLI command. On no, fall back to manual filesystem ops (create / remove the directory yourself) and leave the ancestor as-is. If the CLI is unavailable entirely, do it manually: find the **nearest ancestor space** — the wiki root, or an intermediate space whose folder carries an `index.md`. Plain grouping folders (no `index.md`) are skipped on the walk up. If the ancestor has `## Spaces`, add the entry there in the same operation. When you remove a contained space whose entry is listed, remove the entry.
    - **`.manifest.json` (if present):** update `source_cwd`, `last_synced`, `last_commit_synced`, `pages_in_vault`.
-9. **Confirm.**
+10. **Confirm.**
 
 ```
 Updated wiki:
