@@ -26,7 +26,7 @@ wiki-spaces space mount <source> [path] --mode submodule|clone|symlink \
 - `--mode` — required. Mount mechanism changes trust semantics, so the choice is explicit.
 - `--dry-run` — print the plan; touch nothing.
 
-**The CLI atomically refuses** when the nearest ancestor's `index.md` has no `## Spaces` section: exits non-zero, touches nothing. Resolution: add `## Spaces` to the ancestor's `index.md` first (a single heading line), then rerun. The mount step itself also refuses when the mounted source has no `index.md` — it rolls back per-mode and exits non-zero. If rollback fails, you get a clear "manual cleanup required" message.
+**The CLI auto-inserts `## Spaces`** into a bare-`index.md` ancestor as the first step of the mutation (via the chain helper, atomic under `flock`) — no manual setup required. The mount step refuses when the mounted source itself fails the v1 spec floor (no `index.md`, OR `index.md` exists but has no `## Spaces`); auto-inserting into an external mount would mutate someone else's repo, so wiki-spaces leaves that to the upstream owner. On a refusal the mount is rolled back per-mode; if rollback fails, you get a clear "manual cleanup required" message.
 
 Examples:
 
@@ -44,7 +44,7 @@ wiki-spaces space mount /home/me/personal-notes --mode symlink
 ## Before mounting (any branch)
 
 - **Trust-scope classification depends on placement.** The heuristic in `CONVENTIONS.md / Owned vs external` marks a space as external only if it's under `<wiki>/shared/`, is a git submodule with a foreign origin, or is a symlink resolving outside the wiki tree. **A plain clone under `<wiki>/projects/<name>/` is classified as *owned* by the heuristic — writes are allowed by default.** The `space mount` default (`shared/<basename>/`) opts you into the external semantics; pass an explicit `[path]` to override.
-- **Parent must have `## Spaces`.** `space mount` refuses when the parent's `index.md` lacks the navigation-contract heading. Either add `## Spaces` to the parent first or use the manual mechanism below and accept that the mount isn't navigable from the parent's index.
+- **Parent's `## Spaces` is auto-inserted.** When the parent's `index.md` lacks the heading, `space mount` inserts it as the first step of the mount mutation — no prior setup required. The mounted target itself, however, must already carry `## Spaces` (wiki-spaces does not write into external mounts); see "Common pitfalls" below.
 
 ## Underlying mechanism (if you need to do it manually)
 
@@ -87,6 +87,6 @@ For git-backed mounts, push permissions on the upstream provide a publication ba
 - **Forgot to update parent's `## Spaces`.** `space mount` does this for you. Manual branches need `wiki-spaces space add <path>` (or hand-edit the parent's `## Spaces`) — otherwise the space exists on disk but isn't navigable from the parent's index.
 - **Clone placed outside `shared/`.** Classified as owned; writes are allowed by default. Either move it under `shared/`, or accept that the read-only semantics aren't enforced.
 - **Submodule cloned without `--recursive`.** Cloners need `git clone --recursive` (or `git submodule update --init`). Document this in your wiki's `index.md` if you use submodules.
-- **Mount has no `index.md`.** It's not a wiki-spaces wiki — either ask the upstream owner to add one, or treat the mount as a plain folder (no space, no operations). `space mount` refuses and rolls back in this case.
+- **Mount has no `index.md`, or its `index.md` has no `## Spaces`.** It's not a wiki-spaces space — either ask the upstream owner to add `## Spaces` to their `index.md`, or treat the mount as a plain folder (no space, no operations). `space mount` refuses and rolls back in both cases; auto-inserting into an external mount would mutate someone else's repo, so wiki-spaces deliberately leaves that to the owner.
 - **GitHub release ZIPs don't include submodule contents.** Cloners using a release ZIP get empty submodule folders.
 - **After `git submodule update --remote`, the new SHA is only local until you commit the parent's updated submodule pointer (gitlink) and push.** A common gotcha when sharing.

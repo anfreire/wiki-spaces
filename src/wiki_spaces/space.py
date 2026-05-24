@@ -935,21 +935,58 @@ def _summary_header(wiki_root: Path, all_spaces: list[Path]) -> list[str]:
 
 
 def cmd_audit(args: argparse.Namespace) -> int:
-    # Strict read-only resolver: a folder with `index.md` but no `## Spaces`
-    # is not a wiki under v1. Repair on bare-index belongs to write commands
-    # and (in PR-E) `audit --fix`.
-    wiki_root = _resolve_wiki_strict(args.wiki)
-    if wiki_root is None:
+    # Read-only by default → strict resolver (refuses bare-index).
+    # With `--fix` we're a repair surface → repair resolver + an explicit
+    # ensure-section pass on the root before we enumerate drift.
+    fix = getattr(args, "fix", False)
+    remove_stale = getattr(args, "remove_stale", False)
+    if remove_stale and not fix:
         print(
-            "  ! no wiki resolved (or wiki has no `## Spaces` section). "
-            "Pass --wiki <path>, set `wiki` in config, or run a write command "
-            "(`space add`, `space remove`, `space mount`, `space promote`) "
-            "to insert `## Spaces` automatically.",
+            "  ! --remove-stale requires --fix",
             file=sys.stderr,
         )
         return 2
+    if fix:
+        wiki_root = _resolve_wiki_for_repair(args.wiki)
+    else:
+        wiki_root = _resolve_wiki_strict(args.wiki)
+    if wiki_root is None:
+        if fix:
+            msg = "  ! no wiki resolved. Pass --wiki <path> or set `wiki` in config."
+        else:
+            msg = (
+                "  ! no wiki resolved (or wiki has no `## Spaces` section). "
+                "Pass --wiki <path>, set `wiki` in config, or run a write command "
+                "(`space add`, `space remove`, `space mount`, `space promote`) "
+                "to insert `## Spaces` automatically."
+            )
+        print(msg, file=sys.stderr)
+        return 2
 
     include_external = getattr(args, "include_external", False)
+
+    if fix:
+        # Pass 1: insert `## Spaces` into every owned space that's missing it.
+        # The FS walker (`_walk_owned_spaces`) surfaces bare-`index.md`
+        # folders too; `_ensure_section_at` makes them spec-compliant.
+        for space in list(
+            _walk_owned_spaces(wiki_root, include_external=include_external)
+        ):
+            try:
+                text = (space / "index.md").read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if _md.has_section(text, "Spaces"):
+                continue
+            try:
+                _ensure_section_at(space, wiki_root)
+            except RuntimeError as e:
+                print(f"  ! {e}", file=sys.stderr)
+                continue
+            rel = space.relative_to(wiki_root)
+            anc_label = "<wiki>" if str(rel) == "." else f"<wiki>/{rel}"
+            print(f"  ~ {anc_label}/index.md  +inserted `## Spaces`")
+
     all_spaces = list(_walk_owned_spaces(wiki_root, include_external=include_external))
     for line in _summary_header(wiki_root, all_spaces):
         print(line)
@@ -993,6 +1030,41 @@ def cmd_audit(args: argparse.Namespace) -> int:
             for entry in stale:
                 print(f"  - stale entry {entry}/ (no index.md on disk)")
             issues += len(missing) + len(stale)
+
+            # `--fix` repair pass for THIS space: register every missing
+            # entry and (optionally) remove stale ones. The fix is mechanical;
+            # never creates a directory (a stale entry is removed from the
+            # list, not promoted to a real space).
+            if fix:
+                ancestor_index = space / "index.md"
+                for child_rel in missing:
+                    label_str = f"{child_rel}/"
+                    href = f"{child_rel}/index.md"
+                    rc, info = _atomic_register_in_spaces(
+                        space, ancestor_index, label_str, href, None
+                    )
+                    if rc == 0 and info == "added":
+                        print(f"  ~ {label}/index.md ## Spaces  += [{label_str}]")
+                        issues -= 1
+                if remove_stale:
+                    for child_rel in stale:
+                        target_dir = space / child_rel
+                        ext, _why = _is_in_external_scope(target_dir, wiki_root)
+                        if ext and not include_external:
+                            print(
+                                f"  ! refusing to remove stale external entry "
+                                f"{child_rel}/ in {label}/index.md; pass "
+                                "--include-external --remove-stale together.",
+                                file=sys.stderr,
+                            )
+                            continue
+                        href = f"{child_rel}/index.md"
+                        rc, info = _atomic_remove_from_spaces(
+                            space, ancestor_index, href
+                        )
+                        if rc == 0 and info == "removed":
+                            print(f"  ~ {label}/index.md ## Spaces  -= [{child_rel}/]")
+                            issues -= 1
 
     drift_issues = issues
     broken, orphans = _audit_content(wiki_root, include_external=include_external)
@@ -1202,13 +1274,34 @@ def cmd_mount(args: argparse.Namespace) -> int:
         print(f"  + {rel}/  (git submodule of {args.source})")
 
     # Verify the mount is actually a wiki-spaces space before registering it.
-    # A symlink or clone is cleaned up; a submodule cannot be auto-undone
-    # safely (`submodule add` already staged a gitlink and edited
-    # .gitmodules), so the exact recovery commands are printed instead.
+    # The v1 contract requires `index.md` AND `## Spaces` on the mounted
+    # target. Auto-inserting `## Spaces` into an external mount would mutate
+    # someone else's repo, so we refuse instead — the user coordinates with
+    # the upstream owner. A symlink or clone is cleaned up; a submodule
+    # cannot be auto-undone safely (`submodule add` already staged a gitlink
+    # and edited .gitmodules), so the exact recovery commands are printed.
     if not (dest / "index.md").is_file():
         print(
             f"  ! mounted {rel}/ has no index.md — it is not a wiki-spaces "
             "space, so it was not registered in `## Spaces`.",
+            file=sys.stderr,
+        )
+        _rollback_mount(wiki_root, dest, rel, mechanism)
+        return 1
+    try:
+        mounted_text = (dest / "index.md").read_text(encoding="utf-8")
+    except OSError as e:
+        print(
+            f"  ! could not read mounted {rel}/index.md: {e}",
+            file=sys.stderr,
+        )
+        _rollback_mount(wiki_root, dest, rel, mechanism)
+        return 1
+    if not _md.has_section(mounted_text, "Spaces"):
+        print(
+            f"  ! mounted {rel}/index.md has no `## Spaces` section. "
+            "Coordinate with the upstream owner to add it before mounting; "
+            "wiki-spaces does not auto-insert into external spaces.",
             file=sys.stderr,
         )
         _rollback_mount(wiki_root, dest, rel, mechanism)
@@ -2265,6 +2358,22 @@ def main(argv: list[str] | None = None) -> int:
         "ops can opt in to externals; this flag is the opt-in. Plumbed "
         "through both the drift walker and the broken-link walker so the two "
         "checks always agree on scope.",
+    )
+    p_audit.add_argument(
+        "--fix",
+        action="store_true",
+        help="repair drift in place: insert `## Spaces` into any owned space "
+        "missing it, then register every on-disk child that's not yet listed "
+        "in its ancestor's `## Spaces`. Touches the filesystem. Use without "
+        "`--fix` to preview the same report read-only.",
+    )
+    p_audit.add_argument(
+        "--remove-stale",
+        action="store_true",
+        help="with `--fix`: also remove `## Spaces` entries whose target "
+        "doesn't exist on disk. Externally-classified entries require "
+        "`--include-external` together with `--remove-stale` so legitimate "
+        "external mounts are not silently unregistered.",
     )
     p_audit.set_defaults(func=cmd_audit)
 

@@ -801,6 +801,162 @@ def test_audit_broken_and_drift_both_counted(tmp_path):
 
 # ---------- space audit: _archives + Obsidian embeds ----------
 
+def test_audit_fix_inserts_spaces_into_bare_index_folder(tmp_path):
+    """`audit --fix` is the repair surface: it inserts `## Spaces` into any
+    owned folder that has `index.md` but no heading. After the fix, the
+    same audit re-run with no `--fix` exits 0."""
+    wiki = _make_wiki(tmp_path)
+    bare = wiki / "bare"
+    bare.mkdir()
+    (bare / "index.md").write_text("# bare\n")  # no `## Spaces`
+    rc, out, _ = _run(["--wiki", str(wiki), "audit", "--fix"])
+    # We added a child without registering it pre-fix → it shows as drift;
+    # the fix repairs the bare section AND registers the missing entry.
+    assert rc == 0, out
+    bare_text = (bare / "index.md").read_text()
+    assert "## Spaces" in bare_text
+    root_text = (wiki / "index.md").read_text()
+    entries = _md.parse_section_entries(root_text, "Spaces")
+    assert any(e.href and "bare/" in e.href for e in entries)
+
+
+def test_audit_fix_recomputes_drift_after_section_repair(tmp_path):
+    """A nested bare-index space is invisible to drift detection until the
+    bare-section pass runs (because the parser skips entries when the
+    section header is missing). `--fix` makes a single pass do both."""
+    wiki = _make_wiki(tmp_path)
+    # foo is registered in wiki root's `## Spaces` already (via space add).
+    rc, _, _ = _run(["--wiki", str(wiki), "add", "foo"])
+    assert rc == 0
+    # Strip foo's own `## Spaces` to mimic a pre-v1 adopted layout.
+    foo_idx = wiki / "foo" / "index.md"
+    foo_idx.write_text("# foo\n")  # bare
+    # Now create foo/bar/ on disk — drift, but invisible until foo gets
+    # `## Spaces` back.
+    (wiki / "foo" / "bar").mkdir()
+    (wiki / "foo" / "bar" / "index.md").write_text("# bar\n\n## Spaces\n\n")
+    rc, out, _ = _run(["--wiki", str(wiki), "audit", "--fix"])
+    assert rc == 0, out
+    assert "## Spaces" in foo_idx.read_text()
+    foo_entries = _md.parse_section_entries(foo_idx.read_text(), "Spaces")
+    assert any(e.href and "bar" in e.href for e in foo_entries)
+
+
+def test_audit_fix_registers_missing_entry_without_creating_directory(tmp_path):
+    """`--fix` registers existing on-disk children; it never creates a
+    directory. A stale entry (target absent) is reported but only removed
+    when `--remove-stale` is also passed."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "foo").mkdir()
+    (wiki / "foo" / "index.md").write_text("# foo\n\n## Spaces\n\n")
+    # foo is NOT in wiki root's `## Spaces` — drift.
+    rc, out, _ = _run(["--wiki", str(wiki), "audit", "--fix"])
+    assert rc == 0, out
+    # Entry registered; no new dir created.
+    entries = _md.parse_section_entries((wiki / "index.md").read_text(), "Spaces")
+    assert any(e.href and "foo/" in e.href for e in entries)
+
+
+def test_audit_fix_remove_stale_refuses_external_without_include_external(tmp_path):
+    """Stale entries pointing into externally-classified paths are NOT
+    removed unless `--include-external --remove-stale` are passed together
+    — guards against accidentally unregistering a legitimate external mount
+    whose contents are temporarily unavailable."""
+    wiki = _make_wiki(tmp_path)
+    # Hand-edit wiki/index.md to declare a stale shared/team entry.
+    idx = wiki / "index.md"
+    idx.write_text(
+        idx.read_text() + "- [shared/team/](shared/team/index.md)\n"
+    )
+    rc, _, err = _run(
+        ["--wiki", str(wiki), "audit", "--fix", "--remove-stale"]
+    )
+    # The external stale entry stays in place; the audit still exits 1.
+    assert rc != 0
+    assert "shared/team" in (wiki / "index.md").read_text()
+    assert "refusing to remove stale external" in err
+
+
+def test_audit_remove_stale_requires_fix(tmp_path):
+    """`--remove-stale` only makes sense with `--fix`; bare usage rejected."""
+    wiki = _make_wiki(tmp_path)
+    rc, _, err = _run(["--wiki", str(wiki), "audit", "--remove-stale"])
+    assert rc == 2
+    assert "--fix" in err
+
+
+def test_adopt_inserts_spaces_in_existing_bare_indexes(tmp_path):
+    """Root has `foo/index.md` with no `## Spaces` and no nested children.
+    After `init --adopt`, foo's index gets `## Spaces` inserted (proves
+    the leaf is repaired, not just the chain walk-up). Root's `## Spaces`
+    registers foo."""
+    root = tmp_path / "adopted"
+    root.mkdir()
+    (root / "index.md").write_text("# adopted\n")
+    (root / "foo").mkdir()
+    (root / "foo" / "index.md").write_text("# foo\n")  # bare; no children
+
+    from wiki_spaces import init_wiki
+    rc = init_wiki.main([str(root), "--adopt", "--no-config"])
+    assert rc == 0
+    assert "## Spaces" in (root / "foo" / "index.md").read_text()
+    root_entries = _md.parse_section_entries(
+        (root / "index.md").read_text(), "Spaces"
+    )
+    assert any(e.href and "foo/" in e.href for e in root_entries)
+
+
+def test_adopt_repairs_root_even_with_no_nested_spaces(tmp_path):
+    """Bare root + zero children → `--adopt` still inserts `## Spaces`
+    into the root. Otherwise the spec floor is violated on day 1."""
+    root = tmp_path / "empty"
+    root.mkdir()
+    (root / "index.md").write_text("# empty\n")
+    from wiki_spaces import init_wiki
+    rc = init_wiki.main([str(root), "--adopt", "--no-config"])
+    assert rc == 0
+    assert "## Spaces" in (root / "index.md").read_text()
+
+
+def test_adopt_skips_externals_without_index_md(tmp_path):
+    """With `--include-external`, the walker surfaces external boundary
+    folders that aren't actually spaces (e.g. a stub `shared/foreign/`
+    with no `index.md`). Adopt must skip those with a per-skip notice,
+    not blow up trying to register a non-space."""
+    root = tmp_path / "wiki"
+    root.mkdir()
+    (root / "index.md").write_text("# wiki\n\n## Spaces\n\n")
+    boundary = root / "shared" / "foreign"
+    boundary.mkdir(parents=True)  # no index.md
+    from wiki_spaces import init_wiki
+    rc = init_wiki.main(
+        [str(root), "--adopt", "--include-external", "--no-config"]
+    )
+    assert rc == 0
+    # Boundary not registered (it isn't a space).
+    entries = _md.parse_section_entries(
+        (root / "index.md").read_text(), "Spaces"
+    )
+    assert not any(e.href and "foreign" in e.href for e in entries)
+
+
+def test_mount_refuses_bare_target(tmp_path):
+    """A mounted target with `index.md` but no `## Spaces` is not a wiki
+    under v1. Mount refuses and rolls back the mount rather than
+    auto-inserting (auto-insert would mutate someone else's repo)."""
+    wiki = _make_wiki(tmp_path)
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "index.md").write_text("# external\n")  # bare; no `## Spaces`
+    rc, _, err = _run(
+        ["--wiki", str(wiki), "mount", str(src), "shared/team",
+         "--mode", "symlink"]
+    )
+    assert rc == 1
+    assert "## Spaces" in err
+    assert not (wiki / "shared" / "team").exists()
+
+
 def test_audit_excludes_archives_space_from_drift(tmp_path):
     """A space under `_archives/` is retired content — not flagged as a
     missing `## Spaces` entry."""
@@ -852,23 +1008,25 @@ _HAS_GIT = _shutil.which("git") is not None
 
 
 def _make_space_dir(path: Path, title: str = "mounted") -> Path:
-    """A plain external space: a folder with index.md."""
+    """A plain external space: a folder with `index.md` carrying `## Spaces`
+    (the v1 spec floor — mounted targets must satisfy it for mount to accept)."""
     path.mkdir(parents=True, exist_ok=True)
-    (path / "index.md").write_text(f"# {title}\n")
+    (path / "index.md").write_text(f"# {title}\n\n## Spaces\n\n")
     return path
 
 
 def _make_git_repo(path: Path, title: str = "cloned", *, with_index: bool = True) -> Path:
     """A real local git repo with one commit (for clone tests).
 
-    With `with_index` (default) the repo contains index.md; otherwise only
-    notes.md — used to exercise the not-a-wiki mount path.
+    With `with_index` (default) the repo contains an `index.md` with
+    `## Spaces` (the v1 spec floor); otherwise only `notes.md` — used to
+    exercise the not-a-wiki mount path.
     """
     import os
     import subprocess
     path.mkdir(parents=True, exist_ok=True)
     if with_index:
-        (path / "index.md").write_text(f"# {title}\n")
+        (path / "index.md").write_text(f"# {title}\n\n## Spaces\n\n")
     else:
         (path / "notes.md").write_text(f"# {title} notes\n")
     env = {

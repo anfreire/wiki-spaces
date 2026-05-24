@@ -265,14 +265,31 @@ def main(argv: list[str] | None = None) -> int:
 
     # `--adopt`: scan for existing nested spaces and register them in their
     # nearest ancestor's `## Spaces`. Externals are reported on stderr and
-    # skipped (unless --include-external).
+    # skipped (unless --include-external). The chain helper inserts
+    # `## Spaces` into any bare-`index.md` ancestor along the walk up.
     adopt_registered: list[tuple[str, str]] = []  # (label, ancestor-relative)
     if args.adopt:
         # Late import: `space` pulls in `fcntl` and other heavy deps that
         # `init_wiki` shouldn't pay for in the no-adopt path.
-        from . import space as _space, _md as _md_module
+        from . import space as _space
 
-        for path, classification, reason in _space._walk_classified(root):
+        # Always repair the root first — even on a zero-nested-spaces wiki
+        # the root must carry `## Spaces` after `init --adopt`.
+        try:
+            _space._ensure_section_at(root, root)
+        except RuntimeError as e:
+            print(
+                f"  ! could not insert `## Spaces` into {root}/index.md: {e}",
+                file=sys.stderr,
+            )
+            return 1
+
+        # v6 plan: pass `include_external` to the walker so `--include-external`
+        # actually descends into external subtrees, not just yields the
+        # boundaries.
+        for path, classification, reason in _space._walk_classified(
+            root, include_external=args.include_external
+        ):
             if path == root:
                 continue
             if classification == "external" and not args.include_external:
@@ -284,28 +301,54 @@ def main(argv: list[str] | None = None) -> int:
                     file=sys.stderr,
                 )
                 continue
+            # When include_external is on, `_walk_classified` may surface
+            # external boundary folders that don't actually have `index.md`
+            # (foreign submodules, escaping symlinks). Skip those with a
+            # per-skip notice rather than trying to register a non-space.
+            if not (path / "index.md").is_file():
+                rel_path = path.relative_to(root).as_posix()
+                print(
+                    f"  . skipping {rel_path}/ — no index.md",
+                    file=sys.stderr,
+                )
+                continue
 
-            ancestor = _space._nearest_ancestor_space(root, path)
-            ancestor_index = ancestor / "index.md"
+            # Repair the LEAF's own `index.md` first. The chain helper
+            # only walks UP from leaf, so a bare nested `foo/index.md`
+            # with no children stays bare without this step.
             try:
-                ancestor_text = ancestor_index.read_text(encoding="utf-8")
-            except OSError:
+                _space._ensure_section_at(path, root)
+            except RuntimeError as e:
+                print(
+                    f"  ! adopt failed inserting `## Spaces` into "
+                    f"{path}/index.md: {e}",
+                    file=sys.stderr,
+                )
                 continue
-            # Every CLI-created/adopted wiki has `## Spaces` from t=0, but a
-            # pre-existing adopted index.md might have had it stripped. Skip
-            # silently if the ancestor lacks the section — the user can add
-            # it and re-run.
-            if not _md_module.has_section(ancestor_text, "Spaces"):
-                continue
-            rel_from_ancestor = path.relative_to(ancestor)
-            label = f"{rel_from_ancestor}/"
-            href = f"{rel_from_ancestor}/index.md"
-            new_text = _space._add_space_entry(ancestor_text, label, href, None)
-            if new_text != ancestor_text:
-                ancestor_index.write_text(new_text, encoding="utf-8")
-                anc_rel = ancestor.relative_to(root)
-                anc_label = "<wiki>" if str(anc_rel) == "." else f"<wiki>/{anc_rel}"
-                adopt_registered.append((label, anc_label))
+
+            # Register `path` upward via the chain helper. Bare-index
+            # ancestors get `## Spaces` inserted as part of the chain walk.
+            # The chain helper's notices are deferred — `init`'s bottom
+            # summary print groups adoption activity with the rest of the
+            # written-files block so the user sees one tidy report.
+            try:
+                _notices, added = _space._ensure_spaces_chain_and_register(
+                    root, path
+                )
+                for ancestor, label, _href in added:
+                    anc_rel = ancestor.relative_to(root)
+                    anc_label = (
+                        "<wiki>"
+                        if str(anc_rel) == "."
+                        else f"<wiki>/{anc_rel}"
+                    )
+                    adopt_registered.append((label, anc_label))
+            except _space.EnsureChainError as e:
+                print(
+                    f"  ! adopt failed for {path}: {e}",
+                    file=sys.stderr,
+                )
+                _space._rollback_added_entries(e.added)
 
     if not args.no_config:
         write_config({"wiki": str(root)})
