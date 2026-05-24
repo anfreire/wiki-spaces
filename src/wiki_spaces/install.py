@@ -229,30 +229,37 @@ def main(argv: list[str] | None = None) -> int:
     if not args.all:
         selected = [h for h in selected if harness_present(h)]
 
-    if not selected:
-        print("No harnesses selected. Either:")
-        print("  - run with --all to pre-position skills for every supported harness, or")
-        print("  - run with --harness <key> for one of:", ", ".join(sorted(known_keys)))
-        print("  - if you only use Cursor / Windsurf / Copilot / Aider, see")
-        print("    references/HARNESS_INTEGRATION.md for manual integration snippets.")
-        return 1
-
+    # PR-N (§41): write the `repo` config key even when no harnesses were
+    # detected. Bridge-only users (Cursor, Windsurf, GitHub Copilot, Aider)
+    # need `repo` so their rule snippets resolve `<repo>/skills/...` and
+    # `<repo>/references/...`. The pre-PR-N path returned early on empty
+    # selection, leaving `repo` unset and forcing `doctor` to fail.
     read_root, write_root = _resolve_install_root(dry_run=args.dry_run)
 
     header = "DRY RUN" if args.dry_run else "INSTALL"
     print(f"=== wiki-spaces {header} ===")
     print(f"  source: {write_root}")
-    print(f"  harnesses: {', '.join(h.key for h in selected)}")
+    if selected:
+        print(f"  harnesses: {', '.join(h.key for h in selected)}")
+    else:
+        print(f"  harnesses: none detected")
     print()
 
     any_failure = False
-    for h in selected:
-        actions, had_fatal = install_harness(
-            h, read_root, write_root, dry=args.dry_run, copy=args.copy, force=args.force
-        )
-        for line in actions:
-            print(line)
-        any_failure = any_failure or had_fatal
+    if selected:
+        for h in selected:
+            actions, had_fatal = install_harness(
+                h, read_root, write_root, dry=args.dry_run, copy=args.copy, force=args.force
+            )
+            for line in actions:
+                print(line)
+            any_failure = any_failure or had_fatal
+    else:
+        print("  No harnesses with a skills directory present.")
+        print("  Bridge-only harnesses (Cursor, Windsurf, Copilot, Aider) integrate")
+        print("  via `wiki-spaces install --bridge <key>`. See")
+        print("  references/HARNESS_INTEGRATION.md for the per-harness snippets.")
+        print()
 
     if not args.dry_run:
         write_config({"repo": str(write_root)})

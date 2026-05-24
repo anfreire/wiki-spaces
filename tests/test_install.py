@@ -112,6 +112,36 @@ def test_install_main_exits_nonzero_on_missing_source(tmp_path, monkeypatch):
     assert "completed with errors" in err
 
 
+def test_install_with_no_harnesses_writes_repo(monkeypatch, tmp_path):
+    """PR-N (§41): when zero harnesses are detected, install must still
+    write the `repo` config key. Bridge-only users (Cursor, Windsurf,
+    GitHub Copilot, Aider) need it so their rule snippets can resolve
+    `<repo>/skills/...` and `<repo>/references/...`. Pre-PR-N, install
+    returned early with exit 1 and `repo` stayed unset, which made
+    `doctor` fail after the documented setup flow."""
+    from wiki_spaces import _common
+    # No harnesses at all — every detect path points at a missing marker.
+    fake_harness = Harness(
+        key="claude", detect=(tmp_path / "absent",),
+        skills_dir=tmp_path / "absent-skills",
+    )
+    monkeypatch.setattr(install, "HARNESSES", (fake_harness,))
+    monkeypatch.setattr(
+        install, "_resolve_install_root",
+        lambda *, dry_run: (tmp_path / "fake-read", tmp_path / "fake-write"),
+    )
+    monkeypatch.setattr(install, "_ensure_vendor_dev", lambda *, dry_run: None)
+    cfg_path = tmp_path / "config"
+    monkeypatch.setattr(_common, "CONFIG_PATH", cfg_path)
+
+    rc, out, _ = _run([])
+    assert rc == 0  # No harness selected is no longer an error.
+    assert "harnesses: none detected" in out
+    # `repo` written to config — `doctor` now passes for bridge-only users.
+    assert cfg_path.exists()
+    assert "repo = " in cfg_path.read_text()
+
+
 def test_bridge_warns_when_repo_unset(monkeypatch, tmp_path):
     """`--bridge cursor` emits a stderr warning when the `repo` key is unset
     in the config. The snippet still goes to stdout unchanged — only the
