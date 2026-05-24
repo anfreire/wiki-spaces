@@ -424,13 +424,17 @@ def strip_frontmatter(text: str) -> str:
 def _split_inline_array(inner: str) -> list[str]:
     """Split the body of a YAML inline array `[…]` on top-level commas only.
 
-    Respects both `'…'` and `"…"` quoted items so commas inside quoted
-    strings do not split the item. Items are trimmed; empty items are
-    dropped. Quotes themselves are stripped from the start/end of items.
+    A `'` or `"` is only treated as a quote opener at the start of an item
+    (after a comma, ignoring leading whitespace) — apostrophes inside
+    unquoted scalars like `[Bob's notes, baz]` stay literal. Items are
+    trimmed; empty items are dropped.
     """
     items: list[str] = []
     buf: list[str] = []
     quote: str | None = None
+    # `at_item_start` is True until we see a non-whitespace char in the
+    # current item — only then can a quote char act as an opener.
+    at_item_start = True
     for ch in inner:
         if quote is not None:
             if ch == quote:
@@ -438,13 +442,17 @@ def _split_inline_array(inner: str) -> list[str]:
             else:
                 buf.append(ch)
             continue
-        if ch in ("'", '"'):
+        if at_item_start and ch in ("'", '"'):
             quote = ch
+            at_item_start = False
             continue
         if ch == ",":
             items.append("".join(buf).strip())
             buf = []
+            at_item_start = True
             continue
+        if not ch.isspace():
+            at_item_start = False
         buf.append(ch)
     items.append("".join(buf).strip())
     return [it for it in items if it]

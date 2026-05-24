@@ -404,6 +404,25 @@ def test_parse_frontmatter_inline_array_quoted_comma_single():
     assert parsed["aliases"] == ["foo, bar", "baz"]
 
 
+def test_parse_frontmatter_inline_array_apostrophe_inside_unquoted_item():
+    """A `'` mid-item is a literal apostrophe, not a quote opener — common
+    in alias names like `Bob's notes`. Without the at-item-start gate this
+    would swallow the comma and merge both entries into one."""
+    fm = "---\naliases: [Bob's notes, baz]\n---\nbody\n"
+    parsed = _md.parse_frontmatter(fm)
+    assert parsed is not None
+    assert parsed["aliases"] == ["Bob's notes", "baz"]
+
+
+def test_parse_frontmatter_inline_array_mixed_quoted_and_apostrophe():
+    """Both forms in the same array: a quoted item with embedded comma
+    next to an unquoted item with an internal apostrophe."""
+    fm = "---\naliases: [\"foo, bar\", Bob's notes, baz]\n---\nbody\n"
+    parsed = _md.parse_frontmatter(fm)
+    assert parsed is not None
+    assert parsed["aliases"] == ["foo, bar", "Bob's notes", "baz"]
+
+
 def test_update_frontmatter_replaces_existing_key():
     out = _md.update_frontmatter_field(FM_SAMPLE, "summary", "new summary")
     assert _md.parse_frontmatter(out)["summary"] == "new summary"
