@@ -421,6 +421,35 @@ def strip_frontmatter(text: str) -> str:
     return body
 
 
+def _split_inline_array(inner: str) -> list[str]:
+    """Split the body of a YAML inline array `[…]` on top-level commas only.
+
+    Respects both `'…'` and `"…"` quoted items so commas inside quoted
+    strings do not split the item. Items are trimmed; empty items are
+    dropped. Quotes themselves are stripped from the start/end of items.
+    """
+    items: list[str] = []
+    buf: list[str] = []
+    quote: str | None = None
+    for ch in inner:
+        if quote is not None:
+            if ch == quote:
+                quote = None
+            else:
+                buf.append(ch)
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            continue
+        if ch == ",":
+            items.append("".join(buf).strip())
+            buf = []
+            continue
+        buf.append(ch)
+    items.append("".join(buf).strip())
+    return [it for it in items if it]
+
+
 def parse_frontmatter(text: str) -> dict[str, str | list[str]] | None:
     """Parse the documented schema subset. Returns None when no frontmatter.
 
@@ -466,7 +495,7 @@ def parse_frontmatter(text: str) -> dict[str, str | list[str]] | None:
             if not inner:
                 out[key] = []
             else:
-                out[key] = [item.strip().strip("'\"") for item in inner.split(",")]
+                out[key] = _split_inline_array(inner)
             i += 1
             continue
         if not value.strip():

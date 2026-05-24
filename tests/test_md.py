@@ -387,6 +387,23 @@ def test_parse_frontmatter_block_list_preserves_quoted_commas():
     assert parsed["tags"] == ["foo, bar", "baz"]
 
 
+def test_parse_frontmatter_inline_array_quoted_comma_double():
+    """Inline array items keep their full content when wrapped in double quotes
+    — commas inside the quoted span must not split."""
+    fm = "---\naliases: [\"foo, bar\", baz]\n---\nbody\n"
+    parsed = _md.parse_frontmatter(fm)
+    assert parsed is not None
+    assert parsed["aliases"] == ["foo, bar", "baz"]
+
+
+def test_parse_frontmatter_inline_array_quoted_comma_single():
+    """Same behavior with single quotes — both are valid YAML quote chars."""
+    fm = "---\naliases: ['foo, bar', baz]\n---\nbody\n"
+    parsed = _md.parse_frontmatter(fm)
+    assert parsed is not None
+    assert parsed["aliases"] == ["foo, bar", "baz"]
+
+
 def test_update_frontmatter_replaces_existing_key():
     out = _md.update_frontmatter_field(FM_SAMPLE, "summary", "new summary")
     assert _md.parse_frontmatter(out)["summary"] == "new summary"

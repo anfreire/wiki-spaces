@@ -552,12 +552,21 @@ def cmd_add(args: argparse.Namespace) -> int:
     already_space = (new_space / "index.md").is_file()
     created_dir_this_call = False
     created_index_this_call = False
+    # Track every directory THIS call creates (the leaf and any intermediate
+    # parents materialized by `mkdir(parents=True)`), deepest-first, so
+    # rollback can undo `space add a/b/c/d` against an empty wiki cleanly.
+    created_dirs_this_call: list[Path] = []
     if already_space and not args.force_index:
         print(f"  . {rel}/ already a space; ensuring ancestor entry")
     else:
         # Track exactly what we create so rollback only undoes our own work,
         # never the user's pre-existing content.
         created_dir_this_call = not new_space.exists()
+        if created_dir_this_call:
+            probe = new_space
+            while not probe.exists() and probe != wiki_root:
+                created_dirs_this_call.append(probe)
+                probe = probe.parent
         new_space.mkdir(parents=True, exist_ok=True)
         display_name = args.name or new_space.name
         description_for_body = (args.description or "").strip() or None
@@ -592,15 +601,20 @@ def cmd_add(args: argparse.Namespace) -> int:
                     file=sys.stderr,
                 )
         if created_dir_this_call:
-            try:
-                shutil.rmtree(new_space)
-            except OSError as e:
-                print(
-                    f"  ! ROLLBACK INCOMPLETE: created {rel}/ but "
-                    f"registration failed ({info}) and cleanup also failed: {e}. "
-                    f"Manual recovery: rm -rf {new_space}",
-                    file=sys.stderr,
-                )
+            # `created_dirs_this_call` is deepest-first; rmdir each in order,
+            # only removing if the directory is empty (defensive against the
+            # user dropping content into one of these between mkdir and now).
+            for d in created_dirs_this_call:
+                try:
+                    if d.exists() and not any(d.iterdir()):
+                        d.rmdir()
+                except OSError as e:
+                    print(
+                        f"  ! ROLLBACK INCOMPLETE: created {d.relative_to(wiki_root)}/ but "
+                        f"registration failed ({info}) and cleanup also failed: {e}. "
+                        f"Manual recovery: rm -rf {d}",
+                        file=sys.stderr,
+                    )
         print(f"  ! {info}", file=sys.stderr)
         return rc
 

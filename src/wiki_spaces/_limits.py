@@ -102,16 +102,54 @@ def read_limits(wiki_root: Path) -> list[tuple[str, int]]:
 # ---------- Cap lookup ----------
 
 
+def _path_glob_match(rel: str, pattern: str) -> bool:
+    """Path-segment-bounded glob match.
+
+    Both `rel` and `pattern` are posix-style strings. Splits on `/` and walks
+    segments alongside:
+    - `**` matches zero or more whole segments.
+    - Any other segment matches one path segment, with `*`, `?`, and `[…]`
+      handled via `fnmatch.fnmatchcase` (so `*` does not cross `/`).
+
+    This gives `concepts/*.md` non-recursive semantics (does NOT match
+    `concepts/sub/foo.md`) and `concepts/**/*.md` recursive semantics
+    (matches at any depth, including zero extra segments). Works on every
+    supported Python; doesn't depend on `PurePath.full_match` (3.13+).
+    """
+    return _match_path_segs(rel.split("/"), pattern.split("/"))
+
+
+def _match_path_segs(rel: list[str], pat: list[str]) -> bool:
+    if not pat:
+        return not rel
+    head = pat[0]
+    if head == "**":
+        # Consume zero or more rel segments before continuing.
+        if _match_path_segs(rel, pat[1:]):
+            return True
+        if not rel:
+            return False
+        return _match_path_segs(rel[1:], pat)
+    if not rel:
+        return False
+    if not fnmatch.fnmatchcase(rel[0], head):
+        return False
+    return _match_path_segs(rel[1:], pat[1:])
+
+
 def cap_for(path: Path, wiki_root: Path, limits: list[tuple[str, int]]) -> int:
     """Walk `limits` in order; return the first cap whose glob matches `path`.
 
-    Match semantics (via `fnmatch.fnmatch`):
+    Match semantics:
     - A pattern containing `/` matches against `path.relative_to(wiki_root).as_posix()`
-      — full posix path (e.g. `concepts/*.md` matches `concepts/foo.md` but not
-      `notes/foo.md` and not `foo.md` at the root).
-    - A pattern without `/` matches against `path.name` — basename only (e.g.
-      `index.md` matches `<root>/index.md`, `<root>/projects/foo/index.md`, and
-      any other `index.md` at any depth; `*.md` matches every `.md` basename).
+      via `_path_glob_match`, which is path-segment bounded — `concepts/*.md`
+      matches `concepts/foo.md` but NOT `concepts/sub/foo.md`. Use `**` for
+      recursive matching: `concepts/**/*.md` matches every depth under
+      `concepts/`, including `concepts/foo.md` itself.
+    - A pattern without `/` matches against `path.name` via `fnmatch.fnmatch`
+      — basename only (e.g. `index.md` matches `<root>/index.md`,
+      `<root>/projects/foo/index.md`, and any other `index.md` at any depth;
+      `*.md` matches every `.md` basename).
 
     This split fixes the `**/*.md`-doesn't-match-root-files trap that plain
     glob semantics would create. Falls back to a very large cap (effectively
@@ -125,7 +163,7 @@ def cap_for(path: Path, wiki_root: Path, limits: list[tuple[str, int]]) -> int:
     name = path.name
     for pattern, cap in limits:
         if "/" in pattern:
-            if fnmatch.fnmatch(rel, pattern):
+            if _path_glob_match(rel, pattern):
                 return cap
         else:
             if fnmatch.fnmatch(name, pattern):

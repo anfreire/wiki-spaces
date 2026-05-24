@@ -1227,6 +1227,47 @@ def test_space_add_rollback_preserves_preexisting_dir(tmp_path, monkeypatch):
     assert (wiki / "newproj" / "user-file.txt").read_text() == "user content"
 
 
+def test_add_rollback_removes_created_parent_folders(tmp_path, monkeypatch):
+    """`space add a/b/c/d` against an empty wiki creates a/, a/b/, a/b/c/,
+    a/b/c/d/ via mkdir(parents=True). When registration fails, rollback must
+    remove every parent it created — not just the leaf."""
+    wiki = _make_wiki(tmp_path)
+
+    monkeypatch.setattr(
+        space, "_atomic_register_in_spaces",
+        lambda *a, **k: (1, "simulated write failure"),
+    )
+
+    rc, _, err = _run(["--wiki", str(wiki), "add", "a/b/c/d"])
+    assert rc == 1
+    assert "simulated write failure" in err
+    # Every directory created by this call must be removed (deepest-first).
+    assert not (wiki / "a" / "b" / "c" / "d").exists()
+    assert not (wiki / "a" / "b" / "c").exists()
+    assert not (wiki / "a" / "b").exists()
+    assert not (wiki / "a").exists()
+
+
+def test_add_rollback_only_removes_empty_parents(tmp_path, monkeypatch):
+    """If one of the parent dirs already had user content, rollback removes
+    the ones it created but leaves a non-empty pre-existing parent intact."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "a").mkdir()
+    (wiki / "a" / "user-file.txt").write_text("user content")
+
+    monkeypatch.setattr(
+        space, "_atomic_register_in_spaces",
+        lambda *a, **k: (1, "simulated write failure"),
+    )
+
+    rc, _, _ = _run(["--wiki", str(wiki), "add", "a/b/c"])
+    assert rc == 1
+    # `a/` pre-existed and has user content — must survive.
+    assert (wiki / "a" / "user-file.txt").read_text() == "user content"
+    # `a/b/` and `a/b/c/` were created by this call — must be gone.
+    assert not (wiki / "a" / "b").exists()
+
+
 def test_space_remove_rollback_restores_dir_on_rmtree_failure(tmp_path, monkeypatch):
     """Defect #2 part 2: when rmtree fails mid-delete (some files gone,
     others remain), rollback restores the directory byte-for-byte AND

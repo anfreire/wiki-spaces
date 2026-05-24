@@ -97,6 +97,36 @@ def test_cap_for_pathful_pattern_matches_relative_posix(tmp_path):
     assert _limits.cap_for(tmp_path / "foo.md", tmp_path, limits) == 15000
 
 
+def test_cap_for_pathful_glob_non_recursive(tmp_path):
+    """`concepts/*.md` matches one segment under `concepts/` only — NOT
+    deeper paths. fnmatch's `*` matches `/` too; the path-segment-bounded
+    `PurePosixPath.match` is what gives the expected non-recursive semantics."""
+    limits = [("concepts/*.md", 8000), *_limits.DEFAULTS]
+    # One-level (must match the user's 8000 cap)
+    assert _limits.cap_for(tmp_path / "concepts" / "foo.md", tmp_path, limits) == 8000
+    # Deeper path (must FALL THROUGH to the default *.md cap)
+    assert (
+        _limits.cap_for(tmp_path / "concepts" / "sub" / "foo.md", tmp_path, limits)
+        == 15000
+    )
+
+
+def test_cap_for_pathful_glob_recursive(tmp_path):
+    """`concepts/**/*.md` matches every depth under `concepts/`."""
+    limits = [("concepts/**/*.md", 8000), *_limits.DEFAULTS]
+    assert _limits.cap_for(tmp_path / "concepts" / "foo.md", tmp_path, limits) == 8000
+    assert (
+        _limits.cap_for(tmp_path / "concepts" / "sub" / "foo.md", tmp_path, limits)
+        == 8000
+    )
+    assert (
+        _limits.cap_for(
+            tmp_path / "concepts" / "a" / "b" / "c" / "foo.md", tmp_path, limits
+        )
+        == 8000
+    )
+
+
 def test_user_pattern_beats_default_glob(tmp_path):
     """The core regression: a narrow user rule must win over the broad default."""
     (tmp_path / "_meta").mkdir()
