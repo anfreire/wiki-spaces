@@ -103,6 +103,20 @@ def test_add_creates_space_and_updates_parent(tmp_path):
     assert entries[0].href == "foo/index.md"
 
 
+def test_add_without_description_omits_what_this_space_is_section(tmp_path):
+    """PR-A scrub: `space add foo` with no `--description` writes a child
+    `index.md` that contains `# foo` + `## Spaces` only — no
+    `## What this space is` header and no `<one paragraph describing this space>`
+    placeholder string. Mirrors `init_wiki.build_index_md`."""
+    wiki = _make_wiki(tmp_path)
+    rc, _, err = _run(["--wiki", str(wiki), "add", "foo"])
+    assert rc == 0, err
+    body = (wiki / "foo" / "index.md").read_text()
+    assert "## What this space is" not in body
+    assert "<one paragraph describing this space>" not in body
+    assert "## Spaces" in body
+
+
 def test_add_is_idempotent(tmp_path):
     wiki = _make_wiki(tmp_path)
     _run(["--wiki", str(wiki), "add", "foo"])
@@ -2627,6 +2641,44 @@ def test_promote_ancestor_uses_atomic_mutate_index(tmp_path, monkeypatch):
     hrefs = [e.href for e in entries if e.href]
     assert any("page/" in h for h in hrefs)
     assert any("concurrent/" in h for h in hrefs)
+
+
+def test_promote_link_rewrite_uses_fresh_ancestor_text(tmp_path, monkeypatch):
+    """The link rewrite in `_promote_mutate` runs against text re-read INSIDE
+    the lock, not against the outer-read `ancestor_text`. Prove it: the outer
+    read sees an ancestor with no `[[page]]` reference (so the planning pass
+    finds nothing to rewrite), but a concurrent writer injects `[[page]]`
+    into the ancestor between outer read and mutate. The mutate fn must
+    rewrite the injected wikilink to `[[page/index]]`. If the rewrite ran
+    against stale text, the injected link would survive unchanged."""
+    wiki = _make_wiki(tmp_path)
+    page = wiki / "page.md"
+    page.write_text("# page\n")
+    real_atomic = space._atomic_mutate_index
+
+    def patched_atomic(ancestor, ancestor_index, mutate_fn):
+        # Inject a `[[page]]` wikilink into the ancestor body BEFORE the
+        # mutate fn re-reads. This simulates a concurrent writer that
+        # added a reference to the source after our outer read.
+        original = ancestor_index.read_text(encoding="utf-8")
+        new = original.replace(
+            "## Spaces\n", "See [[page]] for details.\n\n## Spaces\n"
+        )
+        ancestor_index.write_text(new, encoding="utf-8")
+        return real_atomic(ancestor, ancestor_index, mutate_fn)
+
+    monkeypatch.setattr(space, "_atomic_mutate_index", patched_atomic)
+
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc == 0, err
+    root_text = (wiki / "index.md").read_text()
+    # Fresh-text proof: the injected `[[page]]` was rewritten to point at
+    # the promoted index (`page/index`, with the original basename preserved
+    # as the display alias per the wikilink rewrite contract). If the
+    # rewrite ran against the outer (stale) `ancestor_text`, the injected
+    # link would still read `[[page]]`.
+    assert "[[page/index|page]]" in root_text
+    assert "[[page]]" not in root_text
 
 
 def test_promote_rollback_does_not_clobber_concurrent_ancestor_write(tmp_path, monkeypatch):
