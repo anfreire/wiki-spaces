@@ -383,6 +383,18 @@ def append_log_with_rotation(
                         os.write(fd, kept.encode("utf-8"))
                         current = kept
 
+        # PR-M / §26: rotation may not free enough space — a single entry
+        # bigger than half the cap, or a cap small enough that even the
+        # kept half plus the new entry still overflows. Reject rather than
+        # silently committing an over-cap write; that preserves the
+        # "errors on overflow, never silent truncation" guarantee.
+        if len(current) + len(entry_normalized) > cap:
+            raise ValueError(
+                f"log entry too large to fit within cap ({cap} chars) "
+                "after rotation; rotate manually or increase the log.md "
+                "cap in _meta/limits.md"
+            )
+
         # Append the new entry.
         if current and not current.endswith("\n"):
             os.write(fd, b"\n")

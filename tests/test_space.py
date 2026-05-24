@@ -1471,6 +1471,51 @@ def test_init_refuses_over_cap_description(tmp_path):
         "init wrote an over-cap index.md despite the size-cap helper"
 
 
+# ---------- PR-M: log rotation rejection + audit summary scope ----------
+
+def test_log_rotation_rejects_when_still_over_cap(tmp_path):
+    """A single log entry bigger than half the cap (or a cap small enough
+    that even the kept half plus the new entry overflows) must be refused
+    rather than silently committed. Preserves the no-silent-truncation
+    guarantee from CONVENTIONS / Size discipline."""
+    wiki = _make_wiki(tmp_path)
+    log = wiki / "log.md"
+    log.write_text("# Log\n")
+    # Use --create to scaffold log.md, then push a huge --raw entry through
+    # a tiny cap configured via `_meta/limits.md`.
+    (wiki / "_meta").mkdir()
+    (wiki / "_meta" / "limits.md").write_text(
+        "| Pattern | Cap (chars) |\n"
+        "|---|---|\n"
+        "| log.md | 100 |\n"
+    )
+    huge_entry = "- [2026-01-01T00:00:00Z] " + ("x" * 500)
+    rc, _, err = _run(["--wiki", str(wiki), "log", "--raw", huge_entry])
+    assert rc != 0
+    assert "too large" in err or "cap" in err
+
+
+def test_audit_summary_respects_include_external(tmp_path):
+    """`audit --include-external` summary's page count includes external
+    pages — otherwise the report's claim "owned scope; excludes external"
+    contradicts the per-page checks below it that DO walk external."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "shared" / "team").mkdir(parents=True)
+    (wiki / "shared" / "team" / "index.md").write_text("# t\n\n## Spaces\n\n")
+    (wiki / "shared" / "team" / "page.md").write_text("# external page\n")
+    idx = wiki / "index.md"
+    idx.write_text(idx.read_text() + "- [shared/team/](shared/team/index.md)\n")
+
+    rc_def, out_def, _ = _run(["--wiki", str(wiki), "audit"])
+    rc_ext, out_ext, _ = _run(["--wiki", str(wiki), "audit", "--include-external"])
+    assert rc_def == 0 and rc_ext == 0
+    # The default scope counts only the owned `index.md`; the external-
+    # inclusive scope counts the external `index.md` and `page.md` too.
+    assert "1 markdown files (owned scope" in out_def
+    # External scope: at least 3 (root, shared/team/index.md, shared/team/page.md)
+    assert "owned + external scope" in out_ext
+
+
 def test_audit_excludes_archives_space_from_drift(tmp_path):
     """A space under `_archives/` is retired content — not flagged as a
     missing `## Spaces` entry."""

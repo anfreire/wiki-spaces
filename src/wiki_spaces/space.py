@@ -992,9 +992,15 @@ def _walk_owned_md_files(wiki_root: Path, *, include_external: bool = False) -> 
     return out
 
 
-def _count_owned_pages(wiki_root: Path) -> int:
-    """Count markdown files inside owned scope (see `_walk_owned_md_files`)."""
-    return len(_walk_owned_md_files(wiki_root))
+def _count_owned_pages(wiki_root: Path, *, include_external: bool = False) -> int:
+    """Count markdown files inside the audit scope.
+
+    With `include_external=True`, files inside externally-classified spaces
+    are counted too — used by `audit --include-external` so the summary
+    header agrees with the per-page checks (drift / broken-wikilink /
+    size-violation walks) below it.
+    """
+    return len(_walk_owned_md_files(wiki_root, include_external=include_external))
 
 
 def _audit_content(wiki_root: Path, *, include_external: bool = False) -> tuple[list[tuple[Path, str]], list[Path]]:
@@ -1065,19 +1071,25 @@ def _audit_content(wiki_root: Path, *, include_external: bool = False) -> tuple[
     return broken, sorted(orphans)
 
 
-def _summary_header(wiki_root: Path, all_spaces: list[Path]) -> list[str]:
+def _summary_header(
+    wiki_root: Path, all_spaces: list[Path], *, include_external: bool = False
+) -> list[str]:
     convention_files = [
         "log.md", "_meta/taxonomy.md", ".manifest.json",
         "hot.md", "_template.md", ".obsidian",
     ]
     present = [c for c in convention_files if (wiki_root / c).exists()]
 
-    pages = _count_owned_pages(wiki_root)
+    pages = _count_owned_pages(wiki_root, include_external=include_external)
+    if include_external:
+        scope_desc = "owned + external scope (excludes hidden / _archives)"
+    else:
+        scope_desc = "owned scope; excludes hidden / _archives / external"
 
     lines = [
         f"wiki: {wiki_root}",
         f"  spaces: {len(all_spaces)}",
-        f"  pages:  {pages} markdown files (owned scope; excludes hidden / _archives / external)",
+        f"  pages:  {pages} markdown files ({scope_desc})",
         f"  conventions at root: {', '.join(present) if present else '(none)'}",
     ]
     log = wiki_root / "log.md"
@@ -1154,7 +1166,9 @@ def cmd_audit(args: argparse.Namespace) -> int:
             print(f"  ~ {anc_label}/index.md  +inserted `## Spaces`")
 
     all_spaces = list(_walk_owned_spaces(wiki_root, include_external=include_external))
-    for line in _summary_header(wiki_root, all_spaces):
+    for line in _summary_header(
+        wiki_root, all_spaces, include_external=include_external
+    ):
         print(line)
     print()
     # Every owned space should be listed in the `## Spaces` of its nearest
@@ -2950,6 +2964,11 @@ def cmd_log(args: argparse.Namespace) -> int:
     except FileNotFoundError as e:
         # Race: log.md was deleted between our check above and the lock
         # acquisition inside the helper. Surface and bail.
+        print(f"  ! {e}", file=sys.stderr)
+        return 1
+    except ValueError as e:
+        # PR-M / §26: rotation could not free enough space for the entry.
+        # Surface to the user; rotation/trim is their decision.
         print(f"  ! {e}", file=sys.stderr)
         return 1
     if archive is not None:
