@@ -1,34 +1,37 @@
-"""`wiki-spaces space` subcommands: add, remove, audit.
+"""`wiki-spaces space` subcommands: add, remove, mount, promote, audit, log, manifest.
 
 Maintains the `## Spaces` exhaustiveness contract automatically so users
 never edit ancestor `index.md` files by hand to track child spaces.
 
 Operations:
 - `space add <rel-path>`     create a new space and register it in the
-                             nearest ancestor's `## Spaces`. **Atomically
-                             refuses** when the ancestor has no `## Spaces`
-                             section — exits non-zero, touches nothing. The
-                             LLM/skill layer handles adding the section.
-- `space remove <rel-path>`  symmetric: refuses when the ancestor has no
-                             `## Spaces` section. Otherwise removes the
-                             entry and the directory. Refuses without
-                             `--force` when the space contains content
-                             beyond `index.md`.
+                             nearest ancestor's `## Spaces`. Auto-inserts
+                             `## Spaces` into any bare-`index.md` ancestor
+                             it encounters as the first mutation step
+                             (chain helper, atomic under `flock`).
+- `space remove <rel-path>`  remove a registered space and its directory.
+                             Refuses without `--force` when the space
+                             contains content beyond `index.md`. Inserts
+                             `## Spaces` into the ancestor if missing
+                             before removing the entry, so the contract
+                             stays consistent.
 - `space mount <src> [path]` mount an external space — git clone, git
                              submodule, or symlink (`--mode`) — verify it has
                              `index.md`, and register it in the nearest
-                             ancestor's `## Spaces`. Refuses when the
-                             ancestor has no `## Spaces` section, like
-                             `space add`. `path` is optional; defaults to
-                             `shared/<basename-of-source>/`. Use `--dry-run`
-                             to preview; `--name` to override the registered
-                             label.
+                             ancestor's `## Spaces`. Same chain-helper
+                             auto-insert as `space add`. `path` is optional;
+                             defaults to `shared/<basename-of-source>/`. Use
+                             `--dry-run` to preview; `--name` to override the
+                             registered label.
+- `space promote <path>`     turn `foo.md` into `foo/index.md` (a child
+                             space), rewriting links across the wiki and
+                             registering the new space in the ancestor's
+                             `## Spaces` atomically under flock.
 - `space audit`              walk owned spaces; report `## Spaces` drift,
-                             broken `[[wikilinks]]`, and orphan pages.
-                             Always-on summary header (space count, page
-                             count, conventions detected). Drift and broken
-                             links set a non-zero exit; orphans are
-                             informational and do not.
+                             broken `[[wikilinks]]`, size violations, and
+                             orphan pages. Read-only — uses the strict
+                             resolver and refuses on a bare-`index.md`
+                             wiki (no `## Spaces`).
 
 Trust scope: writes stay inside the wiki tree. External spaces (per the
 heuristic in CONVENTIONS.md / Owned vs external) are skipped on traversal.
@@ -47,17 +50,47 @@ import tempfile
 from pathlib import Path
 
 from . import _md
-from ._common import nearest_space_root, wiki_path
+from ._common import (
+    _has_spaces_section,
+    nearest_space_root_for_repair,
+    nearest_space_root_strict,
+    wiki_path,
+)
 
 
 # ---------- Helpers ----------
 
-def _resolve_wiki(explicit: Path | None = None) -> Path | None:
-    """Resolve the wiki root: explicit, then config, then nearest CWD ancestor.
+def _resolve_wiki_strict(explicit: Path | None = None) -> Path | None:
+    """Resolve the wiki root for a READ-ONLY operation.
 
-    The CWD fallback lets users operate on whatever wiki they're inside
-    without a config first — `wiki-spaces space audit` in any wiki tree
-    just works.
+    A wiki is a folder with `index.md` containing a `## Spaces` heading
+    (the v1 navigation contract). When the resolved candidate has
+    `index.md` but no `## Spaces`, this returns None — the caller refuses
+    to operate. Repair-capable callers (`space add`, `space remove`,
+    `space mount`, `space promote`, `audit --fix`, `init --adopt`) use
+    `_resolve_wiki_for_repair` instead and let the chain helper insert
+    `## Spaces` atomically as the first mutation step.
+    """
+    if explicit:
+        p = explicit.expanduser().resolve()
+        if (p / "index.md").is_file() and _has_spaces_section(p):
+            return p
+        return None
+    cfg_wiki = wiki_path()
+    if cfg_wiki is not None:
+        p = cfg_wiki.expanduser().resolve()
+        if (p / "index.md").is_file() and _has_spaces_section(p):
+            return p
+    return nearest_space_root_strict()
+
+
+def _resolve_wiki_for_repair(explicit: Path | None = None) -> Path | None:
+    """Resolve the wiki root for a WRITE operation that may repair `## Spaces`.
+
+    Accepts a bare `index.md` (no `## Spaces`) — the caller's chain helper
+    inserts the section atomically as the first mutation step. The
+    explicit / config / CWD fallback order matches the strict resolver;
+    only the `## Spaces` requirement differs.
     """
     if explicit:
         p = explicit.expanduser().resolve()
@@ -67,7 +100,13 @@ def _resolve_wiki(explicit: Path | None = None) -> Path | None:
         p = cfg_wiki.expanduser().resolve()
         if (p / "index.md").is_file():
             return p
-    return nearest_space_root()
+    return nearest_space_root_for_repair()
+
+
+# Kept as a thin alias so internal callers in the middle of the refactor
+# don't break. Equivalent to the repair resolver. Remove when all callers
+# have migrated.
+_resolve_wiki = _resolve_wiki_for_repair
 
 
 def _validate_rel_path(rel: str) -> tuple[bool, str | None]:
@@ -502,7 +541,7 @@ def _remove_space_entry(text: str, href: str) -> str:
 # ---------- Subcommands ----------
 
 def cmd_add(args: argparse.Namespace) -> int:
-    wiki_root = _resolve_wiki(args.wiki)
+    wiki_root = _resolve_wiki_for_repair(args.wiki)
     if wiki_root is None:
         print(
             "  ! no wiki resolved. Pass --wiki <path> or set `wiki` in "
@@ -527,27 +566,6 @@ def cmd_add(args: argparse.Namespace) -> int:
         )
         return 2
 
-    # Atomic refuse when the navigation contract is absent — the LLM/skill
-    # layer handles adding the `## Spaces` section, not the CLI. Keeps
-    # `space add` all-or-nothing.
-    ancestor = _nearest_ancestor_space(wiki_root, new_space)
-    ancestor_index = ancestor / "index.md"
-    text = ancestor_index.read_text(encoding="utf-8")
-    ancestor_rel = ancestor.relative_to(wiki_root)
-    printable = "<wiki>/" if str(ancestor_rel) == "." else f"<wiki>/{ancestor_rel}/"
-    if not _md.has_section(text, "Spaces"):
-        print(
-            f"  ! cannot register {rel}/: nearest ancestor {printable}index.md "
-            "has no `## Spaces` section.",
-            file=sys.stderr,
-        )
-        print(
-            f"    Add `## Spaces` to {printable}index.md first, then retry. "
-            "See AGENTS.md for the navigation contract.",
-            file=sys.stderr,
-        )
-        return 2
-
     # Already exists?
     already_space = (new_space / "index.md").is_file()
     created_dir_this_call = False
@@ -558,6 +576,15 @@ def cmd_add(args: argparse.Namespace) -> int:
     created_dirs_this_call: list[Path] = []
     if already_space and not args.force_index:
         print(f"  . {rel}/ already a space; ensuring ancestor entry")
+        # The pre-existing target's own index might lack `## Spaces` (a wiki
+        # adopted from a folder of notes before v1). Repair it before we
+        # register it upward — otherwise a re-registered existing space
+        # remains bare-index.
+        try:
+            _ensure_section_at(new_space, wiki_root)
+        except RuntimeError as e:
+            print(f"  ! {e}", file=sys.stderr)
+            return 1
     else:
         # Track exactly what we create so rollback only undoes our own work,
         # never the user's pre-existing content.
@@ -578,55 +605,40 @@ def cmd_add(args: argparse.Namespace) -> int:
         )
         print(f"  + {rel}/index.md")
 
-    rel_from_ancestor = new_space.relative_to(ancestor)
-    label = f"{rel_from_ancestor}/"
-    href = f"{rel_from_ancestor}/index.md"
-
-    # Atomic registration with wrapper-level rollback. If the mutation
-    # fails, undo any files / dirs we created in THIS call (never touch
-    # pre-existing user content).
-    rc, info = _atomic_register_in_spaces(
-        ancestor, ancestor_index, label, href, args.description
-    )
-    if rc != 0:
-        # Rollback our own filesystem side-effects, best-effort.
+    # Register the new space in each ancestor's `## Spaces`, walking up to
+    # the wiki root. The chain helper inserts `## Spaces` into any
+    # bare-`index.md` ancestor it encounters as the first mutation step.
+    # `cmd_add --description` writes to the child's `## What this space is`,
+    # NOT the parent's entry; the parent's entry uses the derived label and
+    # a None description.
+    try:
+        notices, _added = _ensure_spaces_chain_and_register(wiki_root, new_space)
+        for n in notices:
+            print(n)
+    except EnsureChainError as e:
+        for n in e.notices:
+            print(n)
+        _rollback_added_entries(e.added)
+        # Roll back our own FS creations (only what we made in THIS call).
         if created_index_this_call:
             try:
                 (new_space / "index.md").unlink()
-            except OSError as e:
-                print(
-                    f"  ! ROLLBACK INCOMPLETE: created {rel}/index.md but "
-                    f"registration failed ({info}) and cleanup also failed: {e}. "
-                    f"Manual recovery: rm {new_space / 'index.md'}",
-                    file=sys.stderr,
-                )
+            except OSError:
+                pass
         if created_dir_this_call:
-            # `created_dirs_this_call` is deepest-first; rmdir each in order,
-            # only removing if the directory is empty (defensive against the
-            # user dropping content into one of these between mkdir and now).
             for d in created_dirs_this_call:
                 try:
                     if d.exists() and not any(d.iterdir()):
                         d.rmdir()
-                except OSError as e:
-                    print(
-                        f"  ! ROLLBACK INCOMPLETE: created {d.relative_to(wiki_root)}/ but "
-                        f"registration failed ({info}) and cleanup also failed: {e}. "
-                        f"Manual recovery: rm -rf {d}",
-                        file=sys.stderr,
-                    )
-        print(f"  ! {info}", file=sys.stderr)
-        return rc
-
-    if info == "noop":
-        print(f"  . entry for {label} already in ancestor's ## Spaces")
-        return 0
-    print(f"  ~ {printable}index.md ## Spaces  += [{label}]")
+                except OSError:
+                    pass
+        print(f"  ! {e}", file=sys.stderr)
+        return 1
     return 0
 
 
 def cmd_remove(args: argparse.Namespace) -> int:
-    wiki_root = _resolve_wiki(args.wiki)
+    wiki_root = _resolve_wiki_for_repair(args.wiki)
     if wiki_root is None:
         print(
             "  ! no wiki resolved. Pass --wiki <path> or set `wiki` in config.",
@@ -658,24 +670,10 @@ def cmd_remove(args: argparse.Namespace) -> int:
 
     ancestor = _nearest_ancestor_space(wiki_root, target)
     ancestor_index = ancestor / "index.md"
-    text = ancestor_index.read_text(encoding="utf-8")
     rel_from_ancestor = target.relative_to(ancestor)
     href = f"{rel_from_ancestor}/index.md"
     ancestor_rel = ancestor.relative_to(wiki_root)
     printable = "<wiki>/" if str(ancestor_rel) == "." else f"<wiki>/{ancestor_rel}/"
-    if not _md.has_section(text, "Spaces"):
-        print(
-            f"  ! cannot remove {rel}/: nearest ancestor {printable}index.md "
-            "has no `## Spaces` section.",
-            file=sys.stderr,
-        )
-        print(
-            f"    No `## Spaces` section means no entry to remove. Add "
-            f"`## Spaces` to {printable}index.md first, or remove the directory "
-            "manually to bypass the contract.",
-            file=sys.stderr,
-        )
-        return 2
 
     contents = [
         p for p in target.iterdir()
@@ -690,11 +688,24 @@ def cmd_remove(args: argparse.Namespace) -> int:
         return 2
 
     if args.dry_run:
-        # Preview without mutation.
-        if _remove_space_entry(text, href) != text:
+        # Preview without mutation. Read the ancestor here only for the
+        # preview — we do NOT call _ensure_section_at on a dry-run.
+        text = ancestor_index.read_text(encoding="utf-8")
+        if _md.has_section(text, "Spaces") and _remove_space_entry(text, href) != text:
             print(f"  ~ (dry-run) {printable}index.md ## Spaces  -= [{rel_from_ancestor}/]")
+        elif not _md.has_section(text, "Spaces"):
+            print(f"  ~ (dry-run) would insert `## Spaces` into {printable}index.md")
         print(f"  . (dry-run) would remove {rel}/")
         return 0
+
+    # Ensure the ancestor's `## Spaces` exists so the entry-removal step has
+    # a section to operate on. Placed AFTER all refusal checks and dry-run
+    # so a refused or previewed call doesn't mutate anything.
+    try:
+        _ensure_section_at(ancestor, wiki_root)
+    except RuntimeError as e:
+        print(f"  ! {e}", file=sys.stderr)
+        return 1
 
     # Snapshot the target directory's contents to a system tempdir before
     # any mutation. Rollback restores byte-for-byte if rmtree fails.
@@ -924,10 +935,16 @@ def _summary_header(wiki_root: Path, all_spaces: list[Path]) -> list[str]:
 
 
 def cmd_audit(args: argparse.Namespace) -> int:
-    wiki_root = _resolve_wiki(args.wiki)
+    # Strict read-only resolver: a folder with `index.md` but no `## Spaces`
+    # is not a wiki under v1. Repair on bare-index belongs to write commands
+    # and (in PR-E) `audit --fix`.
+    wiki_root = _resolve_wiki_strict(args.wiki)
     if wiki_root is None:
         print(
-            "  ! no wiki resolved. Pass --wiki <path> or set `wiki` in config.",
+            "  ! no wiki resolved (or wiki has no `## Spaces` section). "
+            "Pass --wiki <path>, set `wiki` in config, or run a write command "
+            "(`space add`, `space remove`, `space mount`, `space promote`) "
+            "to insert `## Spaces` automatically.",
             file=sys.stderr,
         )
         return 2
@@ -1086,7 +1103,7 @@ def cmd_mount(args: argparse.Namespace) -> int:
     crash mid-write cannot leave the file half-rewritten. If registration
     fails after a successful mount, the mount is rolled back per-mode.
     """
-    wiki_root = _resolve_wiki(args.wiki)
+    wiki_root = _resolve_wiki_for_repair(args.wiki)
     if wiki_root is None:
         print(
             "  ! no wiki resolved. Pass --wiki <path> or set `wiki` in config.",
@@ -1118,26 +1135,10 @@ def cmd_mount(args: argparse.Namespace) -> int:
         )
         return 2
 
-    # Atomic refuse when the navigation contract is absent — the same
-    # `## Spaces` requirement as `space add`, checked before any filesystem
-    # work so a refusal is a no-op.
     ancestor = _nearest_ancestor_space(wiki_root, dest)
     ancestor_index = ancestor / "index.md"
-    text = ancestor_index.read_text(encoding="utf-8")
     ancestor_rel = ancestor.relative_to(wiki_root)
     printable = "<wiki>/" if str(ancestor_rel) == "." else f"<wiki>/{ancestor_rel}/"
-    if not _md.has_section(text, "Spaces"):
-        print(
-            f"  ! cannot register {rel}/: nearest ancestor {printable}index.md "
-            "has no `## Spaces` section.",
-            file=sys.stderr,
-        )
-        print(
-            f"    Add `## Spaces` to {printable}index.md first, then retry. "
-            "See AGENTS.md for the navigation contract.",
-            file=sys.stderr,
-        )
-        return 2
 
     mechanism = args.mechanism
     if mechanism == "submodule" and not (wiki_root / ".git").exists():
@@ -1213,22 +1214,28 @@ def cmd_mount(args: argparse.Namespace) -> int:
         _rollback_mount(wiki_root, dest, rel, mechanism)
         return 1
 
-    # Register in the nearest ancestor's `## Spaces`. Atomicity:
-    # - Lock the ancestor directory (its inode is stable across our write).
-    # - Re-read the index fresh (a concurrent op could have changed it).
-    # - Write via tempfile + os.replace (the pattern from cmd_promote).
-    # - If write fails for any reason, roll back the mount.
-    rc, message = _atomic_register_in_spaces(
-        ancestor, ancestor_index, label, href, args.description
-    )
-    if rc != 0:
-        print(f"  ! registration failed: {message}", file=sys.stderr)
+    # Register in the nearest ancestor's `## Spaces` via the chain helper.
+    # The helper inserts `## Spaces` into any bare-`index.md` ancestor it
+    # encounters as the first mutation step, then registers the mount.
+    # Unlike `cmd_add`, mount's `--name` / `--description` DO map to the
+    # parent's entry (label / description), not the child's body — the
+    # child here is an external mount we don't write into.
+    try:
+        notices, _added = _ensure_spaces_chain_and_register(
+            wiki_root,
+            dest,
+            leaf_label=args.name,
+            leaf_description=args.description,
+        )
+        for n in notices:
+            print(n)
+    except EnsureChainError as e:
+        for n in e.notices:
+            print(n)
+        _rollback_added_entries(e.added)
         _rollback_mount(wiki_root, dest, rel, mechanism)
-        return rc
-    if message == "added":
-        print(f"  ~ {printable}index.md ## Spaces  += [{label}]")
-    else:  # "noop"
-        print(f"  . entry for {label} already in ancestor's ## Spaces")
+        print(f"  ! {e}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -1365,6 +1372,223 @@ def _atomic_remove_from_spaces(
         return (new_text, "noop" if new_text == fresh_text else "removed")
 
     return _atomic_mutate_index(ancestor, ancestor_index, remove_entry)
+
+
+# ---------- Size discipline ----------
+#
+# Hoisted into PR-D because `_ensure_section_at` and
+# `_ensure_spaces_chain_and_register` (both defined below) enforce per-file
+# caps on every projected ancestor mutation. PR-L adds the CLI primitive
+# (`space check-size`) and wires the remaining framework-write paths through
+# `_enforce_size_cap`; both PRs share the same helpers defined here.
+
+
+class SizeCapExceeded(Exception):
+    """Raised when a projected write would push a file past its cap."""
+
+    def __init__(self, path: Path, chars: int, cap: int):
+        self.path = path
+        self.chars = chars
+        self.cap = cap
+        super().__init__(f"{path}: projected {chars} chars > cap {cap}")
+
+
+def _size_check_outcome(
+    path: Path, projected_text: str, wiki_root: Path
+) -> tuple[str, int, int]:
+    """Return `(outcome, projected_chars, cap)`.
+
+    Outcomes:
+    - `"ok"`           — under cap.
+    - `"ok-shrinking"` — over cap but smaller than the current on-disk body
+                         (legacy bloat escape hatch).
+    - `"over"`         — over cap and not shrinking.
+    """
+    from . import _limits as L
+    limits = L.read_limits(wiki_root)
+    over, chars, cap = L.would_exceed(path, projected_text, wiki_root, limits)
+    if not over:
+        return ("ok", chars, cap)
+    current = L.current_size(path)
+    projected = len(_md.strip_frontmatter(projected_text))
+    if projected < current:
+        return ("ok-shrinking", chars, cap)
+    return ("over", chars, cap)
+
+
+def _enforce_size_cap(path: Path, projected_text: str, wiki_root: Path) -> None:
+    """Raise `SizeCapExceeded` when a projected write would exceed the cap."""
+    outcome, chars, cap = _size_check_outcome(path, projected_text, wiki_root)
+    if outcome == "over":
+        raise SizeCapExceeded(path, chars, cap)
+
+
+# ---------- `## Spaces` section + chain registration ----------
+
+
+class EnsureChainError(Exception):
+    """Raised by `_ensure_spaces_chain_and_register` on atomic-helper failure.
+
+    Carries the entries already added and the notices already emitted so the
+    caller can print the partial trail and roll back FS-side state.
+    """
+
+    def __init__(
+        self,
+        ancestor: Path,
+        info: str,
+        added: list[tuple[Path, str, str]],
+        notices: list[str],
+    ):
+        self.ancestor = ancestor
+        self.info = info
+        self.added = added
+        self.notices = notices
+        super().__init__(f"ensure-chain failed at {ancestor}: {info}")
+
+
+def _ensure_section_at(space: Path, wiki_root: Path) -> str:
+    """Ensure `space/index.md` carries a `## Spaces` heading.
+
+    Returns `"inserted"` or `"noop"`. Does NOT walk up; does NOT register
+    anything in any parent. Used by `cmd_remove` (so a child entry can be
+    removed once a `## Spaces` exists), by `audit --fix`'s bare-index
+    repair pass (PR-E), and by `init --adopt`'s leaf section repair
+    (PR-E). Size-capped via `_enforce_size_cap`.
+
+    Raises `RuntimeError` on atomic-helper failure (write or cap).
+    """
+    space_index = space / "index.md"
+
+    def _mutate(fresh_text: str):
+        if _md.has_section(fresh_text, "Spaces"):
+            return (fresh_text, "noop")
+        text = fresh_text
+        if text and not text.endswith("\n"):
+            text += "\n"
+        text += "\n## Spaces\n\n"
+        try:
+            _enforce_size_cap(space_index, text, wiki_root)
+        except SizeCapExceeded as e:
+            return (None, 2, f"size cap: {e}")
+        return (text, "inserted")
+
+    rc, info = _atomic_mutate_index(space, space_index, _mutate)
+    if rc != 0:
+        raise RuntimeError(f"ensure-section failed at {space}: {info}")
+    return info
+
+
+def _ensure_spaces_chain_and_register(
+    wiki_root: Path,
+    leaf_space: Path,
+    *,
+    leaf_label: str | None = None,
+    leaf_description: str | None = None,
+) -> tuple[list[str], list[tuple[Path, str, str]]]:
+    """For each `(ancestor, child)` edge from `leaf_space` up to and including
+    registration in `wiki_root`'s `## Spaces`:
+
+      1. Ensure the ancestor's `index.md` carries `## Spaces`.
+      2. Register `child` as an entry in that section.
+
+    Walks ALL the way up: `space add foo/bar` against a wiki where
+    `foo/index.md` exists bare and `wiki/index.md` has no `## Spaces`
+    registers `bar` in `foo`, then `foo` in `<wiki>`, inserting
+    `## Spaces` in both.
+
+    `leaf_label` / `leaf_description` apply to the FIRST iteration (the
+    edge that registers `leaf_space` itself) ONLY. Intermediate ancestor
+    registrations always use the derived label and `None` description —
+    they're book-keeping, not user-typed metadata.
+
+    Returns `(notices, added_entries)`. On any atomic-helper failure,
+    raises `EnsureChainError` carrying the partial state so the caller
+    can print and roll back.
+
+    Edge case: `leaf_space == wiki_root` → `([], [])` (nothing to do).
+    """
+    notices: list[str] = []
+    added: list[tuple[Path, str, str]] = []
+    if leaf_space == wiki_root:
+        return notices, added
+    child = leaf_space
+    is_leaf_edge = True
+    while child != wiki_root:
+        ancestor = _nearest_ancestor_space(wiki_root, child)
+        if ancestor == child:
+            break
+        ancestor_index = ancestor / "index.md"
+        rel_from_ancestor = child.relative_to(ancestor)
+        derived_label = f"{rel_from_ancestor}/"
+        href = f"{rel_from_ancestor}/index.md"
+        label = (
+            leaf_label if (is_leaf_edge and leaf_label) else derived_label
+        )
+        description = leaf_description if is_leaf_edge else None
+        is_leaf_edge = False
+
+        def _mutate(
+            fresh_text: str,
+            *,
+            _label=label,
+            _href=href,
+            _desc=description,
+        ):
+            text = fresh_text
+            inserted = False
+            if not _md.has_section(text, "Spaces"):
+                if text and not text.endswith("\n"):
+                    text += "\n"
+                text += "\n## Spaces\n\n"
+                inserted = True
+            new = _add_space_entry(text, _label, _href, _desc)
+            entry_added = new != text
+            tag = (
+                "inserted-and-added" if inserted and entry_added
+                else "inserted" if inserted
+                else "added" if entry_added
+                else "noop"
+            )
+            try:
+                _enforce_size_cap(ancestor_index, new, wiki_root)
+            except SizeCapExceeded as e:
+                return (None, 2, f"size cap: {e}")
+            return (new, tag)
+
+        rc, info = _atomic_mutate_index(ancestor, ancestor_index, _mutate)
+        if rc != 0:
+            raise EnsureChainError(ancestor, info, added, notices)
+
+        anc_rel = ancestor.relative_to(wiki_root)
+        anc_label = "<wiki>" if str(anc_rel) == "." else f"<wiki>/{anc_rel}"
+        if info in ("inserted", "inserted-and-added"):
+            notices.append(f"  ~ {anc_label}/index.md  +inserted `## Spaces`")
+        if info in ("added", "inserted-and-added"):
+            notices.append(f"  ~ {anc_label}/index.md ## Spaces  += [{label}]")
+            added.append((ancestor, label, href))
+
+        if ancestor == wiki_root:
+            break
+        child = ancestor
+    return notices, added
+
+
+def _rollback_added_entries(entries: list[tuple[Path, str, str]]) -> None:
+    """Undo entries added by `_ensure_spaces_chain_and_register`, deepest first.
+
+    Best-effort: prints to stderr on failure but never raises. Inserted
+    `## Spaces` sections are NOT rolled back — they're append-only and
+    non-destructive; leaving them in place is the safe choice.
+    """
+    for ancestor, label, href in reversed(entries):
+        ancestor_index = ancestor / "index.md"
+        rc, info = _atomic_remove_from_spaces(ancestor, ancestor_index, href)
+        if rc != 0:
+            print(
+                f"  ! could not roll back entry [{label}] from {ancestor_index}: {info}",
+                file=sys.stderr,
+            )
 
 
 def _find_alias_owners(wiki_root: Path) -> dict[str, list[Path]]:
@@ -1531,7 +1755,7 @@ def _restore_from_snapshot(snapshot_dir: Path, wiki_root: Path) -> None:
 
 
 def cmd_promote(args: argparse.Namespace) -> int:
-    wiki_root = _resolve_wiki(args.wiki)
+    wiki_root = _resolve_wiki_for_repair(args.wiki)
     if wiki_root is None:
         print(
             "  ! no wiki resolved. Pass --wiki <path> or set `wiki` in config.",

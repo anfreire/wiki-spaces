@@ -33,6 +33,29 @@ def _run(args: list[str]) -> tuple[int, str, str]:
 
 # ---------- _resolve_wiki / _validate_rel_path ----------
 
+def test_audit_strict_resolver_rejects_bare_index_via_explicit_path(tmp_path):
+    """PR-D: audit is read-only and uses the strict resolver. A folder with
+    `index.md` but no `## Spaces` is not a wiki — audit refuses to operate."""
+    wiki = _make_wiki(tmp_path, with_spaces_section=False)
+    rc, _, err = _run(["--wiki", str(wiki), "audit"])
+    assert rc == 2
+    assert "Spaces" in err
+
+
+def test_audit_strict_resolver_rejects_bare_index_via_cwd(tmp_path, monkeypatch):
+    """Same contract through the CWD fallback: the strict resolver walks up
+    looking for `index.md` + `## Spaces` together. A bare-index ancestor is
+    invisible to the read-only path."""
+    wiki = _make_wiki(tmp_path, with_spaces_section=False)
+    # Move into the wiki so the CWD fallback runs.
+    monkeypatch.chdir(wiki)
+    # Don't pass --wiki; clear any inherited config.
+    monkeypatch.setattr(space, "wiki_path", lambda: None)
+    rc, _, err = _run(["audit"])
+    assert rc == 2
+    assert "Spaces" in err
+
+
 def test_validate_rel_path_rejects_dot_dot():
     ok, err = space._validate_rel_path("../escape")
     assert not ok
@@ -81,15 +104,23 @@ def test_add_is_idempotent(tmp_path):
     assert len(entries) == 1
 
 
-def test_add_refuses_parent_without_spaces_section(tmp_path):
-    """Atomic refuse: ancestor has no `## Spaces` → CLI errors, FS untouched.
-    The LLM/skill layer handles adding the section before retry."""
+def test_add_inserts_spaces_and_registers_against_bare_ancestor(tmp_path):
+    """`space add` against a bare-`index.md` ancestor inserts `## Spaces`
+    into the ancestor as the first mutation step (via the chain helper)
+    and registers the new child — no refuse, no manual setup step. Same
+    contract as promote (PR-C) and mount; replaces the pre-v1 refusal
+    behavior."""
     wiki = _make_wiki(tmp_path, with_spaces_section=False)
     rc, _, err = _run(["--wiki", str(wiki), "add", "foo"])
-    assert rc == 2
-    assert "## Spaces" in err
-    assert not (wiki / "foo").exists()
-    assert "## Spaces" not in (wiki / "index.md").read_text()
+    assert rc == 0, err
+    # `foo/` exists with its own `## Spaces`.
+    assert (wiki / "foo" / "index.md").is_file()
+    assert "## Spaces" in (wiki / "foo" / "index.md").read_text()
+    # The ancestor's bare-`index.md` got `## Spaces` inserted AND `foo/` registered.
+    root_text = (wiki / "index.md").read_text()
+    assert "## Spaces" in root_text
+    entries = _md.parse_section_entries(root_text, "Spaces")
+    assert any(e.href and "foo/" in e.href for e in entries)
 
 
 def test_add_upgrade_parent_flag_removed(tmp_path):
@@ -113,6 +144,110 @@ def test_add_rejects_dot_dot(tmp_path):
     wiki = _make_wiki(tmp_path)
     rc, _, err = _run(["--wiki", str(wiki), "add", "../escape"])
     assert rc == 2
+
+
+# ---------- PR-D chain helper coverage ----------
+
+def test_ensure_chain_walks_multi_level_and_registers_each_step(tmp_path):
+    """`space add foo/bar` where `foo/index.md` exists bare AND wiki root
+    has no `## Spaces`: the chain helper walks (bar, foo), (foo, wiki),
+    inserting `## Spaces` and registering at each step."""
+    wiki = _make_wiki(tmp_path, with_spaces_section=False)
+    (wiki / "foo").mkdir()
+    (wiki / "foo" / "index.md").write_text("# foo\n")  # bare; no `## Spaces`
+    rc, _, err = _run(["--wiki", str(wiki), "add", "foo/bar"])
+    assert rc == 0, err
+    # New leaf exists.
+    assert (wiki / "foo" / "bar" / "index.md").is_file()
+    # foo/index.md got `## Spaces` and `bar/` registered.
+    foo_text = (wiki / "foo" / "index.md").read_text()
+    assert "## Spaces" in foo_text
+    foo_entries = _md.parse_section_entries(foo_text, "Spaces")
+    assert any(e.href and "bar/" in e.href for e in foo_entries)
+    # Wiki root got `## Spaces` and `foo/` registered.
+    root_text = (wiki / "index.md").read_text()
+    assert "## Spaces" in root_text
+    root_entries = _md.parse_section_entries(root_text, "Spaces")
+    assert any(e.href and "foo/" in e.href for e in root_entries)
+
+
+def test_ensure_chain_rolls_back_added_entries_on_mid_walk_failure(tmp_path, monkeypatch):
+    """Wiki has `foo/index.md` (bare) and root has no `## Spaces`.
+    Sabotage writes to the wiki root's `index.md` only — the deep edge
+    (register `bar` in `foo`) succeeds via the real helper, the root edge
+    fails, and the rollback path runs the real helper too (removing `bar`
+    from foo). Assert: foo's `## Spaces` insertion stays (append-only,
+    non-destructive); `bar` is rolled back out of foo's `## Spaces`."""
+    wiki = _make_wiki(tmp_path, with_spaces_section=False)
+    (wiki / "foo").mkdir()
+    (wiki / "foo" / "index.md").write_text("# foo\n")
+
+    real = space._atomic_mutate_index
+    root_index = (wiki / "index.md").resolve()
+
+    def patched(ancestor, ancestor_index, mutate_fn):
+        if ancestor_index.resolve() == root_index:
+            return 1, "simulated second-edge failure"
+        return real(ancestor, ancestor_index, mutate_fn)
+
+    monkeypatch.setattr(space, "_atomic_mutate_index", patched)
+
+    rc, _, err = _run(["--wiki", str(wiki), "add", "foo/bar"])
+    assert rc == 1
+    assert "simulated second-edge failure" in err
+    # bar/ FS creation was rolled back.
+    assert not (wiki / "foo" / "bar").exists()
+    # foo's `## Spaces` insertion survives the rollback (append-only).
+    foo_text = (wiki / "foo" / "index.md").read_text()
+    assert "## Spaces" in foo_text
+    # `bar` was rolled back out of foo's `## Spaces`.
+    foo_entries = _md.parse_section_entries(foo_text, "Spaces")
+    assert not any(e.href and "bar" in e.href for e in foo_entries)
+
+
+def test_ensure_section_at_only_touches_that_space(tmp_path):
+    """`_ensure_section_at(wiki/foo)` mutates `wiki/foo/index.md` only;
+    it does NOT walk up or touch `wiki/index.md`."""
+    wiki = _make_wiki(tmp_path, with_spaces_section=False)
+    (wiki / "foo").mkdir()
+    (wiki / "foo" / "index.md").write_text("# foo\n")
+    root_before = (wiki / "index.md").read_text()
+    space._ensure_section_at(wiki / "foo", wiki)
+    # foo got `## Spaces`.
+    assert "## Spaces" in (wiki / "foo" / "index.md").read_text()
+    # root is untouched.
+    assert (wiki / "index.md").read_text() == root_before
+
+
+def test_cmd_add_existing_target_ensures_target_has_spaces_section(tmp_path):
+    """`space add foo` against a pre-existing bare `foo/index.md` leaves
+    foo with a `## Spaces` section so re-registered existing targets
+    aren't bare-index after the call."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "foo").mkdir()
+    (wiki / "foo" / "index.md").write_text("# foo\n")  # bare; no `## Spaces`
+    rc, _, err = _run(["--wiki", str(wiki), "add", "foo"])
+    assert rc == 0, err
+    assert "## Spaces" in (wiki / "foo" / "index.md").read_text()
+
+
+def test_cmd_add_description_goes_to_child_not_parent_entry(tmp_path):
+    """v1 behavior: `space add foo --description X` writes X into foo's
+    `## What this space is`, NOT into the parent's `## Spaces` entry
+    description. The parent entry uses the derived label and no
+    description trailer."""
+    wiki = _make_wiki(tmp_path)
+    rc, _, err = _run(["--wiki", str(wiki), "add", "foo", "--description", "foo says hi"])
+    assert rc == 0, err
+    # Child's body carries the description.
+    foo_text = (wiki / "foo" / "index.md").read_text()
+    assert "## What this space is" in foo_text
+    assert "foo says hi" in foo_text
+    # Parent's `## Spaces` entry has NO description trailer.
+    root_text = (wiki / "index.md").read_text()
+    entries = _md.parse_section_entries(root_text, "Spaces")
+    foo_entry = next(e for e in entries if e.href and "foo/" in e.href)
+    assert (foo_entry.description or "").strip() == ""
 
 
 # ---------- space remove ----------
@@ -163,31 +298,52 @@ def test_remove_refuses_wiki_root(tmp_path):
     assert rc == 2
 
 
-def test_remove_refuses_parent_without_spaces_section(tmp_path):
-    """Symmetric with add: ancestor has no `## Spaces` → CLI errors, FS untouched."""
+def test_remove_against_bare_ancestor_inserts_section_and_removes(tmp_path):
+    """v1 behavior: when the ancestor lacks `## Spaces` AND the target
+    space exists with no extra content AND we're not in dry-run, remove
+    proceeds. `_ensure_section_at` inserts an empty `## Spaces` into the
+    ancestor (so the entry-removal step has a section to operate on),
+    then the target's entry-remove is a no-op (no entry was registered),
+    then the target directory is deleted. Final state: ancestor has an
+    empty `## Spaces`, target is gone."""
     wiki = _make_wiki(tmp_path, with_spaces_section=False)
     (wiki / "foo").mkdir()
     (wiki / "foo" / "index.md").write_text("# foo")
     rc, _, err = _run(["--wiki", str(wiki), "remove", "foo"])
-    assert rc == 2
-    assert "## Spaces" in err
-    assert (wiki / "foo").exists()
+    assert rc == 0, err
+    assert not (wiki / "foo").exists()
+    root_text = (wiki / "index.md").read_text()
+    assert "## Spaces" in root_text
 
 
-def test_remove_contract_error_precedes_nonempty_check(tmp_path):
-    """The `## Spaces`-missing refusal must be the first-class error, NOT
-    'pass --force'. Without ordering the contract check before the content
-    check, a user with a no-`## Spaces` parent + nonempty child would be
-    told to add --force, then hit the contract error on retry."""
+def test_remove_does_not_mutate_on_nonempty_refusal(tmp_path):
+    """Refusal paths (non-empty target without --force, external scope,
+    etc.) must NOT mutate the ancestor. `_ensure_section_at` runs only
+    after every refusal check. So a remove that bounces on the non-empty
+    target check leaves the bare-`index.md` ancestor untouched."""
     wiki = _make_wiki(tmp_path, with_spaces_section=False)
     (wiki / "foo").mkdir()
     (wiki / "foo" / "index.md").write_text("# foo")
     (wiki / "foo" / "extra.md").write_text("user content")
+    before = (wiki / "index.md").read_text()
     rc, _, err = _run(["--wiki", str(wiki), "remove", "foo"])
     assert rc == 2
-    assert "## Spaces" in err
-    assert "--force" not in err
+    assert "--force" in err  # non-empty target wins over any other error
     assert (wiki / "foo" / "extra.md").exists()
+    # Ancestor untouched — no `## Spaces` insertion on a refused remove.
+    assert (wiki / "index.md").read_text() == before
+
+
+def test_remove_dry_run_does_not_mutate_bare_ancestor(tmp_path):
+    """Dry-run must NOT insert `## Spaces` into a bare ancestor either."""
+    wiki = _make_wiki(tmp_path, with_spaces_section=False)
+    (wiki / "foo").mkdir()
+    (wiki / "foo" / "index.md").write_text("# foo")
+    before = (wiki / "index.md").read_text()
+    rc, _, _ = _run(["--wiki", str(wiki), "remove", "foo", "--dry-run"])
+    assert rc == 0
+    assert (wiki / "foo").exists()
+    assert (wiki / "index.md").read_text() == before
 
 
 def test_remove_normalized_href_match(tmp_path):
@@ -756,17 +912,21 @@ def test_mount_symlink_source_without_index_refused(tmp_path):
     assert not (wiki / "shared" / "x").is_symlink()
 
 
-def test_mount_refused_when_parent_lacks_spaces_section(tmp_path):
-    """Like `space add`, mount refuses when the nearest ancestor has no
-    `## Spaces` — and touches nothing."""
+def test_mount_inserts_spaces_into_bare_ancestor_and_registers(tmp_path):
+    """Like `space add`, mount auto-inserts `## Spaces` into a bare-ancestor
+    `index.md` via the chain helper rather than refusing. Both operations
+    walk through the same code path now; replaces the pre-v1 refusal."""
     wiki = _make_wiki(tmp_path, with_spaces_section=False)
     src = _make_space_dir(tmp_path / "src")
     rc, _, err = _run(
         ["--wiki", str(wiki), "mount", str(src), "team", "--mode", "symlink"]
     )
-    assert rc == 2
-    assert "## Spaces" in err
-    assert not (wiki / "team").exists()
+    assert rc == 0, err
+    assert (wiki / "team").is_symlink()
+    root_text = (wiki / "index.md").read_text()
+    assert "## Spaces" in root_text
+    entries = _md.parse_section_entries(root_text, "Spaces")
+    assert any(e.href and "team" in e.href for e in entries)
 
 
 def test_mount_refused_when_dest_exists(tmp_path):
@@ -971,17 +1131,19 @@ def test_mount_dry_run_no_fs_mutation_symlink(tmp_path):
     assert (wiki / "index.md").read_bytes() == index_before
 
 
-def test_mount_dry_run_still_refuses_parent_without_spaces_section(tmp_path):
-    """Dry-run does the read-only validations (the contract refusal fires
-    before the dry-run print)."""
+def test_mount_dry_run_does_not_mutate_bare_ancestor(tmp_path):
+    """Dry-run must not insert `## Spaces` into a bare-`index.md` ancestor —
+    the section is inserted only when the mount actually commits."""
     wiki = _make_wiki(tmp_path, with_spaces_section=False)
     src = _make_space_dir(tmp_path / "src", "team")
+    before = (wiki / "index.md").read_text()
     rc, _, err = _run([
         "--wiki", str(wiki), "mount", str(src), "team",
         "--mode", "symlink", "--dry-run",
     ])
-    assert rc == 2
-    assert "## Spaces" in err
+    assert rc == 0, err
+    assert (wiki / "index.md").read_text() == before
+    assert not (wiki / "team").exists()
 
 
 # ---------- mount: --name ----------
@@ -1030,7 +1192,7 @@ def test_mount_rolls_back_when_index_write_fails(tmp_path, monkeypatch):
     )
     assert rc == 1
     assert call_count["n"] == 1
-    assert "registration failed" in err
+    assert "ensure-chain failed" in err
     # Symlink rolled back.
     assert not (wiki / "shared" / "team").exists()
     assert not (wiki / "shared" / "team").is_symlink()
@@ -1184,25 +1346,28 @@ def test_space_manifest_set_refuses_malformed_json_file(tmp_path):
     assert "not valid JSON" in err
 
 
+def _force_chain_helper_failure(monkeypatch):
+    """Make every ancestor write inside the chain helper fail. PR-D routes
+    `cmd_add`'s registration through `_ensure_spaces_chain_and_register`,
+    which calls `_atomic_mutate_index` per ancestor edge. Patching the
+    helper itself is the cleanest way to exercise the rollback paths."""
+    monkeypatch.setattr(
+        space, "_atomic_mutate_index",
+        lambda ancestor, ancestor_index, mutate_fn: (1, "simulated write failure"),
+    )
+
+
 def test_space_add_rollback_removes_created_dir_on_registration_failure(tmp_path, monkeypatch):
-    """Defect #2: when atomic registration fails after the new space dir has
-    been created, rollback must remove the dir and its index.md. Otherwise
-    the user is left with an orphaned space on disk + no `## Spaces` entry."""
+    """Defect #2 + PR-D: when the chain helper fails mid-registration,
+    rollback must remove the dir and its index.md."""
     wiki = _make_wiki(tmp_path)
-
-    # Force the atomic mutation to fail after the dir is created.
-    real_atomic = space._atomic_register_in_spaces
-
-    def failing_atomic(*args, **kwargs):
-        return 1, "simulated write failure"
-
-    monkeypatch.setattr(space, "_atomic_register_in_spaces", failing_atomic)
+    _force_chain_helper_failure(monkeypatch)
 
     rc, _, err = _run(["--wiki", str(wiki), "add", "newproj"])
     assert rc == 1
     assert "simulated write failure" in err
     # The created directory must be gone after rollback.
-    assert not (wiki / "newproj").exists(), "rollback failed to remove the orphaned space dir"
+    assert not (wiki / "newproj").exists()
     # The ancestor's ## Spaces should not have a stray entry.
     root_index = (wiki / "index.md").read_text()
     assert "newproj" not in root_index
@@ -1214,11 +1379,7 @@ def test_space_add_rollback_preserves_preexisting_dir(tmp_path, monkeypatch):
     wiki = _make_wiki(tmp_path)
     (wiki / "newproj").mkdir()
     (wiki / "newproj" / "user-file.txt").write_text("user content")
-
-    monkeypatch.setattr(
-        space, "_atomic_register_in_spaces",
-        lambda *a, **k: (1, "simulated write failure"),
-    )
+    _force_chain_helper_failure(monkeypatch)
 
     rc, _, _ = _run(["--wiki", str(wiki), "add", "newproj"])
     assert rc == 1
@@ -1232,11 +1393,7 @@ def test_add_rollback_removes_created_parent_folders(tmp_path, monkeypatch):
     a/b/c/d/ via mkdir(parents=True). When registration fails, rollback must
     remove every parent it created — not just the leaf."""
     wiki = _make_wiki(tmp_path)
-
-    monkeypatch.setattr(
-        space, "_atomic_register_in_spaces",
-        lambda *a, **k: (1, "simulated write failure"),
-    )
+    _force_chain_helper_failure(monkeypatch)
 
     rc, _, err = _run(["--wiki", str(wiki), "add", "a/b/c/d"])
     assert rc == 1
@@ -1254,11 +1411,7 @@ def test_add_rollback_only_removes_empty_parents(tmp_path, monkeypatch):
     wiki = _make_wiki(tmp_path)
     (wiki / "a").mkdir()
     (wiki / "a" / "user-file.txt").write_text("user content")
-
-    monkeypatch.setattr(
-        space, "_atomic_register_in_spaces",
-        lambda *a, **k: (1, "simulated write failure"),
-    )
+    _force_chain_helper_failure(monkeypatch)
 
     rc, _, _ = _run(["--wiki", str(wiki), "add", "a/b/c"])
     assert rc == 1

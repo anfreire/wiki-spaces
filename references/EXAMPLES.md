@@ -2,14 +2,16 @@
 
 Concrete shapes the canonical wiki can take. None are special — the spec doesn't care, and the conventions catalog (`CONVENTIONS.md / Categorical layout`) lists folder names as suggestions, not requirements. Pick the one closest to your use case, mix shapes, or invent your own.
 
+> Every `index.md` shown below contains a `## Spaces` heading per the [spec](../AGENTS.md) — the navigation contract is required at every depth. It's omitted from the tree diagrams for brevity; assume each `index.md` carries it.
+
 ## Minimum viable (any use case)
 
 ```
 ~/Wiki/
-└── index.md
+└── index.md            ← title + `## Spaces`
 ```
 
-A folder + `index.md`. That's a complete wiki. Add files at the root or under any subfolder as you go. Works for any use case where you don't yet know the shape — start here, let folders emerge from what you actually write.
+A folder + `index.md` (with `## Spaces`). That's a complete wiki. Add files at the root or under any subfolder as you go. Works for any use case where you don't yet know the shape — start here, let folders emerge from what you actually write.
 
 The `wiki = /home/<user>/Wiki` entry in `~/.config/wiki-spaces/config` makes this discoverable from anywhere. Paths in the config are absolute (no `~/` shell expansion).
 

@@ -6,13 +6,11 @@ The wiki-spaces spec. Vocabulary, structure, and the operating contract for an L
 
 ## What a wiki is
 
-A wiki is a folder with `index.md`. That's it.
-
-You can stop here — a folder, an `index.md`, and whatever files you want is a complete wiki. The rest of this doc describes what's *possible* on top of that, not what's required.
+A wiki is a folder with `index.md`, and that `index.md` contains a `## Spaces` heading. Nothing else is required. Files of any kind live alongside; nested spaces (folders that themselves are wikis) recurse.
 
 ## Vocabulary
 
-A **space** is a folder with `index.md`. The unit, the building block.
+A **space** is a folder with `index.md` and a `## Spaces` heading. The unit; the building block.
 
 A **wiki** is a space — the one at the top of your tree, the one that's yours. From your perspective, it's "the wiki." Embedded in someone else's wiki via clone / submodule / symlink, it's just a space inside theirs. The word changes with position; the thing doesn't.
 
@@ -20,31 +18,27 @@ Inside a space, three kinds of inhabitant:
 
 - **Files** — leaf content (markdown, images, data, anything).
 - **Folders** — plain folders (no `index.md`), used for grouping without first-class status (assets, drafts, attachments, raw payloads).
-- **Spaces** — folders that themselves have `index.md`, recursively.
+- **Spaces** — folders that themselves are valid wikis, recursively.
 
-Zero contained spaces is a fine wiki. Deep nesting is a fine wiki. Your shape is your call.
-
-## What a wiki has
-
-`index.md`. That's the spec floor — a folder with `index.md` is a complete, valid wiki. Tools find it, read it, and operate on the files within. Without anything else, search uses filesystem globs since there's no curated map; that's a fine wiki.
+Zero contained spaces is a fine wiki — `## Spaces` is just empty. Deep nesting is a fine wiki. Your shape is your call.
 
 ## The navigation contract
 
-When `index.md` contains a `## Spaces` heading, every space directly inside this one is listed there. The list is **exhaustive** — adding a space inside means adding the entry; removing a space means removing the entry. Tools traverse via this list and rely on it being complete.
+`## Spaces` is the navigation contract. It is **exhaustive** — every space directly inside this one is listed there, no exceptions. Tools traverse via this list and rely on it being complete.
 
-- **Write commands** (`space add`, `space remove`, `space mount`, `space promote`) require `## Spaces` in the relevant ancestor's `index.md` and refuse atomically when it's missing — exit non-zero, touch nothing. They maintain the list automatically on every operation.
-- **Read commands** (`space audit`, `doctor`, the three skills) work on any valid wiki. With `## Spaces`, audit reports drift; without it, audit reports what it finds and skips the drift check. Search and update degrade to filesystem globs.
-
-Every wiki created or adopted by `wiki-spaces init` has `## Spaces` from t=0, so write commands work immediately. A bare-`index.md` wiki (no `## Spaces`) is supported and valid; the user adds `## Spaces` themselves when they want navigation contract enforcement.
+- **Write commands** (`space add`, `space remove`, `space mount`, `space promote`) maintain `## Spaces` automatically on every operation. When an ancestor's `index.md` is missing the heading, the CLI inserts it as the first step of the mutation. The user never edits `## Spaces` by hand.
+- **Read commands** (`space audit`, `doctor`, the three skills) treat a folder with `index.md` but no `## Spaces` as **not a wiki** and refuse to operate. `audit --fix` is the repair surface: it inserts `## Spaces` into any owned folder with `index.md` but no heading, and registers any drift.
 
 Two other `index.md` sections are common but carry no contract:
 
 - **`## What this space is`** — opening paragraph in plain prose. Describes the space. Tools never read it for routing; preserved across regenerations.
 - **`## Items`** — an optional, purely human-facing list of files or folders worth surfacing on the landing page. Hand-maintained; tools never read or write it.
 
-Each space chooses independently: one space in your wiki may have a `## Spaces` heading and a strict navigation contract, another may be bare-`index.md` with no contract, others may layer on optional conventions. All are valid wikis.
-
 Cross-space references go horizontal: `[label](relative/path.md)` or `[[wikilink]]` if surrounding tooling supports it. `index.md` handles parent ↔ child navigation only.
+
+## Size discipline
+
+Hard char caps at write time. The defaults are `index.md` 5,000, `log.md` 100,000 (auto-rotates), every other `*.md` 15,000 — configurable via `_meta/limits.md` (see [`CONVENTIONS.md`](CONVENTIONS.md)). Framework writers (`init`, `space add`, `space mount`, `space promote`, `space log`, the chain helper's ancestor mutations) enforce caps on the projected post-write size; errors on overflow, never silent truncation. A shrinking write (smaller than the existing on-disk body) is the only escape hatch from legacy bloat. Day-30 isn't worse than day-0 — more content invested means more payoff.
 
 ## Optional conventions
 

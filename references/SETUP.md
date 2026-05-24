@@ -4,7 +4,7 @@ You are an AI agent helping a user set up wiki-spaces — a minimal personal wik
 
 ## What wiki-spaces is
 
-A wiki is a folder with `index.md`. The user maintains one canonical wiki — a folder of theirs, anywhere on disk. Inside, anything goes: files, plain folders, or other spaces (folders that themselves carry `index.md`). What the wiki is *for* is the user's choice — developer notes, research, writing, recipes, personal knowledge, team reference, anything. The tooling adapts to whatever shape the user picks.
+A wiki is a folder with `index.md` containing a `## Spaces` heading (the navigation contract). The user maintains one canonical wiki — a folder of theirs, anywhere on disk. Inside, anything goes: files, plain folders, or other spaces (folders that themselves are wikis). What the wiki is *for* is the user's choice — developer notes, research, writing, recipes, personal knowledge, team reference, anything. The tooling adapts to whatever shape the user picks.
 
 Three reference skills (`wiki-search`, `wiki-update`, `wiki-tend`) operate on this canonical wiki. They locate it via `${XDG_CONFIG_HOME:-~/.config}/wiki-spaces/config` (i.e., `$XDG_CONFIG_HOME/wiki-spaces/config` if `XDG_CONFIG_HOME` is set, otherwise `~/.config/wiki-spaces/config`).
 
@@ -27,7 +27,7 @@ If the config is missing or `wiki` is unset, the user has not set up yet — dri
 
 ## Preflight (before anything)
 
-This briefing drives the **full installation** (skills + scaffold). For a no-install start — folder + `index.md` — see the README's `## Install` § "No tooling at all" subsection. The skills resolve the target wiki via **explicit path → config → CWD ancestor**, so a no-install wiki still works as long as the agent invokes the skills with the wiki path or from inside it.
+This briefing drives the **full installation** (skills + scaffold). For a no-install start, run `mkdir -p ~/Wiki && printf '# My Wiki\n\n## Spaces\n\n' > ~/Wiki/index.md` — that's a complete wiki. The skills resolve the target wiki via **explicit path → config → CWD ancestor**, so a no-install wiki still works as long as the agent invokes the skills with the wiki path or from inside it.
 
 For the full installation, verify the user's machine has one of:
 - **Recommended:** [`uv`](https://docs.astral.sh/uv/) on PATH (`curl -LsSf https://astral.sh/uv/install.sh | sh` or `brew install uv`). Used for `uvx wiki-spaces …` (no install) or `uv tool install wiki-spaces` (permanent). uv provisions Python automatically.
@@ -85,7 +85,7 @@ See [`MOUNT.md`](MOUNT.md) for the full playbook and trade-offs. Quick summary:
 2. Identify the external wiki: a git URL, a local clone, or a folder with `index.md`.
 3. Decide the mount mechanism with the user: submodule (collaborative; recommended), clone (read-only one-time fetch), or symlink (local convenience).
 4. Decide the path inside the canonical wiki: typically `<wiki>/shared/<name>/` for team wikis.
-5. Run `uvx wiki-spaces space mount <source> --mode <mechanism>` — one command that executes the mount, verifies the result has `index.md`, and adds the `## Spaces` entry atomically. The destination path defaults to `shared/<basename-of-source>/`; pass an explicit path (e.g., `shared/<custom-name>`) only when the default doesn't fit. It refuses when the parent's `index.md` lacks `## Spaces`; if that happens, add the section and rerun. Use `--dry-run` to preview without touching anything, `--name "Display Label"` to override the registered entry label.
+5. Run `uvx wiki-spaces space mount <source> --mode <mechanism>` — one command that executes the mount, verifies the result has `index.md`, and adds the `## Spaces` entry atomically. The destination path defaults to `shared/<basename-of-source>/`; pass an explicit path (e.g., `shared/<custom-name>`) only when the default doesn't fit. When the parent's `index.md` lacks `## Spaces`, the CLI inserts it as the first mutation step — no manual setup required. Use `--dry-run` to preview without touching anything, `--name "Display Label"` to override the registered entry label.
 
 ## Edge cases
 

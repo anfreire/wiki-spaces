@@ -69,36 +69,62 @@ def test_write_config_merges_keys(monkeypatch, tmp_path):
     assert out == {"wiki": "/w", "repo": "/r"}
 
 
-# ---------- nearest_space_root ----------
+# ---------- nearest_space_root_strict / nearest_space_root_for_repair ----------
 
-def test_nearest_space_root_finds_self(tmp_path):
+def test_nearest_space_root_for_repair_finds_self_bare_index(tmp_path):
+    """Repair resolver accepts bare-`index.md` (no `## Spaces`); write
+    commands lean on the chain helper to insert the section atomically."""
     (tmp_path / "index.md").write_text("")
-    assert _common.nearest_space_root(tmp_path) == tmp_path.resolve()
+    assert _common.nearest_space_root_for_repair(tmp_path) == tmp_path.resolve()
 
 
-def test_nearest_space_root_walks_up(tmp_path):
+def test_nearest_space_root_for_repair_walks_up(tmp_path):
     wiki = tmp_path / "wiki"
     wiki.mkdir()
     (wiki / "index.md").write_text("")
     deep = wiki / "projects" / "deep" / "nested"
     deep.mkdir(parents=True)
-    assert _common.nearest_space_root(deep) == wiki.resolve()
+    assert _common.nearest_space_root_for_repair(deep) == wiki.resolve()
 
 
-def test_nearest_space_root_none_when_no_ancestor(tmp_path):
-    # Use a tmp_path that itself has no index.md and walk up — root won't have one either.
+def test_nearest_space_root_for_repair_none_when_no_ancestor(tmp_path):
     sub = tmp_path / "no" / "wiki" / "here"
     sub.mkdir(parents=True)
-    assert _common.nearest_space_root(sub) is None
+    assert _common.nearest_space_root_for_repair(sub) is None
 
 
-def test_nearest_space_root_from_file(tmp_path):
+def test_nearest_space_root_for_repair_from_file(tmp_path):
     wiki = tmp_path / "wiki"
     wiki.mkdir()
     (wiki / "index.md").write_text("")
     page = wiki / "page.md"
     page.write_text("")
-    assert _common.nearest_space_root(page) == wiki.resolve()
+    assert _common.nearest_space_root_for_repair(page) == wiki.resolve()
+
+
+def test_nearest_space_root_strict_requires_spaces_section(tmp_path):
+    """Strict resolver returns None on a bare-`index.md` wiki — read-only
+    commands (audit, skills, doctor) refuse to operate on a folder that
+    lacks the v1 navigation contract."""
+    (tmp_path / "index.md").write_text("# bare\n")  # no `## Spaces`
+    assert _common.nearest_space_root_strict(tmp_path) is None
+
+
+def test_nearest_space_root_strict_accepts_index_with_spaces(tmp_path):
+    (tmp_path / "index.md").write_text("# wiki\n\n## Spaces\n\n")
+    assert _common.nearest_space_root_strict(tmp_path) == tmp_path.resolve()
+
+
+def test_nearest_space_root_strict_walks_up_past_bare_index(tmp_path):
+    """Strict resolver skips folders that lack `## Spaces` while walking up
+    — the closest valid ancestor wins, not the closest bare-index folder."""
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    (outer / "index.md").write_text("# outer\n\n## Spaces\n\n")
+    inner = outer / "inner"
+    inner.mkdir()
+    (inner / "index.md").write_text("# inner\n")  # bare; no `## Spaces`
+    assert _common.nearest_space_root_strict(inner) == outer.resolve()
 
 
 # ---------- is_owned_install / write_owned_marker ----------

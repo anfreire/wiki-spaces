@@ -192,12 +192,48 @@ def repo_path() -> Path | None:
     return Path(cfg["repo"]) if "repo" in cfg else None
 
 
-def nearest_space_root(start: Path | None = None) -> Path | None:
-    """Walk up from `start` (or CWD) returning the nearest folder with index.md.
+def _has_spaces_section(p: Path) -> bool:
+    """True iff `p/index.md` exists and contains a `## Spaces` heading."""
+    try:
+        text = (p / "index.md").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    # Late import — `_md` pulls in regex tables that are heavier than
+    # `_common` should pay for on cold start.
+    from . import _md
+    return _md.has_section(text, "Spaces")
 
-    Used as the CWD-based fallback when the config has no `wiki` key: lets
-    the agent operate on whatever wiki it's currently inside without forcing
-    a setup step first.
+
+def nearest_space_root_strict(start: Path | None = None) -> Path | None:
+    """Walk up from `start` (or CWD) returning the nearest folder with
+    `index.md` containing a `## Spaces` heading.
+
+    The v1 spec floor: a wiki is `index.md` + `## Spaces`. Strict callers
+    (read-only commands, skills, doctor without `--fix`) refuse to operate
+    on a folder that has `index.md` but no navigation contract.
+    """
+    p = (start if start is not None else Path.cwd())
+    if p.is_file():
+        p = p.parent
+    try:
+        p = p.resolve()
+    except OSError:
+        p = p.absolute()
+    for candidate in (p, *p.parents):
+        if (candidate / "index.md").is_file() and _has_spaces_section(candidate):
+            return candidate
+    return None
+
+
+def nearest_space_root_for_repair(start: Path | None = None) -> Path | None:
+    """Walk up from `start` (or CWD) returning the nearest folder with
+    `index.md` — `## Spaces` not required.
+
+    Used by write commands that repair the spec on demand (`space add`,
+    `space remove`, `space mount`, `space promote`, `audit --fix`,
+    `init --adopt`). Repair-aware callers walk up to find a wiki by
+    `index.md` presence; if the resolved root lacks `## Spaces`, the
+    chain helper inserts it atomically as the first mutation step.
     """
     p = (start if start is not None else Path.cwd())
     if p.is_file():

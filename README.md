@@ -1,6 +1,6 @@
 # wiki-spaces
 
-A minimal nestable wiki — a folder with `index.md`, for any use case. Research, recipes, code notes, writing, team docs, a personal life wiki — your shape, your call.
+A minimal nestable wiki — a folder with `index.md` and a `## Spaces` navigation contract, for any use case. Research, recipes, code notes, writing, team docs, a personal life wiki — your shape, your call.
 
 Markdown flavor is **Obsidian** — wikilinks, frontmatter, callouts, embeds, comments, Bases. One dialect across the spec, the skills, and the tools. Non-Obsidian renderers (GitHub preview, vanilla VS Code, plain markdown viewers) display the content but will not render Obsidian-specific syntax (provenance comments, embeds, `.base` files) the way Obsidian does — view your wiki in Obsidian for full fidelity.
 
@@ -46,15 +46,15 @@ uvx wiki-spaces space audit              # audit drift, broken links, orphans
 uvx wiki-spaces space mount <url> --mode submodule              # mount an external space (default path: shared/<basename>/)
 ```
 
-`space add`, `space remove`, and `space mount` need a `## Spaces` section in the parent's `index.md`; `wiki-spaces init` scaffolds that automatically.
+`space add`, `space remove`, `space mount`, and `space promote` auto-insert `## Spaces` when missing — the CLI maintains the contract for you. `wiki-spaces init` writes `## Spaces` from t=0 so the first write command lands clean.
 
 ### No tooling at all
 
 ```sh
-mkdir -p ~/Wiki && echo "# My Wiki" > ~/Wiki/index.md
+mkdir -p ~/Wiki && printf '# My Wiki\n\n## Spaces\n\n' > ~/Wiki/index.md
 ```
 
-A folder with `index.md` is already a complete wiki — the whole spec is one page, [`AGENTS.md`](AGENTS.md). The skills still work on it (they discover the wiki from your current directory); run `wiki-spaces init` later to register it for config-based discovery.
+A folder with `index.md` + `## Spaces` is already a complete wiki — the whole spec is one page, [`AGENTS.md`](AGENTS.md). The skills still work on it (they discover the wiki from your current directory); run `wiki-spaces init` later to register it for config-based discovery.
 
 ## What you get
 

@@ -15,4 +15,4 @@ Reference docs (read on demand from `<repo>/references/`):
 - `EXAMPLES.md` — canonical topology examples
 - `MOUNT.md` — mount external wikis as spaces
 
-Discovery order is **explicit path → `wiki` config key → nearest CWD ancestor with `index.md`**. Once the target is resolved, CWD is only a placement hint (project-scoped vs global) within that wiki.
+Discovery order is **explicit path → `wiki` config key → nearest CWD ancestor with `index.md` containing `## Spaces`**. Once the target is resolved, CWD is only a placement hint (project-scoped vs global) within that wiki.

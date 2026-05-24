@@ -118,3 +118,42 @@ def test_repo_sentinels_includes_both_kepano_skills():
     must require both to consider the install valid."""
     assert "vendor/kepano/obsidian-markdown/SKILL.md" in doctor.REPO_SENTINELS
     assert "vendor/kepano/obsidian-bases/SKILL.md" in doctor.REPO_SENTINELS
+
+
+# ---------- PR-D: --wiki flag + `## Spaces` validation ----------
+
+def test_doctor_validate_wiki_rejects_bare_index_folder(tmp_path):
+    """Direct call to _validate_wiki: bare `index.md` (no `## Spaces`)
+    returns a non-OK state. v1 contract: a wiki needs `## Spaces`."""
+    (tmp_path / "index.md").write_text("# bare\n")  # no `## Spaces`
+    state = doctor._validate_wiki(str(tmp_path))
+    assert state != "OK"
+    assert "Spaces" in state
+
+
+def test_doctor_validate_wiki_ok_with_spaces_section(tmp_path):
+    (tmp_path / "index.md").write_text("# wiki\n\n## Spaces\n\n")
+    assert doctor._validate_wiki(str(tmp_path)) == "OK"
+
+
+def test_doctor_wiki_flag_accepts_valid_path(tmp_path, capsys):
+    (tmp_path / "index.md").write_text("# wiki\n\n## Spaces\n\n")
+    rc = doctor.main(["--wiki", str(tmp_path)])
+    assert rc == 0
+
+
+def test_doctor_wiki_flag_rejects_bare_index(tmp_path, capsys):
+    """`doctor --wiki <bare>` exits 1 — the path resolves to a folder with
+    `index.md` but no navigation contract."""
+    (tmp_path / "index.md").write_text("# bare\n")
+    rc = doctor.main(["--wiki", str(tmp_path)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "Spaces" in err
+
+
+def test_doctor_wiki_flag_rejects_missing_index(tmp_path, capsys):
+    rc = doctor.main(["--wiki", str(tmp_path)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "no index.md" in err

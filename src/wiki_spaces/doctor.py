@@ -22,6 +22,7 @@ from ._common import (
     HARNESSES,
     KEPANO_DEPS,
     WIKI_SKILLS,
+    _has_spaces_section,
     data_root,
     harness_present,
     installed_root,
@@ -49,6 +50,8 @@ def _validate_wiki(wiki: str) -> str:
         return "MISSING ON DISK"
     if not (p / "index.md").is_file():
         return "no index.md"
+    if not _has_spaces_section(p):
+        return "no `## Spaces` section"
     return "OK"
 
 
@@ -137,7 +140,30 @@ def check_harness(h) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--no-net", action="store_true", help="skip upstream drift check")
+    parser.add_argument(
+        "--wiki",
+        type=Path,
+        help="validate this wiki path instead of the configured one. Checks "
+        "that index.md is a file and contains a `## Spaces` section; does "
+        "NOT read the config or validate the repo install. Exit 0 if the "
+        "path resolves to a valid wiki, 1 otherwise.",
+    )
     args = parser.parse_args(argv)
+
+    if args.wiki is not None:
+        wiki = args.wiki.expanduser().resolve()
+        index = wiki / "index.md"
+        if not index.is_file():
+            print(f"  ! {wiki}: no index.md", file=sys.stderr)
+            return 1
+        if not _has_spaces_section(wiki):
+            print(
+                f"  ! {wiki}: index.md has no `## Spaces` section",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"OK: {wiki}")
+        return 0
 
     print("=== wiki-spaces DOCTOR ===")
     src_root = data_root()

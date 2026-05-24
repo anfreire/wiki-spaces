@@ -1,6 +1,6 @@
 # Conventions
 
-This is the opt-in catalog of conventions a wiki may adopt. Every section is independent — pick the markers that fit your use case; tools degrade where a marker is absent. The [spec](AGENTS.md) defines `index.md` as the only required file and `## Spaces` as the navigation contract; everything in this catalog is layered on top.
+This is the opt-in catalog of conventions a wiki may adopt. Every section is independent — pick the markers that fit your use case; tools degrade where a marker is absent. The [spec](AGENTS.md) defines `index.md` with a `## Spaces` heading as the required floor; everything in this catalog is layered on top.
 
 **"Tools" in this catalog** means the three reference skills (`wiki-search`, `wiki-update`, `wiki-tend`) — LLM-driven procedures that read these markers and degrade gracefully. The `wiki-spaces` CLI handles `install` / `init` / `doctor` / `space` / `vendor-kepano` only; runtime knowledge operations (search, capture, audit, normalize, colorize) live in the skills.
 
@@ -23,7 +23,7 @@ Content-store wikis typically skip these four. Both flavors can still adopt the 
 
 ## Example opt-in bundles
 
-A new wiki only needs `index.md` to be valid. Beyond that, the bundle of opt-in markers that's useful varies by use case. Examples — none are required:
+A new wiki needs `index.md` with a `## Spaces` heading to be valid (per the [spec](AGENTS.md)). Beyond that, the bundle of opt-in markers that's useful varies by use case. Examples — none are required:
 
 | Use case | Suggested bundle |
 |---|---|
@@ -52,7 +52,7 @@ wiki = /home/you/Wiki
 repo = /home/you/.local/share/wiki-spaces
 ```
 
-Both keys are absolute paths. `wiki` points to a folder containing `index.md`; `repo` points to the wiki-spaces install — the share dir written by `wiki-spaces install` (PyPI users) or a source checkout (dev users) — so skills can fetch `AGENTS.md`, `CONVENTIONS.md`, and `references/` on demand. When `wiki` is missing or invalid, skills fall through to the resolution order below (CWD discovery, then inline setup). When `repo` is missing or invalid, skills fail soft on docs-fetching steps only — they fall back to the raw GitHub URL where possible and tell the user `wiki-spaces install` would fix the local path.
+Both keys are absolute paths. `wiki` points to a folder containing `index.md` with a `## Spaces` heading; `repo` points to the wiki-spaces install — the share dir written by `wiki-spaces install` (PyPI users) or a source checkout (dev users) — so skills can fetch `AGENTS.md`, `CONVENTIONS.md`, and `references/` on demand. When `wiki` is missing or invalid, skills fall through to the resolution order below (CWD discovery, then inline setup). When `repo` is missing or invalid, skills fail soft on docs-fetching steps only — they fall back to the raw GitHub URL where possible and tell the user `wiki-spaces install` would fix the local path.
 
 **One canonical wiki per user.** wiki-spaces is built around a single wiki you call yours; the tooling assumes that. Users who want to switch between multiple wikis can swap configs manually. The single-wiki model is what makes global capture, cross-linking, and "open in Obsidian" all work coherently.
 
@@ -66,7 +66,7 @@ When all three miss — no config *and* the CWD is not inside any wiki — every
 
 ## Per-space convention auto-detection
 
-Each space is autonomous: optional conventions (frontmatter, `_meta/taxonomy.md`, `log.md`, etc.) are detected by file presence *within that space*. Parent conventions do not propagate to children. Each space picks its own conventions independently — a heavily-customized root may contain a bare-`index.md` child and vice versa.
+Each space is autonomous: optional conventions (frontmatter, `_meta/taxonomy.md`, `log.md`, etc.) are detected by file presence *within that space*. Parent conventions do not propagate to children. Each space picks its own conventions independently — but every space carries the same required `## Spaces` heading per [AGENTS.md](AGENTS.md).
 
 **Scope-root operations.** When a tool operates on a specific space (the wiki, or a space the user named), every convention check happens at *that scope's root* — not at an ancestor. The `log.md` appended to is the one at the scope being operated on. The taxonomy enforced is the one at that scope. The `.manifest.json` consulted is that scope's. Skip the marker at that scope and the corresponding step degrades for that scope only.
 
@@ -102,7 +102,7 @@ For shared or collaborative spaces, the recommended mechanism is **git repositor
 
 **Honest caveat.** Push-as-permissions is a *late* check: local commits succeed; only the push fails. For agent-driven workflows this can surprise the user hours later. Always rely on the trust scope (gate #1) as the primary protection; treat push permissions as the safety net.
 
-**For local-only or private wikis,** git is not required. A folder with `index.md` is a complete wiki. Add git when you decide to share or back up.
+**For local-only or private wikis,** git is not required. A folder with `index.md` containing a `## Spaces` heading is a complete wiki. Add git when you decide to share or back up.
 
 **Submodules.** When nesting shared spaces as git submodules:
 - Cloners need `git clone --recursive` (or `git submodule update --init` after a plain clone). Mention this in your wiki's `index.md` if you use them.
@@ -127,7 +127,7 @@ Entries in `## Items` and `## Spaces` are markdown bullet lists, one per line. O
 
 `## Items` carries no contract — it is human-maintained and tools never touch it. `## Spaces` is the opposite: meant to be exhaustive, so tools maintain it and flag sub-folders with `index.md` that aren't listed.
 
-Skip any of these sections and `index.md` still marks the folder as a wiki. Tools that lean on the convention degrade where it isn't followed — your wiki is still your wiki.
+Skip the optional `## What this space is` or `## Items` sections and `index.md` still marks the folder as a wiki **provided `## Spaces` is present** (per the [spec](AGENTS.md)). Tools that lean on optional conventions degrade where they aren't followed — your wiki is still your wiki.
 
 **If absent:** This folder is not a wiki. Tools refuse to operate.
 
