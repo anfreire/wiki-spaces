@@ -7,25 +7,26 @@ Operations:
 - `space add <rel-path>`     create a new space and register it in the
                              nearest ancestor's `## Spaces`. **Atomically
                              refuses** when the ancestor has no `## Spaces`
-                             section (Tier 1 parent) — exits non-zero,
-                             touches nothing. The LLM/skill layer handles
-                             upgrading Tier 1 parents.
-- `space remove <rel-path>`  symmetric: refuses when ancestor is Tier 1.
-                             Otherwise removes the entry and the directory.
-                             Refuses without `--force` when the space
-                             contains content beyond `index.md`.
+                             section — exits non-zero, touches nothing. The
+                             LLM/skill layer handles adding the section.
+- `space remove <rel-path>`  symmetric: refuses when the ancestor has no
+                             `## Spaces` section. Otherwise removes the
+                             entry and the directory. Refuses without
+                             `--force` when the space contains content
+                             beyond `index.md`.
 - `space mount <src> [path]` mount an external space — git clone, git
                              submodule, or symlink (`--mode`) — verify it has
                              `index.md`, and register it in the nearest
-                             ancestor's `## Spaces`. Refuses on a Tier 1
-                             parent like `space add`. `path` is optional;
-                             defaults to `shared/<basename-of-source>/`.
-                             Use `--dry-run` to preview; `--name` to override
-                             the registered label; `--as` is a deprecated
-                             alias for `--mode` (removed in v0.9.0).
+                             ancestor's `## Spaces`. Refuses when the
+                             ancestor has no `## Spaces` section, like
+                             `space add`. `path` is optional; defaults to
+                             `shared/<basename-of-source>/`. Use `--dry-run`
+                             to preview; `--name` to override the registered
+                             label; `--as` is a deprecated alias for
+                             `--mode` (removed in v1.1).
 - `space audit`              walk owned spaces; report `## Spaces` drift,
                              broken `[[wikilinks]]`, and orphan pages.
-                             Always-on summary header (tier breakdown, page
+                             Always-on summary header (space count, page
                              count, conventions detected). Drift and broken
                              links set a non-zero exit; orphans are
                              informational and do not.
@@ -332,18 +333,27 @@ def _nearest_ancestor_space(wiki_root: Path, target: Path) -> Path:
         p = p.parent
 
 
-def _walk_owned_spaces(wiki_root: Path):
-    """Yield every owned space under wiki_root (inclusive). External skipped.
+def _walk_classified(wiki_root: Path):
+    """Yield every space under wiki_root, classified as owned or external.
+
+    Yields `(path, classification, reason)` where:
+    - `classification` is `"owned"` or `"external"`.
+    - `reason` is None for owned, or a short string for external.
+
+    The wiki root itself is always yielded first as `"owned"`. Externals are
+    yielded with their reason so callers (e.g., `init --adopt`) can emit
+    per-skip notices; callers that only want owned spaces filter the stream.
 
     Tracks resolved realpaths to break symlink cycles; broken symlinks and
-    unreadable directories are skipped silently.
+    unreadable directories are skipped silently. Hidden directories (names
+    starting with `.`) and `_archives/` are pruned and never yielded.
     """
     try:
         root_real = wiki_root.resolve()
     except OSError:
         return
     visited: set[Path] = {root_real}
-    yield wiki_root
+    yield (wiki_root, "owned", None)
     stack = [wiki_root]
     while stack:
         current = stack.pop()
@@ -356,8 +366,6 @@ def _walk_owned_spaces(wiki_root: Path):
                 continue
             if child.name == "_archives":  # retired content — out of audit scope
                 continue
-            if _is_external(child, wiki_root):
-                continue
             try:
                 child_real = child.resolve()
             except OSError:
@@ -365,18 +373,53 @@ def _walk_owned_spaces(wiki_root: Path):
             if child_real in visited:
                 continue
             visited.add(child_real)
+            if _is_external(child, wiki_root):
+                # Surface every external boundary (with or without index.md)
+                # so callers like `init --adopt` can emit per-skip notices
+                # for the user-visible directory, not the deeper space
+                # (which the user may not even know is there). External
+                # subtrees are NOT descended into (trust scope).
+                reason = _external_reason(child, wiki_root)
+                yield (child, "external", reason)
+                continue
             if (child / "index.md").is_file():
-                yield child
+                yield (child, "owned", None)
             stack.append(child)
 
 
-def _new_index_md(name: str, description: str) -> str:
-    """Tier-2 index.md body for a freshly created space.
+def _external_reason(path: Path, wiki_root: Path) -> str:
+    """Short reason string for why `path` is classified external."""
+    try:
+        rel = path.relative_to(wiki_root)
+    except ValueError:
+        return "outside the wiki tree"
+    if rel.parts and rel.parts[0] == "shared":
+        return "under shared/"
+    if _is_foreign_submodule(path, wiki_root):
+        return "foreign-origin git submodule"
+    if path.is_symlink():
+        return "symlink escapes the wiki tree"
+    return "external (per owned/external heuristic)"
 
-    Includes an empty `## Spaces` heading so the navigability contract is live
-    from t=0 (matches `init_wiki.build_index_md`). Keeps the "CLI-rolled spaces
-    are Tier 2" mental model consistent — `space add foo/bar` works on a fresh
-    `foo` without a second upgrade step.
+
+def _walk_owned_spaces(wiki_root: Path):
+    """Yield every owned space under wiki_root (inclusive). External skipped.
+
+    Thin filter over `_walk_classified`. Preserves the original signature for
+    callers that don't need external classification.
+    """
+    for path, classification, _reason in _walk_classified(wiki_root):
+        if classification == "owned":
+            yield path
+
+
+def _new_index_md(name: str, description: str) -> str:
+    """index.md body for a freshly created space.
+
+    Includes an empty `## Spaces` heading so the navigation contract is live
+    from t=0 (matches `init_wiki.build_index_md`). Every CLI-rolled space gets
+    a `## Spaces` section, so `space add foo/bar` works on a fresh `foo`
+    without a second step.
     """
     return (
         f"# {name}\n\n## What this space is\n\n{description}\n\n## Spaces\n\n"
@@ -463,8 +506,9 @@ def cmd_add(args: argparse.Namespace) -> int:
         )
         return 2
 
-    # Atomic refuse when the contract is absent — the LLM/skill layer handles
-    # Tier-1 parents, not the CLI. Keeps `space add` all-or-nothing.
+    # Atomic refuse when the navigation contract is absent — the LLM/skill
+    # layer handles adding the `## Spaces` section, not the CLI. Keeps
+    # `space add` all-or-nothing.
     ancestor = _nearest_ancestor_space(wiki_root, new_space)
     ancestor_index = ancestor / "index.md"
     text = ancestor_index.read_text(encoding="utf-8")
@@ -477,8 +521,8 @@ def cmd_add(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         print(
-            f"    Add `## Spaces` to {printable}index.md first (the parent is "
-            "currently Tier 1). See AGENTS.md / Tiers for the contract.",
+            f"    Add `## Spaces` to {printable}index.md first, then retry. "
+            "See AGENTS.md for the navigation contract.",
             file=sys.stderr,
         )
         return 2
@@ -553,7 +597,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         print(
-            f"    The parent is Tier 1; there is no contract to update. Add "
+            f"    No `## Spaces` section means no entry to remove. Add "
             f"`## Spaces` to {printable}index.md first, or remove the directory "
             "manually to bypass the contract.",
             file=sys.stderr,
@@ -711,12 +755,6 @@ def _audit_content(wiki_root: Path) -> tuple[list[tuple[Path, str]], list[Path]]
 
 
 def _summary_header(wiki_root: Path, all_spaces: list[Path]) -> list[str]:
-    tier2 = sum(
-        1 for s in all_spaces
-        if _md.has_section((s / "index.md").read_text(encoding="utf-8"), "Spaces")
-    )
-    tier1 = len(all_spaces) - tier2
-
     convention_files = [
         "log.md", "_meta/taxonomy.md", ".manifest.json",
         "hot.md", "_template.md", ".obsidian",
@@ -727,7 +765,7 @@ def _summary_header(wiki_root: Path, all_spaces: list[Path]) -> list[str]:
 
     lines = [
         f"wiki: {wiki_root}",
-        f"  spaces: {len(all_spaces)} ({tier2} with `## Spaces`, {tier1} Tier 1)",
+        f"  spaces: {len(all_spaces)}",
         f"  pages:  {pages} markdown files (owned scope; excludes hidden / _archives / external)",
         f"  conventions at root: {', '.join(present) if present else '(none)'}",
     ]
@@ -895,8 +933,9 @@ def cmd_mount(args: argparse.Namespace) -> int:
         )
         return 2
 
-    # Atomic refuse on a Tier 1 parent — the same `## Spaces` contract as
-    # `space add`, checked before any filesystem work so a refusal is a no-op.
+    # Atomic refuse when the navigation contract is absent — the same
+    # `## Spaces` requirement as `space add`, checked before any filesystem
+    # work so a refusal is a no-op.
     ancestor = _nearest_ancestor_space(wiki_root, dest)
     ancestor_index = ancestor / "index.md"
     text = ancestor_index.read_text(encoding="utf-8")
@@ -909,8 +948,8 @@ def cmd_mount(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         print(
-            f"    Add `## Spaces` to {printable}index.md first (the parent is "
-            "currently Tier 1). See AGENTS.md / Tiers for the contract.",
+            f"    Add `## Spaces` to {printable}index.md first, then retry. "
+            "See AGENTS.md for the navigation contract.",
             file=sys.stderr,
         )
         return 2
@@ -1047,8 +1086,8 @@ def _atomic_register_in_spaces(
     Returns `(0, "added")` when the entry was inserted, `(0, "noop")` when it
     was already present, `(1, "<reason>")` on write failure (caller should
     roll back the mount), `(2, "<reason>")` when the index lost its
-    `## Spaces` section between the initial Tier-1 check and the lock
-    acquisition (concurrent demotion — caller should roll back).
+    `## Spaces` section between the initial contract check and the lock
+    acquisition (concurrent removal — caller should roll back).
 
     Locking note: the lock is on the ANCESTOR DIRECTORY's inode (stable
     across our `os.replace` of the index file), so two concurrent CLI mounts
@@ -1060,7 +1099,7 @@ def _atomic_register_in_spaces(
         fcntl.flock(dir_fd, fcntl.LOCK_EX)
         fresh_text = ancestor_index.read_text(encoding="utf-8")
         if not _md.has_section(fresh_text, "Spaces"):
-            return 2, "ancestor `## Spaces` section disappeared between Tier-1 check and registration"
+            return 2, "ancestor `## Spaces` section disappeared between contract check and registration"
         new_text = _add_space_entry(fresh_text, label, href, description)
         if new_text == fresh_text:
             return 0, "noop"
@@ -1304,8 +1343,8 @@ def cmd_promote(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         print(
-            f"    Add `## Spaces` to {printable}index.md first (the parent is "
-            "currently Tier 1). See AGENTS.md / Tiers for the contract.",
+            f"    Add `## Spaces` to {printable}index.md first, then retry. "
+            "See AGENTS.md for the navigation contract.",
             file=sys.stderr,
         )
         return 2
@@ -1365,7 +1404,7 @@ def cmd_promote(args: argparse.Namespace) -> int:
             planned.append((page, new_text))
             rewrite_files += 1
 
-    # Plan promoted file's outgoing-link adjustment + Tier-2 + aliases.
+    # Plan promoted file's outgoing-link adjustment + ## Spaces + aliases.
     new_source_text = _adjust_outgoing_links_for_depth(
         text=source_text,
         original_file=source,

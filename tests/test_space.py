@@ -81,9 +81,9 @@ def test_add_is_idempotent(tmp_path):
     assert len(entries) == 1
 
 
-def test_add_refuses_tier1_parent(tmp_path):
-    """Atomic refuse: ancestor has no ## Spaces → CLI errors, FS untouched.
-    LLM/skill layer handles upgrading Tier 1 parents."""
+def test_add_refuses_parent_without_spaces_section(tmp_path):
+    """Atomic refuse: ancestor has no `## Spaces` → CLI errors, FS untouched.
+    The LLM/skill layer handles adding the section before retry."""
     wiki = _make_wiki(tmp_path, with_spaces_section=False)
     rc, _, err = _run(["--wiki", str(wiki), "add", "foo"])
     assert rc == 2
@@ -163,8 +163,8 @@ def test_remove_refuses_wiki_root(tmp_path):
     assert rc == 2
 
 
-def test_remove_refuses_tier1_parent(tmp_path):
-    """Symmetric with add: ancestor has no ## Spaces → CLI errors, FS untouched."""
+def test_remove_refuses_parent_without_spaces_section(tmp_path):
+    """Symmetric with add: ancestor has no `## Spaces` → CLI errors, FS untouched."""
     wiki = _make_wiki(tmp_path, with_spaces_section=False)
     (wiki / "foo").mkdir()
     (wiki / "foo" / "index.md").write_text("# foo")
@@ -174,11 +174,11 @@ def test_remove_refuses_tier1_parent(tmp_path):
     assert (wiki / "foo").exists()
 
 
-def test_remove_tier1_parent_error_precedes_nonempty_check(tmp_path):
-    """Tier 1 refusal must be the first-class error, NOT 'pass --force'.
-    Without ordering the contract check before content check, a user with a
-    Tier 1 parent + nonempty child would be told to add --force, then hit the
-    Tier 1 error on retry."""
+def test_remove_contract_error_precedes_nonempty_check(tmp_path):
+    """The `## Spaces`-missing refusal must be the first-class error, NOT
+    'pass --force'. Without ordering the contract check before the content
+    check, a user with a no-`## Spaces` parent + nonempty child would be
+    told to add --force, then hit the contract error on retry."""
     wiki = _make_wiki(tmp_path, with_spaces_section=False)
     (wiki / "foo").mkdir()
     (wiki / "foo" / "index.md").write_text("# foo")
@@ -220,9 +220,9 @@ def test_add_normalized_href_idempotent(tmp_path):
     assert len(entries) == 1
 
 
-def test_add_creates_tier2_child(tmp_path):
-    """A space created by `space add` must itself have `## Spaces` so that
-    nested `space add foo/bar` works without a second upgrade step."""
+def test_add_creates_child_with_spaces_section(tmp_path):
+    """A space created by `space add` must itself have `## Spaces` from t=0
+    so that nested `space add foo/bar` works without a second step."""
     wiki = _make_wiki(tmp_path)
     _run(["--wiki", str(wiki), "add", "foo"])
     child_text = (wiki / "foo" / "index.md").read_text()
@@ -756,7 +756,7 @@ def test_mount_symlink_source_without_index_refused(tmp_path):
     assert not (wiki / "shared" / "x").is_symlink()
 
 
-def test_mount_refused_on_tier1_parent(tmp_path):
+def test_mount_refused_when_parent_lacks_spaces_section(tmp_path):
     """Like `space add`, mount refuses when the nearest ancestor has no
     `## Spaces` — and touches nothing."""
     wiki = _make_wiki(tmp_path, with_spaces_section=False)
@@ -991,9 +991,9 @@ def test_mount_dry_run_no_fs_mutation_symlink(tmp_path):
     assert (wiki / "index.md").read_bytes() == index_before
 
 
-def test_mount_dry_run_still_refuses_tier1_parent(tmp_path):
-    """Dry-run does the read-only validations (Tier 1 refuse fires before
-    the dry-run print)."""
+def test_mount_dry_run_still_refuses_parent_without_spaces_section(tmp_path):
+    """Dry-run does the read-only validations (the contract refusal fires
+    before the dry-run print)."""
     wiki = _make_wiki(tmp_path, with_spaces_section=False)
     src = _make_space_dir(tmp_path / "src", "team")
     rc, _, err = _run([
@@ -1061,19 +1061,47 @@ def test_mount_rolls_back_when_index_write_fails(tmp_path, monkeypatch):
     assert leftover_tmps == [], f"tempfile leak: {leftover_tmps}"
 
 
-def test_audit_tier1_adopted_root_with_nested_space_no_drift(tmp_path):
-    """Adopting a folder that already has a nested space: `init --tier1`
-    makes a Tier 1 root carrying no `## Spaces` contract, so audit reports no
-    drift against that pre-existing child."""
+def test_adopt_registers_nested_space_no_audit_drift(tmp_path):
+    """Adopting a folder that already has a nested space: `init --adopt`
+    walks the tree, registers every space in its nearest ancestor's
+    `## Spaces`, so audit reports zero drift on day 1."""
     folder = tmp_path / "my-notes"
     nested = folder / "projects" / "foo"
     nested.mkdir(parents=True)
     (nested / "index.md").write_text("# foo")
-    assert init_wiki.main([str(folder), "--no-config", "--tier1"]) == 0
-    assert "## Spaces" not in (folder / "index.md").read_text()
+    assert init_wiki.main([str(folder), "--no-config", "--adopt"]) == 0
+    # `## Spaces` is always present (every CLI-created wiki has it from t=0),
+    # AND the nested space has been registered in it.
+    root_index = (folder / "index.md").read_text()
+    assert "## Spaces" in root_index
+    assert "projects/foo/" in root_index
     rc, out, _ = _run(["--wiki", str(folder), "audit"])
     assert rc == 0, out
     assert "missing entry" not in out
+
+
+def test_adopt_skips_shared_with_stderr_notice(tmp_path):
+    """`--adopt` does NOT register sub-spaces under `shared/` (classified
+    external) and emits a per-skip notice to stderr unless --include-external."""
+    folder = tmp_path / "my-notes"
+    shared_nested = folder / "shared" / "baz"
+    shared_nested.mkdir(parents=True)
+    (shared_nested / "index.md").write_text("# baz")
+    owned_nested = folder / "projects" / "foo"
+    owned_nested.mkdir(parents=True)
+    (owned_nested / "index.md").write_text("# foo")
+
+    import io
+    from contextlib import redirect_stdout, redirect_stderr
+
+    out, err = io.StringIO(), io.StringIO()
+    with redirect_stdout(out), redirect_stderr(err):
+        rc = init_wiki.main([str(folder), "--no-config", "--adopt"])
+    assert rc == 0
+    root_index = (folder / "index.md").read_text()
+    assert "projects/foo/" in root_index
+    assert "shared/baz" not in root_index
+    assert "shared/baz" in err.getvalue() or "shared/" in err.getvalue()
 # ---------- _is_in_external_scope: ancestor-walking trust-scope preflight ----------
 
 def test_is_in_external_scope_returns_false_for_owned_path(tmp_path):

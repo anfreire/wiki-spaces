@@ -38,20 +38,32 @@ def test_build_index_md_spaces_section_is_empty():
     assert _md.parse_section_entries(text, "Spaces") == []
 
 
-def test_build_index_md_tier1_omits_spaces_section():
-    """`tier1=True` scaffolds a Tier 1 root — no `## Spaces` section — for
-    adopting an existing folder without forcing the navigability contract."""
-    text = init_wiki.build_index_md("MyWiki", "A description", tier1=True)
+def test_build_index_md_omits_description_section_when_none():
+    """When `description` is None or empty, `## What this space is` is omitted
+    entirely — no placeholder text. `## Spaces` is always present."""
+    text = init_wiki.build_index_md("MyWiki")
     assert text.startswith("# MyWiki")
-    assert "## What this space is" in text
-    assert "## Spaces" not in text
+    assert "## What this space is" not in text
+    assert "## Spaces" in text
 
 
-def test_init_tier1_flag_writes_tier1_index(monkeypatch, tmp_path):
+def test_build_index_md_always_emits_spaces_section():
+    """Every CLI-created wiki has `## Spaces` from t=0 — the navigation
+    contract is part of what `init` produces, not an optional add-on."""
+    text = init_wiki.build_index_md("MyWiki", "A description")
+    assert "## Spaces" in text
+
+
+def test_init_with_no_description_writes_no_placeholder(monkeypatch, tmp_path):
+    """Regression: `wiki-spaces init` without --description must NOT write
+    the literal `<one paragraph describing this wiki>` placeholder into the
+    user's index.md."""
     monkeypatch.setattr(_common, "CONFIG_PATH", tmp_path / "absent-config")
-    rc, _, _ = _run([str(tmp_path / "wiki"), "--tier1", "--no-config"])
+    rc, _, _ = _run([str(tmp_path / "wiki"), "--no-config"])
     assert rc == 0
-    assert "## Spaces" not in (tmp_path / "wiki" / "index.md").read_text()
+    body = (tmp_path / "wiki" / "index.md").read_text()
+    assert "<one paragraph describing this wiki>" not in body
+    assert "## Spaces" in body
 
 
 def test_init_folders_created_but_not_listed_in_index(monkeypatch, tmp_path):

@@ -28,32 +28,21 @@ from ._common import CONFIG_PATH, write_config
 
 OPTIONAL = {"log.md", "hot.md", "_template.md", "_meta/taxonomy.md", ".manifest.json"}
 
-DEFAULT_DESCRIPTION = "<one paragraph describing this wiki>"
 
-
-def build_index_md(name: str, description: str, *, tier1: bool = False) -> str:
+def build_index_md(name: str, description: str | None = None) -> str:
     """Compose the initial index.md.
 
-    Tier 2 (default): title, `## What this space is`, and an empty `## Spaces`
-    so the navigability contract is live from t=0. For a fresh wiki the empty
-    list creates no drift — there are no child spaces yet.
-
-    Tier 1 (`tier1=True`): omit `## Spaces`. Used when adopting an existing
-    folder, which may already contain nested spaces — a Tier 2 root with an
-    empty `## Spaces` would otherwise report immediate drift against those
-    children. A Tier 1 root carries no navigability contract; the user can
-    opt up later by adding `## Spaces`.
+    Always emits title + `## Spaces` (the navigation contract — present from
+    t=0 on every CLI-created wiki, so `space add foo/bar` works immediately).
+    When `description` is provided, also emits `## What this space is` with
+    the description. Omitting `description` skips that section entirely
+    rather than writing a placeholder string the user would later have to
+    overwrite.
     """
-    parts = [
-        f"# {name}",
-        "",
-        "## What this space is",
-        "",
-        description,
-        "",
-    ]
-    if not tier1:
-        parts += ["## Spaces", ""]
+    parts = [f"# {name}", ""]
+    if description and description.strip():
+        parts += ["## What this space is", "", description.strip(), ""]
+    parts += ["## Spaces", ""]
     return "\n".join(parts)
 
 LOG_MD = "# Log\n"
@@ -109,8 +98,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--name", help="display name (defaults to directory basename)")
     parser.add_argument(
         "--description",
-        help="one-paragraph description of this wiki (injected into index.md's "
-        "'What this space is' section; placeholder used if omitted)",
+        help="one-paragraph description of this wiki. Injected into index.md's "
+        "`## What this space is` section verbatim. When omitted, the section "
+        "is skipped entirely — no placeholder text is written.",
     )
     parser.add_argument(
         "--folders",
@@ -122,11 +112,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--force", action="store_true", help="overwrite existing files")
     parser.add_argument(
-        "--tier1",
+        "--adopt",
         action="store_true",
-        help="scaffold a Tier 1 index.md (omit the `## Spaces` section). Use "
-        "when adopting an existing folder that may already contain nested "
-        "spaces, so an audit does not report immediate `## Spaces` drift",
+        help="adopt an existing folder of notes as a wiki. Scaffolds index.md "
+        "if missing, then walks every nested folder containing index.md and "
+        "registers each in the appropriate ancestor's `## Spaces` section so "
+        "audit reports zero drift on day 1. External subtrees (under `shared/`, "
+        "foreign-origin submodules, escaping symlinks) are skipped with a "
+        "per-skip notice on stderr unless --include-external is set.",
+    )
+    parser.add_argument(
+        "--include-external",
+        action="store_true",
+        help="when used with --adopt, also register externally-classified "
+        "spaces (under `shared/`, foreign submodules, escaping symlinks). "
+        "Off by default.",
     )
     parser.add_argument(
         "--git",
@@ -142,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
 
     root = args.path.resolve()
     name = args.name or root.name
-    description = (args.description or DEFAULT_DESCRIPTION).strip()
+    description = args.description.strip() if args.description else None
 
     folders: list[str] = []
     invalid_folders: list[str] = []
@@ -218,7 +218,7 @@ def main(argv: list[str] | None = None) -> int:
         f.write_text(content)
         written.append(rel)
 
-    write("index.md", build_index_md(name, description, tier1=args.tier1))
+    write("index.md", build_index_md(name, description))
 
     for opt in args.extras:
         match opt:
@@ -263,6 +263,50 @@ def main(argv: list[str] | None = None) -> int:
     elif args.git:
         skipped.append(".git/")
 
+    # `--adopt`: scan for existing nested spaces and register them in their
+    # nearest ancestor's `## Spaces`. Externals are reported on stderr and
+    # skipped (unless --include-external).
+    adopt_registered: list[tuple[str, str]] = []  # (label, ancestor-relative)
+    if args.adopt:
+        # Late import: `space` pulls in `fcntl` and other heavy deps that
+        # `init_wiki` shouldn't pay for in the no-adopt path.
+        from . import space as _space, _md as _md_module
+
+        for path, classification, reason in _space._walk_classified(root):
+            if path == root:
+                continue
+            if classification == "external" and not args.include_external:
+                rel_path = path.relative_to(root).as_posix()
+                print(
+                    f"  . skipping {rel_path}/ — classified external "
+                    f"({reason}). Rename to use as owned, or pass "
+                    f"--include-external to override.",
+                    file=sys.stderr,
+                )
+                continue
+
+            ancestor = _space._nearest_ancestor_space(root, path)
+            ancestor_index = ancestor / "index.md"
+            try:
+                ancestor_text = ancestor_index.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            # Every CLI-created/adopted wiki has `## Spaces` from t=0, but a
+            # pre-existing adopted index.md might have had it stripped. Skip
+            # silently if the ancestor lacks the section — the user can add
+            # it and re-run.
+            if not _md_module.has_section(ancestor_text, "Spaces"):
+                continue
+            rel_from_ancestor = path.relative_to(ancestor)
+            label = f"{rel_from_ancestor}/"
+            href = f"{rel_from_ancestor}/index.md"
+            new_text = _space._add_space_entry(ancestor_text, label, href, None)
+            if new_text != ancestor_text:
+                ancestor_index.write_text(new_text, encoding="utf-8")
+                anc_rel = ancestor.relative_to(root)
+                anc_label = "<wiki>" if str(anc_rel) == "." else f"<wiki>/{anc_rel}"
+                adopt_registered.append((label, anc_label))
+
     if not args.no_config:
         write_config({"wiki": str(root)})
 
@@ -271,7 +315,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  + {w}")
     for s in skipped:
         print(f"  . {s} (exists; --force to overwrite)")
-    if not written:
+    for label, anc in adopt_registered:
+        print(f"  ~ {anc}/index.md ## Spaces  += [{label}]")
+    if not written and not adopt_registered:
         print("  (nothing written)")
     if not args.no_config:
         print(f"  → registered as canonical wiki in {CONFIG_PATH}")
