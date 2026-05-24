@@ -227,16 +227,26 @@ def _make_log_entry(i: int) -> str:
     return f"- [2026-01-01T00:00:{i:02d}Z] OP key=value{i}\n"
 
 
-def test_append_creates_file(tmp_path):
+def _make_log(tmp_path: Path) -> Path:
+    """Scaffold an empty log.md (the opt-in convention) so the appender can
+    operate. PR-H made `append_log_with_rotation` refuse on absent files;
+    every test below pre-creates the file the way `cmd_log --create` does."""
     log = tmp_path / "log.md"
-    archive = _limits.append_log_with_rotation(log, _make_log_entry(1), cap=100000)
-    assert archive is None
-    assert log.exists()
-    assert "OP key=value1" in log.read_text()
+    log.write_text("# Log\n", encoding="utf-8")
+    return log
+
+
+def test_append_raises_when_log_md_absent(tmp_path):
+    """PR-H: `log.md` is opt-in. The appender refuses on absent files —
+    the CLI's `--create` flag (cmd_log) is the documented opt-in path."""
+    import pytest
+    log = tmp_path / "log.md"
+    with pytest.raises(FileNotFoundError):
+        _limits.append_log_with_rotation(log, _make_log_entry(1), cap=100000)
 
 
 def test_append_under_cap_does_not_rotate(tmp_path):
-    log = tmp_path / "log.md"
+    log = _make_log(tmp_path)
     for i in range(5):
         archive = _limits.append_log_with_rotation(log, _make_log_entry(i), cap=100000)
         assert archive is None
@@ -248,7 +258,7 @@ def test_append_under_cap_does_not_rotate(tmp_path):
 def test_append_over_cap_rotates(tmp_path):
     """When the projected size exceeds the cap, the oldest half moves to an
     archive file (uniquely named) and the newest half stays."""
-    log = tmp_path / "log.md"
+    log = _make_log(tmp_path)
     # Cap chosen so 10 entries comfortably fit but 12 trigger rotation.
     entries = [_make_log_entry(i) for i in range(12)]
     cap = sum(len(e) for e in entries[:10]) + 10  # small slack
@@ -276,7 +286,7 @@ def test_append_over_cap_rotates(tmp_path):
 
 def test_archive_filenames_unique_within_same_second(tmp_path):
     """Two rotations in the same second produce distinct archive names."""
-    log = tmp_path / "log.md"
+    log = _make_log(tmp_path)
     # Tiny cap so every entry rotates.
     entries = [_make_log_entry(i) for i in range(20)]
     cap = 100
@@ -295,7 +305,7 @@ def test_archive_filenames_unique_within_same_second(tmp_path):
 
 def test_archive_preserves_oldest_entries(tmp_path):
     """The archive should contain the OLDEST entries — newest stay in log.md."""
-    log = tmp_path / "log.md"
+    log = _make_log(tmp_path)
     entries = [_make_log_entry(i) for i in range(20)]
     cap = sum(len(e) for e in entries[:10])  # ~10 entries fit
     for e in entries:

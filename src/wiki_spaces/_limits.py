@@ -307,7 +307,7 @@ def append_log_with_rotation(
     """Append `entry` to `log_path` with rotation under a single lock.
 
     Sequence (one `fcntl.flock` covering all of it):
-      1. Acquire exclusive lock on `log_path` (creating it if missing).
+      1. Acquire exclusive lock on `log_path`.
       2. Read current content.
       3. If `len(current) + len(entry) > cap`, parse into entries, split at
          midpoint by entry count, write oldest half to a uniquely-named
@@ -318,15 +318,21 @@ def append_log_with_rotation(
 
     Returns the archive path when rotation happened, None otherwise.
 
+    `log.md` must already exist (logging is opt-in per CONVENTIONS.md /
+    log.md). The caller scaffolds the file before calling — `cmd_log
+    --create` does this for the CLI surface. Raises `FileNotFoundError`
+    otherwise.
+
     POSIX-only locking. On Windows, the lock is best-effort (a one-time
     stderr notice per process); concurrent writes may interleave but the
     sequence itself still completes correctly within a single process.
     """
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    # O_CREAT | O_RDWR — open for the lock; we read/write the bytes directly
-    # below so we don't have to manage Python's text-mode buffering inside
-    # the locked region.
-    fd = os.open(log_path, os.O_RDWR | os.O_CREAT, 0o644)
+    if not log_path.is_file():
+        raise FileNotFoundError(
+            f"{log_path} does not exist; caller must create it first "
+            "(logging is opt-in)"
+        )
+    fd = os.open(log_path, os.O_RDWR, 0o644)
     try:
         if sys.platform != "win32":
             fcntl.flock(fd, fcntl.LOCK_EX)

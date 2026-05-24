@@ -1426,22 +1426,71 @@ def _space_log_worker(args):
     from wiki_spaces import space as _space
     wiki_str, i = args
     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        # Structured form — CLI prepends the timestamp itself. log.md is
+        # pre-created by the test setup, so no `--create` needed.
         return _space.main([
             "--wiki", wiki_str, "log",
-            f"- [2026-01-01T00:00:{i:02d}Z] CONTEND value={i}",
+            "CONTEND", "--field", f"value={i}",
         ])
 
 
-def test_space_log_appends_to_log_md(tmp_path):
-    """`space log <msg>` creates log.md if missing and appends a line."""
+def test_space_log_refuses_when_log_md_absent(tmp_path):
+    """PR-H made logging opt-in: when `log.md` doesn't exist, `space log`
+    refuses with a hint about `--create` / `init --with log.md`."""
     wiki = _make_wiki(tmp_path)
-    rc, out, _ = _run([
-        "--wiki", str(wiki), "log",
-        "- [2026-01-01T00:00:00Z] TEST key=value",
+    rc, _, err = _run([
+        "--wiki", str(wiki), "log", "SEARCH", "--field", "query=foo",
+    ])
+    assert rc == 2
+    assert "log.md" in err
+    assert "--create" in err
+    assert not (wiki / "log.md").exists()
+
+
+def test_space_log_create_flag_creates_log_md(tmp_path):
+    """`--create` is the documented opt-in: scaffolds `log.md` then appends."""
+    wiki = _make_wiki(tmp_path)
+    rc, _, _ = _run([
+        "--wiki", str(wiki), "log", "SEARCH",
+        "--field", "query=sourdough",
+        "--create",
     ])
     assert rc == 0
     body = (wiki / "log.md").read_text()
-    assert "TEST key=value" in body
+    assert "SEARCH query=sourdough" in body
+
+
+def test_space_log_structured_field_prepends_iso_timestamp(tmp_path):
+    """Structured form: CLI emits `- [<ISO-8601 UTC>] OPERATION key=value`."""
+    import re
+    wiki = _make_wiki(tmp_path)
+    (wiki / "log.md").write_text("# Log\n")
+    rc, _, _ = _run([
+        "--wiki", str(wiki), "log", "tend",  # lowercased → CLI uppercases
+        "--field", "mode=audit",
+        "--field", "issues_found=3",
+    ])
+    assert rc == 0
+    body = (wiki / "log.md").read_text()
+    last = [ln for ln in body.splitlines() if ln.startswith("- [")][-1]
+    # Format: `- [YYYY-MM-DDTHH:MM:SSZ] TEND mode=audit issues_found=3`
+    assert re.match(
+        r"- \[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\] TEND mode=audit issues_found=3",
+        last,
+    ), f"unexpected line shape: {last!r}"
+
+
+def test_space_log_raw_form_does_not_format(tmp_path):
+    """--raw bypasses the structured formatter; the line lands verbatim."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "log.md").write_text("# Log\n")
+    rc, _, _ = _run([
+        "--wiki", str(wiki), "log",
+        "--raw", "- custom shape no timestamp",
+    ])
+    assert rc == 0
+    body = (wiki / "log.md").read_text()
+    assert "- custom shape no timestamp" in body
 
 
 def test_space_log_atomic_under_contention(tmp_path):
@@ -1455,6 +1504,8 @@ def test_space_log_atomic_under_contention(tmp_path):
     if "fork" not in multiprocessing.get_all_start_methods():
         pytest.skip("requires fork-capable multiprocessing")
     wiki = _make_wiki(tmp_path)
+    # PR-H: pre-create log.md (the workers no longer auto-create).
+    (wiki / "log.md").write_text("# Log\n")
 
     ctx = multiprocessing.get_context("fork")
     with ctx.Pool(processes=8) as pool:

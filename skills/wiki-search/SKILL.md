@@ -53,10 +53,10 @@ Gaps: <what's missing>
 
 ## Logging
 
-When `log.md` exists at the **scope root** (the wiki for default operations; the targeted space if the user named one — per CONVENTIONS / Per-space convention auto-detection), append a line via the CLI:
+When `log.md` exists at the **scope root** (the wiki for default operations; the targeted space if the user named one — per CONVENTIONS / Per-space convention auto-detection), append a structured entry via the CLI:
 
 ```sh
-wiki-spaces space log "- [TIMESTAMP] SEARCH query=\"<the question>\" result_pages=N mode=quick|deep"
+wiki-spaces space log SEARCH --field query="<the question>" --field result_pages=N --field mode=quick
 ```
 
-Use the CLI rather than writing `log.md` directly. The `space log` command wraps `_limits.append_log_with_rotation`, holding a `fcntl.flock` across the whole check-rotate-append sequence — concurrent skill invocations never lose lines. Add `--wiki <path>` when the scope is a named sub-space.
+The CLI prepends the ISO-8601 UTC timestamp; you supply only the operation name and the key=value pairs. Use `--raw "<full line>"` for custom shapes. Logging is opt-in: when `log.md` is absent, `space log` refuses unless `--create` is passed, so call this only after confirming presence (or pass `--create` if the user opted in mid-session). Add `--wiki <path>` when the scope is a named sub-space.

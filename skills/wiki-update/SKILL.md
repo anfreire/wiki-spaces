@@ -116,10 +116,10 @@ A `.md` file that has grown into multiple distinct topics, accreted siblings, or
 
 ## Logging
 
-Append a line via the CLI when `log.md` exists at the **scope root** (the wiki for default operations; the targeted space if the user named one — per CONVENTIONS / Per-space convention auto-detection). On the **first** log call in a session where `log.md` is absent, create it implicitly: `space log` creates the file if missing, so a single CLI call gets you both — no separate touch step.
+Append a structured entry via the CLI when `log.md` exists at the **scope root** (the wiki for default operations; the targeted space if the user named one — per CONVENTIONS / Per-space convention auto-detection):
 
 ```sh
-wiki-spaces space log "- [TIMESTAMP] UPDATE mode=<mode> project=<name|-> pages_updated=X pages_created=Y"
+wiki-spaces space log UPDATE --field mode=<mode> --field project=<name|-> --field pages_updated=X --field pages_created=Y
 ```
 
-Use the CLI rather than writing `log.md` directly. `space log` wraps `_limits.append_log_with_rotation`, holding a `fcntl.flock` for the whole check-rotate-append sequence — concurrent skill invocations never lose lines, and rotation to `log.archive-<YYYYMMDD-HHMMSS>.md` happens automatically when the file would exceed its cap (default 100,000 chars). Add `--wiki <path>` when the scope is a named sub-space, not the canonical wiki.
+The CLI prepends the ISO-8601 UTC timestamp; you supply only the operation name and the key=value pairs. Use `--raw "<full line>"` for custom shapes. `space log` wraps `_limits.append_log_with_rotation`, holding a `fcntl.flock` for the whole check-rotate-append sequence — concurrent skill invocations never lose lines, and rotation to `log.archive-<YYYYMMDD-HHMMSS>.md` happens automatically when the file would exceed its cap (default 100,000 chars). Logging is opt-in: when `log.md` is absent, the call refuses; pass `--create` only when the user explicitly opted into logging this session (or run `init <wiki> --with log.md` once). Add `--wiki <path>` when the scope is a named sub-space.

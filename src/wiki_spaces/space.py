@@ -2160,14 +2160,26 @@ def cmd_promote(args: argparse.Namespace) -> int:
     finally:
         shutil.rmtree(snapshot_dir, ignore_errors=True)
 def cmd_log(args: argparse.Namespace) -> int:
-    """Append a line to <wiki>/log.md atomically, rotating if over cap.
+    """Append a structured line to <wiki>/log.md atomically.
+
+    Two forms:
+    - Structured (preferred): `space log <OPERATION> --field key=value ...`
+      auto-prepends an ISO-8601 UTC timestamp and emits the canonical
+      `- [TIMESTAMP] OPERATION key=value ...` format. The LLM never
+      formats timestamps by hand.
+    - Raw escape hatch: `space log --raw "<full line>"` for callers
+      writing a custom shape (skill prose still recommends the structured
+      form).
+
+    Opt-in. `log.md` must already exist; pass `--create` on the first
+    call if you want the CLI to scaffold it. Without `--create`, an
+    absent `log.md` is a refusal — `log.md` is one of the optional
+    conventions per CONVENTIONS.md, not a default.
 
     Race-safe: a single `fcntl.flock` on the log file covers the whole
     check-rotate-append sequence (`_limits.append_log_with_rotation`).
-    Skills call this rather than writing `log.md` directly so concurrent
-    skill invocations never lose lines.
     """
-    wiki_root = _resolve_wiki(args.wiki)
+    wiki_root = _resolve_wiki_strict(args.wiki)
     if wiki_root is None:
         print(
             "  ! no wiki resolved. Pass --wiki <path> or set `wiki` in config.",
@@ -2178,12 +2190,52 @@ def cmd_log(args: argparse.Namespace) -> int:
     from . import _limits as _limits_module
 
     log_path = wiki_root / "log.md"
+    if not log_path.is_file():
+        if not getattr(args, "create", False):
+            print(
+                f"  ! {log_path.relative_to(wiki_root)} does not exist. "
+                "Pass --create to scaffold it, or opt in by running "
+                "`wiki-spaces init <wiki> --with log.md`.",
+                file=sys.stderr,
+            )
+            return 2
+        log_path.write_text("# Log\n", encoding="utf-8")
+
+    if args.raw is not None:
+        message = args.raw
+    else:
+        if not args.operation:
+            print(
+                "  ! pass an OPERATION (e.g. `space log SEARCH --field "
+                "query=...`) or use --raw \"<line>\".",
+                file=sys.stderr,
+            )
+            return 2
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        parts = [f"- [{ts}]", args.operation.upper()]
+        for kv in (args.field or []):
+            if "=" not in kv:
+                print(
+                    f"  ! --field expects key=value, got {kv!r}",
+                    file=sys.stderr,
+                )
+                return 2
+            k, v = kv.split("=", 1)
+            parts.append(f"{k}={v}")
+        message = " ".join(parts)
+
     limits = _limits_module.read_limits(wiki_root)
     cap = _limits_module.cap_for(log_path, wiki_root, limits)
-
-    # Ensure the message ends with a newline; preserve the user's text otherwise.
-    message = args.message
-    archive = _limits_module.append_log_with_rotation(log_path, message, cap=cap)
+    try:
+        archive = _limits_module.append_log_with_rotation(
+            log_path, message, cap=cap
+        )
+    except FileNotFoundError as e:
+        # Race: log.md was deleted between our check above and the lock
+        # acquisition inside the helper. Surface and bail.
+        print(f"  ! {e}", file=sys.stderr)
+        return 1
     if archive is not None:
         print(f"  ~ {log_path.relative_to(wiki_root)} rotated → {archive.name}")
     return 0
@@ -2455,12 +2507,31 @@ def main(argv: list[str] | None = None) -> int:
 
     p_log = sub.add_parser(
         "log",
-        help="append a line to <wiki>/log.md atomically (rotates if over cap)",
+        help="append a structured line to <wiki>/log.md atomically",
     )
     p_log.add_argument(
-        "message",
-        help="the log line to append. Convention per CONVENTIONS / log.md: "
-        "`- [TIMESTAMP] OPERATION key=value ...`",
+        "operation",
+        nargs="?",
+        help="operation name (uppercased; e.g. SEARCH, UPDATE, TEND). "
+        "Required unless --raw is passed.",
+    )
+    p_log.add_argument(
+        "--field",
+        action="append",
+        metavar="KEY=VALUE",
+        help="repeatable `key=value` pair appended to the entry. "
+        "Example: --field query=\"sourdough\" --field result_pages=3.",
+    )
+    p_log.add_argument(
+        "--raw",
+        help="bypass structured formatting; append the given string verbatim "
+        "as the entry (CLI does NOT prepend a timestamp).",
+    )
+    p_log.add_argument(
+        "--create",
+        action="store_true",
+        help="scaffold an empty `log.md` if one does not exist yet. Without "
+        "this flag an absent `log.md` is a refusal — logging is opt-in.",
     )
     p_log.set_defaults(func=cmd_log)
 
