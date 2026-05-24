@@ -184,6 +184,93 @@ def test_resolve_wikilink_duplicate_filenames_deterministic(tmp_path):
         assert _md.resolve_wikilink("setup", base, candidates) == near.resolve()
 
 
+def test_resolve_wikilink_wiki_root_beats_base_shadow(tmp_path):
+    """Shadow regression: `[[concepts/foo]]` from `notes/page.md` with both
+    `notes/concepts/foo.md` (shadow) AND `concepts/foo.md` (canonical) on
+    disk resolves to the wiki-root match — NOT the shadow. Base-first
+    precedence would silently capture the shadow and ship the producer→consumer
+    bug v1.0 is fixing."""
+    shadow = tmp_path / "notes" / "concepts" / "foo.md"
+    shadow.parent.mkdir(parents=True)
+    shadow.write_text("")
+    canonical = tmp_path / "concepts" / "foo.md"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text("")
+    candidates = {shadow.resolve(), canonical.resolve()}
+    base = tmp_path / "notes"
+    result = _md.resolve_wikilink(
+        "concepts/foo", base, candidates, wiki_root=tmp_path
+    )
+    assert result == canonical.resolve()
+
+
+def test_resolve_wikilink_promote_regression(tmp_path):
+    """Promote regression: `[[projects/foo/index]]` from `notes/ref.md` with
+    only `projects/foo/index.md` on disk resolves via wiki-root. This is the
+    exact original-bug case — promote emits this form, audit must resolve it."""
+    target = tmp_path / "projects" / "foo" / "index.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("")
+    candidates = {target.resolve()}
+    base = tmp_path / "notes"
+    base.mkdir()
+    result = _md.resolve_wikilink(
+        "projects/foo/index", base, candidates, wiki_root=tmp_path
+    )
+    assert result == target.resolve()
+
+
+def test_resolve_wikilink_falls_back_to_base_relative(tmp_path):
+    """When wiki-root pathful misses, base-relative is the fallback. `[[../sibling/foo]]`
+    from `notes/page.md` where `sibling/foo.md` exists at the wiki root: wiki-root
+    resolves `<root>/../sibling/foo.md` which is outside the candidate set,
+    base-relative resolves `<root>/notes/../sibling/foo.md = <root>/sibling/foo.md`
+    which IS in the candidate set."""
+    sibling = tmp_path / "sibling" / "foo.md"
+    sibling.parent.mkdir()
+    sibling.write_text("")
+    candidates = {sibling.resolve()}
+    base = tmp_path / "notes"
+    base.mkdir()
+    result = _md.resolve_wikilink(
+        "../sibling/foo", base, candidates, wiki_root=tmp_path
+    )
+    assert result == sibling.resolve()
+
+
+def test_resolve_wikilink_bare_anchored_to_linking_page(tmp_path):
+    """Bare-filename ambiguity is anchored to the linking page. From
+    `concepts/page.md`, `[[foo]]` with candidates `foo.md` (root) and
+    `concepts/foo.md` resolves to `concepts/foo.md` — closest to base wins."""
+    root_foo = tmp_path / "foo.md"
+    root_foo.write_text("")
+    concepts_foo = tmp_path / "concepts" / "foo.md"
+    concepts_foo.parent.mkdir()
+    concepts_foo.write_text("")
+    candidates = {root_foo.resolve(), concepts_foo.resolve()}
+    base = tmp_path / "concepts"
+    result = _md.resolve_wikilink("foo", base, candidates, wiki_root=tmp_path)
+    assert result == concepts_foo.resolve()
+
+
+def test_resolve_wikilink_pathful_md_suffix_both_forms(tmp_path):
+    """A pathful target with or without `.md` suffix resolves to the same
+    candidate. Promote emits without `.md`; hand-written wikilinks may use
+    either form."""
+    target = tmp_path / "projects" / "foo" / "index.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("")
+    candidates = {target.resolve()}
+    base = tmp_path / "notes"
+    base.mkdir()
+    assert _md.resolve_wikilink(
+        "projects/foo/index", base, candidates, wiki_root=tmp_path
+    ) == target.resolve()
+    assert _md.resolve_wikilink(
+        "projects/foo/index.md", base, candidates, wiki_root=tmp_path
+    ) == target.resolve()
+
+
 def test_path_distance():
     from pathlib import Path
 

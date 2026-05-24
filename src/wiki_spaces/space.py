@@ -689,7 +689,7 @@ def _audit_content(wiki_root: Path) -> tuple[list[tuple[Path, str]], list[Path]]
     incoming: set[Path] = set()
     for f, body in bodies.items():
         for link, is_embed in _md.find_wikilink_refs(_md.strip_code_spans(body)):
-            target = _md.resolve_wikilink(link, f.parent, candidates)
+            target = _md.resolve_wikilink(link, f.parent, candidates, wiki_root=wiki_root)
             if target is None:
                 aliased = alias_index.get(link.lower())
                 if aliased is None:
@@ -1134,43 +1134,6 @@ def _is_git_tracked(path: Path, wiki_root: Path) -> bool:
         return False
 
 
-def _resolve_wikilink_target(
-    target: str,
-    page: Path,
-    by_path: dict[str, Path],
-    by_basename: dict[str, list[Path]],
-) -> Path | None:
-    """Resolve a wikilink target. Pathful (`folder/page`) via wiki-root-relative
-    `by_path`; bare basename via `by_basename` with closest-to-page tie-break.
-
-    Codex flagged that `_md.resolve_wikilink` only matches pathful targets
-    relative to the *calling file's* directory, never wiki-root — so
-    `[[projects/foo]]` from anywhere outside `projects/` would silently fail
-    to resolve and be missed by the promote rewrite scan. This resolver is
-    WS8-internal and handles both forms correctly.
-    """
-    t = target[:-3] if target.endswith(".md") else target
-    if "/" in t:
-        return by_path.get(t)
-    candidates = by_basename.get(t, [])
-    if not candidates:
-        return None
-    if len(candidates) == 1:
-        return candidates[0]
-    page_resolved = page.resolve()
-
-    def dist(c: Path) -> tuple[int, str]:
-        common = 0
-        for x, y in zip(page_resolved.parts, c.parts):
-            if x != y:
-                break
-            common += 1
-        steps = (len(page_resolved.parts) - common) + (len(c.parts) - common)
-        return (steps, str(c))
-
-    return min(candidates, key=dist)
-
-
 def _rewrite_links_pointing_at(
     *,
     text: str,
@@ -1179,8 +1142,7 @@ def _rewrite_links_pointing_at(
     new_target: Path,
     new_target_wikilink: str,
     wiki_root: Path,
-    by_path: dict[str, Path],
-    by_basename: dict[str, list[Path]],
+    candidates: set[Path],
 ) -> str:
     """Rewrite markdown links AND wikilinks in `text` that resolve to
     `old_target` so they point at `new_target` instead.
@@ -1192,6 +1154,11 @@ def _rewrite_links_pointing_at(
     Wikilink target becomes `new_target_wikilink` (e.g. `projects/foo/index`).
     Display preserved when explicit; original target text used as display
     when none was present (rendered text never changes for the reader).
+
+    Uses the unified `_md.resolve_wikilink` (wiki-root pathful first, then
+    base-relative, then bare filename) — same precedence as audit, so a
+    rewrite the promote step makes can never be misread as broken by a
+    subsequent audit.
     """
     replacements: list[tuple[int, int, str]] = []
     for link in _md.parse_markdown_links(text):
@@ -1203,7 +1170,9 @@ def _rewrite_links_pointing_at(
         replacements.append((link.span[0], link.span[1], new_substring))
 
     for wl in _md.parse_wikilink_full(text):
-        resolved = _resolve_wikilink_target(wl.target, page, by_path, by_basename)
+        resolved = _md.resolve_wikilink(
+            wl.target, page.parent, candidates, wiki_root=wiki_root
+        )
         if resolved is None or resolved != old_target:
             continue
         display = wl.display if wl.display is not None else wl.target
@@ -1365,18 +1334,9 @@ def cmd_promote(args: argparse.Namespace) -> int:
         summary = " ".join(summary)
     description = (str(summary).strip() if summary else "") or None
 
-    # Build wikilink resolution maps from the current owned md tree.
+    # Build candidate set from the current owned md tree.
     all_md_files = list(_walk_owned_md_files(wiki_root))
-    by_path: dict[str, Path] = {}
-    by_basename: dict[str, list[Path]] = {}
-    for p in all_md_files:
-        try:
-            rel_posix = p.relative_to(wiki_root).as_posix()
-        except ValueError:
-            continue
-        key_no_ext = rel_posix[:-3] if rel_posix.endswith(".md") else rel_posix
-        by_path[key_no_ext] = p.resolve()
-        by_basename.setdefault(p.stem, []).append(p.resolve())
+    candidates: set[Path] = {p.resolve() for p in all_md_files}
 
     # Compute the post-move absolute target (for link rewriting).
     new_target_abs = target
@@ -1399,8 +1359,7 @@ def cmd_promote(args: argparse.Namespace) -> int:
             new_target=new_target_abs,
             new_target_wikilink=new_target_wikilink,
             wiki_root=wiki_root,
-            by_path=by_path,
-            by_basename=by_basename,
+            candidates=candidates,
         )
         if new_text != text:
             planned.append((page, new_text))

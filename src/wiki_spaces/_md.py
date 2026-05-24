@@ -272,34 +272,60 @@ def _path_distance(a: Path, b: Path) -> int:
     return (len(a.parts) - common) + (len(b.parts) - common)
 
 
-def resolve_wikilink(target: str, base: Path, candidates: set[Path]) -> Path | None:
+def resolve_wikilink(
+    target: str,
+    base: Path,
+    candidates: set[Path],
+    *,
+    wiki_root: Path | None = None,
+) -> Path | None:
     """Resolve a wikilink target against a set of candidate page paths.
 
     `target` is the wikilink contents (no `[[ ]]`, no alias, no heading).
     `base` is the directory of the page doing the linking.
     `candidates` is the set of all known page paths in the wiki (absolute).
+    `wiki_root` is the wiki root directory; required for wiki-root pathful
+    resolution (when None, the resolver falls back to base-only behavior for
+    backward compatibility, but callers should always pass it).
 
-    Resolution order:
-    1. Path-relative match from `base` — the most specific, since it is the
-       linking page's own directory. An implicit `.md` suffix is allowed.
-    2. Filename match anywhere. When several pages share the filename, the
-       one whose directory is closest to `base` wins; any remaining tie
-       breaks on sorted path — so the result never depends on the iteration
-       order of the `candidates` set.
+    Resolution order (when `target` contains `/`):
+    1. Wiki-root pathful — try `(wiki_root / target).resolve()` against
+       candidates, with both `.md` and no-`.md` normalization. This matches
+       what `cmd_promote` emits ("projects/foo/index") and is stable across
+       page renames. Wiki-root-first is intentional: a base-relative shadow
+       like `notes/concepts/foo.md` should NOT capture a `[[concepts/foo]]`
+       link the producer emitted with wiki-root intent.
+    2. Base-relative pathful — fallback when wiki-root missed. Try
+       `(base / target).resolve()`, same `.md` normalization.
+
+    When `target` has no `/`:
+    3. Bare filename — match by `Path.name` across candidates; tie-break by
+       closest-to-base path distance, then sorted path (deterministic;
+       independent of `candidates` iteration order).
 
     Returns the resolved absolute path, or None when no match.
     """
-    # Normalize: target may or may not include `.md`.
-    name = target if target.endswith(".md") else f"{target}.md"
+    # Build the two normalization variants once: with-`.md` and as-given.
+    # `target` may or may not include `.md`.
+    name_with_md = target if target.endswith(".md") else f"{target}.md"
+    name_as_given = target
 
-    # 1. Exact path-relative match from the linking page's directory.
-    rel = (base / name).resolve()
-    if rel in candidates:
-        return rel
+    if "/" in target:
+        # Pathful: try wiki-root first, then base-relative.
+        if wiki_root is not None:
+            for n in (name_with_md, name_as_given):
+                rel = (wiki_root / n).resolve()
+                if rel in candidates:
+                    return rel
+        for n in (name_with_md, name_as_given):
+            rel = (base / n).resolve()
+            if rel in candidates:
+                return rel
+        return None
 
-    # 2. Filename match anywhere — deterministic: closest to `base`, then
-    #    sorted path as the final tie-break.
-    matches = [c for c in candidates if c.name == name]
+    # Bare filename match anywhere — deterministic: closest to `base`, then
+    # sorted path as the final tie-break.
+    matches = [c for c in candidates if c.name == name_with_md]
     if not matches:
         return None
     base_resolved = base.resolve()
