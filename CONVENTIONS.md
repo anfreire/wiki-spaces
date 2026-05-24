@@ -353,6 +353,20 @@ A few example shapes:
 
 Project-scoped content nests inside the wiki's project-grouping folder (commonly `projects/<name>/<sub-folder>/`, but `clients/<name>/` or `work/<name>/` follow the same pattern). Shared / external content typically lives under `shared/<name>/` (per `## Sharing & permissions`). `_archives/` is a conventional name for retired content / snapshots.
 
+### Reserved top-level folder names
+
+A handful of names carry tool-level behavior across every wiki. They're not arbitrary categories — name a top-level folder one of these and the tool layer treats it differently.
+
+| Name | Tool behavior |
+|---|---|
+| `shared/` | External by default. `space mount` defaults the mount destination to `shared/<basename-of-source>/`. `space add shared/...` requires `--force-external`. Read operations opt into externals via `space audit --include-external` (and the equivalent skill toggle). |
+| `_archives/` | Excluded from `space audit` walks and `wiki-tend` scans. Conventional name for retired / snapshot content the producer kept but does not want surfaced. |
+| `_meta/` | Configuration files — `_meta/limits.md` (size caps), `_meta/taxonomy.md` (tag vocabulary). Read by the tooling; not treated as content. |
+| `.obsidian/` | Obsidian vault configuration. `wiki-tend colorize` writes `colorGroups` here when present (see `.obsidian/ integration` below). |
+| `.git/`, `.<anything>/` | Hidden directories — always skipped by walks. Includes `.git`, `.obsidian`, and any other dot-prefixed name. |
+
+A user-named top-level folder that collides with one of these inherits the tool behavior — `wiki-update` will not route content into `_archives/`, `space audit` will skip it, etc. Pick a different name if you want default treatment.
+
 Slugs for new pages are lowercase, hyphen-separated, ≤50 chars, descriptive.
 
 **Self-documenting layouts.** A child space (a folder with its own `index.md`) can carry a one-line "what goes here" description in its parent's `## Spaces` entry — `wiki-update` reads those descriptions when classifying new content. Plain folders (no `index.md`) have no such entry and route by folder name alone, so name them concretely (`recipes/` not `stuff/`) and routing still works; a description just makes it more precise. `## Items` is human-only and never consulted for routing.
