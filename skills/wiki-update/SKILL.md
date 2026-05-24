@@ -68,14 +68,7 @@ When step 1 of the procedure finds no usable wiki (config missing or wiki path i
    - **Write cap.** If more than ~10 pages would change, summarize the plan and ask before writing.
 9. **Update tracking.** Per CONVENTIONS / `index.md`, `## Spaces` is the exhaustive navigation contract:
    - **`## Spaces` (exhaustive, required).** If you created a new space (a folder with its own `index.md`), prefer the CLI: `wiki-spaces space add <relative-path>` creates the folder, writes a minimal `index.md` (with `## Spaces` from t=0), and updates the nearest ancestor's `## Spaces` automatically — auto-inserting the section into a bare-`index.md` ancestor when missing. Use `wiki-spaces space remove <relative-path>` to delete in symmetric fashion. No prior setup required: `space add`, `space remove`, `space mount`, and `space promote` all maintain the navigation contract for you. If the CLI is unavailable entirely, do it manually: find the **nearest ancestor space** — the wiki root, or an intermediate space whose folder carries an `index.md`. Plain grouping folders (no `index.md`) are skipped on the walk up. Add the entry under that ancestor's `## Spaces`. When you remove a contained space whose entry is listed, remove the entry.
-   - **`.manifest.json` (auto-created on first project sync if absent).** Use `wiki-spaces space manifest set <project> <key> <value>` for each field — atomic read-modify-write under `fcntl.flock`. Pass `--json` when the value needs a non-string type (e.g. `--json 42` for `pages_in_vault`, `--json null` for `last_commit_synced`); plain strings (`source_cwd`, `last_synced`) need no flag. Typical sequence after a project sync:
-       ```sh
-       wiki-spaces space manifest set <project> source_cwd "<abs/path>"
-       wiki-spaces space manifest set <project> last_synced "<ISO-8601>"
-       wiki-spaces space manifest set <project> last_commit_synced --json '"<sha>"'
-       wiki-spaces space manifest set <project> pages_in_vault 42
-       ```
-       Never write `.manifest.json` directly — concurrent skill invocations would race.
+   - **`.manifest.json` (opt-in; user must scaffold first).** When the file is present, update it via the inline `flock` snippet in [`CONVENTIONS.md` § How to safely update `.manifest.json`](../../CONVENTIONS.md#how-to-safely-update-manifestjson). The skill reads, validates, locks, writes-via-tempfile, and unlocks — same shape regardless of how many fields you set. Typed-field coercion (`pages_in_vault` → int, `last_commit_synced` → `null` literal when the source has no git) is the writer's responsibility; pass already-typed values to the helper. Refuse on absent: if `.manifest.json` does not exist, the user has not opted in — do NOT auto-create it. Refuse on schema-invalid: a malformed file is treated as absent for this run.
 10. **Confirm.**
 
 ```

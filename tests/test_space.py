@@ -1517,56 +1517,13 @@ def test_space_log_atomic_under_contention(tmp_path):
     assert written == 100, f"expected 100 lines, got {written}"
 
 
-def test_space_manifest_set_creates_file(tmp_path):
-    """`space manifest set <project> <key> <value>` creates .manifest.json
-    if missing and writes the value as a string."""
+def test_space_manifest_subcommand_removed(tmp_path):
+    """PR-I demoted `.manifest.json` writes from a CLI subcommand to a
+    CONVENTIONS.md snippet (use an inline `flock` block from the wiki-update
+    skill). `space manifest` should no longer exist in the argparse surface."""
     wiki = _make_wiki(tmp_path)
-    rc, _, _ = _run([
-        "--wiki", str(wiki), "manifest", "set",
-        "cryptobot", "source_cwd", "/home/me/cryptobot",
-    ])
-    assert rc == 0
-    import json
-    manifest = json.loads((wiki / ".manifest.json").read_text())
-    assert manifest["projects"]["cryptobot"]["source_cwd"] == "/home/me/cryptobot"
-
-
-def test_space_manifest_set_coerces_int_field(tmp_path):
-    """`pages_in_vault` is auto-coerced to int even without --json."""
-    wiki = _make_wiki(tmp_path)
-    rc, _, _ = _run([
-        "--wiki", str(wiki), "manifest", "set",
-        "cryptobot", "pages_in_vault", "42",
-    ])
-    assert rc == 0
-    import json
-    manifest = json.loads((wiki / ".manifest.json").read_text())
-    assert manifest["projects"]["cryptobot"]["pages_in_vault"] == 42
-
-
-def test_space_manifest_set_json_null(tmp_path):
-    """`--json null` sets the JSON null literal."""
-    wiki = _make_wiki(tmp_path)
-    rc, _, _ = _run([
-        "--wiki", str(wiki), "manifest", "set",
-        "cryptobot", "last_commit_synced", "--json", "null",
-    ])
-    assert rc == 0
-    import json
-    manifest = json.loads((wiki / ".manifest.json").read_text())
-    assert manifest["projects"]["cryptobot"]["last_commit_synced"] is None
-
-
-def test_space_manifest_set_refuses_malformed_json_file(tmp_path):
-    """If .manifest.json exists but is not valid JSON, refuse to overwrite."""
-    wiki = _make_wiki(tmp_path)
-    (wiki / ".manifest.json").write_text("this is not json {")
-    rc, _, err = _run([
-        "--wiki", str(wiki), "manifest", "set",
-        "cryptobot", "source_cwd", "/tmp",
-    ])
-    assert rc == 2
-    assert "not valid JSON" in err
+    with pytest.raises(SystemExit):
+        _run(["--wiki", str(wiki), "manifest", "set", "p", "k", "v"])
 
 
 def _force_chain_helper_failure(monkeypatch):

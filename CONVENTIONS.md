@@ -180,6 +180,58 @@ Skip the optional `## What this space is` or `## Items` sections and `index.md` 
 
 **If absent:** `wiki-update` performs a full scan on every sync. No project tracking.
 
+### How to safely update `.manifest.json`
+
+`.manifest.json` is an opt-in convention — the framework reads it but does not auto-create it. Writers must update it themselves, atomically and under `flock`, with these properties:
+
+1. **Refuse on absent.** Logging is opt-in; so is the manifest. If the file isn't there, the user hasn't opted in — surface the absence rather than scaffolding.
+2. **Refuse on schema-invalid.** Don't silently overwrite a malformed file; warn and treat as absent for this run.
+3. **Lock the file** with `fcntl.flock` so concurrent writers serialize.
+4. **Read fresh inside the lock.** Other writers may have committed since the caller's last read.
+5. **Write via `tempfile.NamedTemporaryFile` + `os.replace`** for crash safety.
+
+Reference Python snippet (POSIX; Windows is best-effort):
+
+```python
+import fcntl, json, os, tempfile
+from pathlib import Path
+
+def manifest_set(wiki_root: Path, project: str, key: str, value):
+    manifest = wiki_root / ".manifest.json"
+    if not manifest.is_file():
+        raise FileNotFoundError(f"{manifest} not present; opt in first")
+
+    fd = os.open(manifest, os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        raw = os.read(fd, 16 * 1024 * 1024)
+        try:
+            doc = json.loads(raw or b"{}")
+        except json.JSONDecodeError as e:
+            raise ValueError(f"{manifest} not valid JSON: {e}")
+        if not isinstance(doc, dict) or "projects" not in doc:
+            raise ValueError(f"{manifest} missing top-level `projects` map")
+
+        doc["projects"].setdefault(project, {})[key] = value
+        new_text = json.dumps(doc, indent=2) + "\n"
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            prefix=f".{manifest.name}.tmp-", dir=str(manifest.parent)
+        )
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                f.write(new_text)
+            os.replace(tmp_path, manifest)
+        except Exception:
+            try: os.unlink(tmp_path)
+            except OSError: pass
+            raise
+    finally:
+        try: fcntl.flock(fd, fcntl.LOCK_UN)
+        finally: os.close(fd)
+```
+
+Typed-field coercion (e.g. `pages_in_vault` is an int, `last_commit_synced` may be `null`) is the writer's responsibility — pass already-typed values to the helper above. Skills should use this pattern rather than writing `.manifest.json` directly.
+
 ---
 
 ## `_meta/taxonomy.md`
