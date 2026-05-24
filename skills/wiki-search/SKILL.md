@@ -16,13 +16,7 @@ Find content in the user's canonical wiki and answer using only what's stored. C
 
 ## Procedure
 
-1. **Resolve the target wiki**, in this order:
-   1. Explicit path or named space from the user's request.
-   2. The `wiki` value in `${XDG_CONFIG_HOME:-~/.config}/wiki-spaces/config`, if that path has `index.md`.
-   3. **CWD discovery** — the nearest ancestor of the current working directory containing `index.md`. This makes no-install wikis (folder + `index.md`, no config) work whenever the agent runs from inside one.
-   4. If none of the above resolves to a folder with `index.md`, **drive the setup flow inline** before answering: read `<repo>/references/SETUP.md` (or fall back to the canonical URL https://raw.githubusercontent.com/anfreire/wiki-spaces/main/references/SETUP.md when `repo` is unknown) and follow its Branch A "Fresh install + scaffold" steps. The shorter equivalent is in [`wiki-update/SKILL.md` § Initialization](../wiki-update/SKILL.md#initialization). Once `wiki-spaces init` has registered the wiki, resume from step 1 of this procedure with the user's original query.
-
-   When CWD discovery was the source used (config missing), say so once: "Operating on the wiki at `<path>` (found via CWD; no config registered)."
+1. **Resolve the target wiki** per [`CONVENTIONS.md` / Discovery via config](../../CONVENTIONS.md#discovery-via-config) — explicit path → `wiki` config key → nearest CWD ancestor whose `index.md` contains `## Spaces` → inline setup. When step 3 (CWD) was the source, mention once in the response: "Operating on the wiki at `<path>` (found via CWD; no config registered)." When all three miss, drive the setup flow inline via [`wiki-update/SKILL.md` § Initialization](../wiki-update/SKILL.md#initialization), then resume from step 1 with the user's original query.
 2. **Detect adopted conventions at the SCOPE root** (the canonical wiki for default operation; the targeted space if the user named one) by presence: frontmatter schema (scan content pages until one with frontmatter is found, or confirm none), `_meta/taxonomy.md` (for tag matching), `log.md` (for logging). Spaces are autonomous — never inherit detection from a parent.
 3. **Choose the search mode.**
    - **Quick lookup** — triggered by an agent checking before external research, or user says "quick answer", "just check", "do I have anything on X". Stops at step 5.1 (no page bodies read). Prefix the answer: `Quick lookup: summaries only; page bodies not read.`

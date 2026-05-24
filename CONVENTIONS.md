@@ -476,7 +476,7 @@ A heuristic for **knowledge-capture use cases** (research notes, technical wikis
 - **Code answers it?** Skip — wiki the reasoning, not what code says.
 - **10-second search answers it?** Skip — wiki what took 30 minutes.
 - **Needed in 3 months?** If you'd have to re-research, wiki it.
-- **Already there?** Check `index.md`. Merge, don't duplicate.
+- **Already there?** Run the `wiki-search` candidate pass (filename / path-segment / frontmatter overlap with the content being captured). When a near-match exists, prefer merging into the existing page over creating a new one. `## Items` is non-contractual (tools never write it), so `index.md` is not a reliable index of what's on disk — use the search candidate pass instead.
 
 **Skip this filter** for content-store use cases where every entry is intentional regardless of derivation cost — recipe collections, personal journals, contact lists, team runbooks, etc. The "would you re-derive this?" test doesn't apply when the wiki *is* the source of truth, not a memory aid.
 
