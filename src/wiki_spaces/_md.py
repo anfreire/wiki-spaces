@@ -353,6 +353,17 @@ def split_frontmatter(text: str) -> tuple[str | None, str]:
     return m.group(1), m.group(2)
 
 
+def strip_frontmatter(text: str) -> str:
+    """Return `text` with the YAML frontmatter block (if any) removed.
+
+    Convenience wrapper over `split_frontmatter` — returns just the body.
+    Used by `_limits` for char counting: frontmatter is metadata, not
+    content, and is excluded from size caps.
+    """
+    _, body = split_frontmatter(text)
+    return body
+
+
 def parse_frontmatter(text: str) -> dict[str, str | list[str]] | None:
     """Parse the documented schema subset. Returns None when no frontmatter.
 
