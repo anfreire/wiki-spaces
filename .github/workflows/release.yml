@@ -46,9 +46,65 @@ jobs:
           name: dist
           path: dist/
 
+  smoke:
+    name: Smoke-test built wheel
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+
+      - name: Download distributions
+        uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+      - name: Tag matches pyproject version
+        if: github.event_name == 'push'
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
+          if [ "$tag" != "$pkg" ]; then
+            echo "tag $tag does not match pyproject version $pkg"
+            exit 1
+          fi
+
+      - name: Install wheel into clean venv
+        run: |
+          uv venv smoke
+          uv pip install --python smoke/bin/python dist/*.whl
+
+      - name: Import smoke + version
+        run: |
+          smoke/bin/python -c 'import wiki_spaces; print(wiki_spaces.__version__)'
+
+      - name: Install --all --dry-run
+        run: smoke/bin/wiki-spaces install --all --dry-run
+
+      - name: Bridge snippet emits
+        run: smoke/bin/wiki-spaces install --bridge cursor > /dev/null
+
+      - name: Packaged --help hides vendor-kepano
+        run: |
+          if smoke/bin/wiki-spaces --help | grep -q 'vendor-kepano'; then
+            echo "packaged --help should not advertise vendor-kepano"
+            exit 1
+          fi
+
+      - name: Audit a smoke wiki
+        run: |
+          mkdir -p smoke-wiki
+          printf '# smoke\n\n## Spaces\n\n' > smoke-wiki/index.md
+          smoke/bin/wiki-spaces space --wiki "$(pwd)/smoke-wiki" audit
+
   publish:
     name: Publish to PyPI
-    needs: build
+    needs: [build, smoke]
     runs-on: ubuntu-latest
     environment:
       name: pypi
