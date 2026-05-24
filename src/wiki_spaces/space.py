@@ -78,9 +78,15 @@ def _resolve_wiki_strict(explicit: Path | None = None) -> Path | None:
         return None
     cfg_wiki = wiki_path()
     if cfg_wiki is not None:
+        # The user explicitly configured this wiki. If it carries `index.md`
+        # but lacks `## Spaces`, refuse — don't silently fall through to a
+        # CWD ancestor wiki (that would mask a real config-side spec
+        # violation). The fallback only applies when no config wiki was set
+        # at all.
         p = cfg_wiki.expanduser().resolve()
         if (p / "index.md").is_file() and _has_spaces_section(p):
             return p
+        return None
     return nearest_space_root_strict()
 
 
@@ -1186,6 +1192,19 @@ def cmd_audit(args: argparse.Namespace) -> int:
     for space in all_spaces:
         text = (space / "index.md").read_text(encoding="utf-8")
         if not _md.has_section(text, "Spaces"):
+            # An owned space whose `index.md` lacks `## Spaces` violates the
+            # v1 navigation contract ("No `## Spaces` means no wiki"). Flag it
+            # as an issue so read-only audit doesn't silently pass. Without
+            # `--fix` the malformed section IS the report; with `--fix` the
+            # bare-section repair pass above already inserted the heading
+            # before we recomputed `all_spaces`, so this branch should be
+            # unreachable when `fix=True` — but we still flag defensively in
+            # case `_ensure_section_at` returned an error and was skipped.
+            rel = space.relative_to(wiki_root)
+            label = "<wiki>" if str(rel) == "." else f"<wiki>/{rel}"
+            print(f"{label}/index.md:")
+            print("  ! no `## Spaces` section (run `audit --fix` to insert)")
+            issues += 1
             continue
         # `## Spaces` hrefs, normalized so `foo`, `foo/`, `foo/index.md`, and
         # nested `projects/foo/index.md` all compare as the directory path.
@@ -1220,12 +1239,40 @@ def cmd_audit(args: argparse.Namespace) -> int:
                 for child_rel in missing:
                     label_str = f"{child_rel}/"
                     href = f"{child_rel}/index.md"
-                    rc, info = _atomic_register_in_spaces(
-                        space, ancestor_index, label_str, href, None
+
+                    # Route through a locked mutate that runs `_enforce_size_cap`
+                    # on the projected text — `audit --fix` is a framework
+                    # writer and must respect per-file caps. `_atomic_register_
+                    # in_spaces` alone doesn't enforce caps; using the mutate
+                    # form lets us reject (None, 2, reason) on overflow per the
+                    # `_atomic_mutate_index` abort protocol.
+                    def _register_mut(
+                        fresh_text: str,
+                        *,
+                        _l=label_str,
+                        _h=href,
+                    ):
+                        new = _add_space_entry(fresh_text, _l, _h, None)
+                        if new == fresh_text:
+                            return (fresh_text, "noop")
+                        try:
+                            _enforce_size_cap(ancestor_index, new, wiki_root)
+                        except SizeCapExceeded as e:
+                            return (None, 2, f"size cap: {e}")
+                        return (new, "added")
+
+                    rc, info = _atomic_mutate_index(
+                        space, ancestor_index, _register_mut
                     )
                     if rc == 0 and info == "added":
                         print(f"  ~ {label}/index.md ## Spaces  += [{label_str}]")
                         issues -= 1
+                    elif rc != 0:
+                        print(
+                            f"  ! could not register [{label_str}] in "
+                            f"{label}/index.md: {info}",
+                            file=sys.stderr,
+                        )
                 if remove_stale:
                     for child_rel in stale:
                         target_dir = space / child_rel
@@ -1982,11 +2029,16 @@ def _ensure_spaces_chain_and_register(
 def _rollback_added_entries(entries: list[tuple[Path, str, str]]) -> None:
     """Undo entries added by `_ensure_spaces_chain_and_register`, deepest first.
 
+    The chain helper appends to `entries` as it walks UP from the leaf, so the
+    first appended entry is the deepest (the leaf's parent) and the last is
+    the wiki root. Iterating in forward order therefore removes deepest-first,
+    matching the plan's PR-D contract.
+
     Best-effort: prints to stderr on failure but never raises. Inserted
     `## Spaces` sections are NOT rolled back — they're append-only and
     non-destructive; leaving them in place is the safe choice.
     """
-    for ancestor, label, href in reversed(entries):
+    for ancestor, label, href in entries:
         ancestor_index = ancestor / "index.md"
         rc, info = _atomic_remove_from_spaces(ancestor, ancestor_index, href)
         if rc != 0:

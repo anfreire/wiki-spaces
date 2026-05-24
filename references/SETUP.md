@@ -20,7 +20,7 @@ wiki = /home/<user>/Wiki
 repo = /home/<user>/.local/share/wiki-spaces
 ```
 
-- `wiki` — absolute path to the canonical wiki folder; must contain `index.md`.
+- `wiki` — absolute path to the canonical wiki folder; must contain `index.md` with a `## Spaces` heading (the v1 navigation contract).
 - `repo` — absolute path to the wiki-spaces install (the share dir written by `wiki-spaces install`, or a source checkout when running from one); lets skills locate `AGENTS.md`, `CONVENTIONS.md`, and `references/`.
 
 If the config is missing or `wiki` is unset, the user has not set up yet — drive the setup.
@@ -105,7 +105,7 @@ The user can invoke skills via their AI coding harness:
 - "Save this conversation as a note" → `wiki-update`
 - "Audit my wiki" → `wiki-tend`
 
-Discovery resolution is **explicit path → config → CWD ancestor**. Skills follow that order on every invocation, so they always know which wiki to operate on — even before the config exists, as long as the agent is running from inside a folder with `index.md`. Once the wiki is resolved, CWD informs *placement* (project-scoped vs global) but doesn't override the resolved target. A user in `~/Documents/Projects/foo/` who asks "save this concept about Python" will have it routed to a global folder (e.g., `<wiki>/concepts/` for a developer notebook), not `<wiki>/projects/foo/`, because the content is global. The agent uses the user's words and content to decide placement — CWD is just a hint there.
+Discovery resolution is **explicit path → config → CWD ancestor**. Skills follow that order on every invocation, so they always know which wiki to operate on — even before the config exists, as long as the agent is running from inside a folder with `index.md` containing a `## Spaces` heading. Once the wiki is resolved, CWD informs *placement* (project-scoped vs global) but doesn't override the resolved target. A user in `~/Documents/Projects/foo/` who asks "save this concept about Python" will have it routed to a global folder (e.g., `<wiki>/concepts/` for a developer notebook), not `<wiki>/projects/foo/`, because the content is global. The agent uses the user's words and content to decide placement — CWD is just a hint there.
 
 ## Reference docs at the wiki-spaces repo
 

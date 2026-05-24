@@ -64,6 +64,19 @@ def test_audit_strict_resolver_rejects_bare_index_via_cwd(tmp_path, monkeypatch)
     assert "Spaces" in err
 
 
+def test_audit_strict_resolver_rejects_bare_index_via_config(tmp_path, monkeypatch):
+    """Same contract through the `wiki` config key: the strict resolver
+    rejects a configured wiki that has `index.md` but no `## Spaces`.
+    Without this test, a config-pointed bare-index wiki could silently pass
+    audit even though no other resolution path accepts it."""
+    wiki = _make_wiki(tmp_path, with_spaces_section=False)
+    # Don't pass --wiki; have the config point at the bare wiki instead.
+    monkeypatch.setattr(space, "wiki_path", lambda: wiki)
+    rc, _, err = _run(["audit"])
+    assert rc == 2
+    assert "Spaces" in err
+
+
 def test_validate_rel_path_rejects_dot_dot():
     ok, err = space._validate_rel_path("../escape")
     assert not ok
@@ -530,7 +543,10 @@ def test_audit_accepts_bare_folder_href(tmp_path):
     /index.md) must not be reported as a missing entry."""
     wiki = _make_wiki(tmp_path)
     (wiki / "foo").mkdir()
-    (wiki / "foo" / "index.md").write_text("# foo")
+    # The child must satisfy the v1 navigation contract (`index.md` +
+    # `## Spaces`); the test pins the bare-FOLDER-href format, not a
+    # bare-INDEX child.
+    (wiki / "foo" / "index.md").write_text("# foo\n\n## Spaces\n\n")
     idx = wiki / "index.md"
     idx.write_text(idx.read_text() + "- [foo/](foo/)\n")
     rc, out, _ = _run(["--wiki", str(wiki), "audit"])
@@ -893,6 +909,48 @@ def test_audit_fix_registers_missing_entry_without_creating_directory(tmp_path):
     assert any(e.href and "foo/" in e.href for e in entries)
 
 
+def test_audit_reports_bare_index_child_without_fix(tmp_path):
+    """Read-only audit: a REGISTERED nested space whose `index.md` is bare
+    (no `## Spaces`) violates the v1 navigation contract ("No `## Spaces`
+    means no wiki"). Without `--fix`, audit must surface this — the
+    earlier silent-skip behavior let a registered child pass even though
+    no other resolver accepts it. Exit code flips so CI catches it."""
+    wiki = _make_wiki(tmp_path)
+    rc, _, _ = _run(["--wiki", str(wiki), "add", "foo"])
+    assert rc == 0
+    # Mutate foo's index.md to remove its `## Spaces` (simulates drift).
+    (wiki / "foo" / "index.md").write_text("# foo\n")
+    rc, out, _ = _run(["--wiki", str(wiki), "audit"])
+    assert rc != 0, out
+    assert "no `## Spaces`" in out
+
+
+def test_audit_fix_register_missing_entry_respects_size_cap(tmp_path, monkeypatch):
+    """`audit --fix` is a framework writer — registering a missing entry
+    in the ancestor's `## Spaces` must enforce the per-file cap. Pre-fix,
+    the registration path used `_atomic_register_in_spaces` directly,
+    which skipped `_enforce_size_cap` and could push the ancestor over
+    its cap silently."""
+    wiki = _make_wiki(tmp_path)
+    # Bump root `index.md` so the next registration would exceed the cap.
+    big = "# wiki\n\n## Spaces\n\n" + ("x" * 4990) + "\n"
+    (wiki / "index.md").write_text(big)
+    # Drift: `foo/` exists as a registered space on disk but isn't listed.
+    (wiki / "foo").mkdir()
+    (wiki / "foo" / "index.md").write_text("# foo\n\n## Spaces\n\n")
+    rc, _out, err = _run(["--wiki", str(wiki), "audit", "--fix"])
+    # Audit returns 0 only on a fully repaired wiki; the cap rejection
+    # leaves `foo` unregistered, so exit is non-zero AND the size-cap
+    # diagnostic is surfaced on stderr.
+    assert rc != 0
+    assert "size cap" in err
+    # The ancestor was not bloated past the cap by the registration.
+    entries = _md.parse_section_entries(
+        (wiki / "index.md").read_text(), "Spaces"
+    )
+    assert not any(e.href and "foo/" in e.href for e in entries)
+
+
 def test_audit_fix_remove_stale_refuses_external_without_include_external(tmp_path):
     """Stale entries pointing into externally-classified paths are NOT
     removed unless `--include-external --remove-stale` are passed together
@@ -952,6 +1010,35 @@ def test_adopt_repairs_root_even_with_no_nested_spaces(tmp_path):
     rc = init_wiki.main([str(root), "--adopt", "--no-config"])
     assert rc == 0
     assert "## Spaces" in (root / "index.md").read_text()
+
+
+def test_adopt_include_external_descends_into_external_spaces(tmp_path):
+    """Positive case for `init --adopt --include-external`: an external
+    space WITH `index.md` is descended into and registered upward, with
+    its own `## Spaces` inserted if missing. Pairs with the negative
+    skip-without-index test below — together they pin the §25 fix
+    (pass `include_external` through to `_walk_classified` so externals
+    are actually walked, not silently no-op'd)."""
+    root = tmp_path / "wiki"
+    root.mkdir()
+    (root / "index.md").write_text("# wiki\n\n## Spaces\n\n")
+    # An external space (under `shared/`) with an existing `index.md`.
+    ext = root / "shared" / "team"
+    ext.mkdir(parents=True)
+    (ext / "index.md").write_text("# team\n")  # bare; chain helper repairs
+    from wiki_spaces import init_wiki
+    rc = init_wiki.main(
+        [str(root), "--adopt", "--include-external", "--no-config"]
+    )
+    assert rc == 0
+    # External space registered in the root.
+    entries = _md.parse_section_entries(
+        (root / "index.md").read_text(), "Spaces"
+    )
+    hrefs = [e.href for e in entries if e.href]
+    assert any("shared/team" in h for h in hrefs)
+    # Leaf's own `## Spaces` was inserted by `_ensure_section_at`.
+    assert "## Spaces" in (ext / "index.md").read_text()
 
 
 def test_adopt_skips_externals_without_index_md(tmp_path):

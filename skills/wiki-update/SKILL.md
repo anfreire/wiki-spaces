@@ -101,7 +101,7 @@ A `.md` file that has grown into multiple distinct topics, accreted siblings, or
 
 **Atomicity.** The CLI snapshots every affected file to a system tempdir (outside the wiki tree) before mutating disk and restores from the snapshot if anything fails. Works on both git-tracked and untracked wikis. The snapshot dir is always cleaned, success or failure.
 
-**Refuses if.** Target dir exists with content; parent's `index.md` has no `## Spaces` section; path is external (or descends from an external scope); another owned page already claims the alias `<basename>` case-insensitively (use `--skip-aliases` to bypass).
+**Refuses if.** Target dir exists with content; path is external (or descends from an external scope); another owned page already claims the alias `<basename>` case-insensitively (use `--skip-aliases` to bypass). When the parent's `index.md` lacks `## Spaces`, promote auto-inserts the heading inside the locked ancestor mutation — no refusal, no prior setup needed.
 
 ## Logging
 
