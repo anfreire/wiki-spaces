@@ -116,7 +116,7 @@ For shared or collaborative spaces, the recommended mechanism is **git repositor
 
 ## `index.md`
 
-**If present:** This folder is a space (per the [spec](AGENTS.md)). `index.md` typically grows three sections as the space grows:
+**If present (with a `## Spaces` heading):** This folder is a space (per the [spec](AGENTS.md)). `index.md` typically carries three sections:
 
 - **`## What this space is`** — opening paragraph, plain prose. The space's own description; preserved across regenerations.
 - **`## Items`** — optional, purely human-facing navigation: a hand-picked landing list of files or folders worth surfacing. Tools never read or write it.

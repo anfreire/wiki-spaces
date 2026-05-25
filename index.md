@@ -4,7 +4,7 @@
 
 The wiki-spaces project: a minimal nestable wiki spec, an opt-in conventions catalog, three reference skills, and a per-harness installer. This repo is itself a wiki-spaces wiki — its own canonical example.
 
-A wiki is any folder containing `index.md`. Spaces inside it recurse. Sharing a wiki means sharing a folder; the receiver mounts it as a subdir, symlink, or submodule — and from their perspective, it becomes a space inside theirs. See [`AGENTS.md`](AGENTS.md) for the spec.
+A wiki is a folder with `index.md` whose contents include a `## Spaces` heading. Spaces inside it recurse. Sharing a wiki means sharing a folder; the receiver mounts it as a subdir, symlink, or submodule — and from their perspective, it becomes a space inside theirs. See [`AGENTS.md`](AGENTS.md) for the spec.
 
 ## Items
 
