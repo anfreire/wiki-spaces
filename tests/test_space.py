@@ -77,6 +77,25 @@ def test_audit_strict_resolver_rejects_bare_index_via_config(tmp_path, monkeypat
     assert "Spaces" in err
 
 
+def test_strict_resolver_refuses_relative_config_path(tmp_path, monkeypatch):
+    """PR-D + OC r12: a relative `wiki` config path would silently join to
+    CWD via `.resolve()`, picking a different wiki per-invocation. doctor
+    rejects relatives upfront; the resolvers must too — otherwise a
+    misconfigured wiki silently follows the agent's working directory."""
+    monkeypatch.setattr(space, "wiki_path", lambda: Path("relative/wiki"))
+    monkeypatch.chdir(tmp_path)
+    assert space._resolve_wiki_strict(None) is None
+
+
+def test_repair_resolver_refuses_relative_config_path(tmp_path, monkeypatch):
+    """Same hard-stop on the repair side. Without this, `space add foo`
+    typed against a relative `wiki = Wiki` config would target whichever
+    `Wiki/` directory happens to sit under the current working directory."""
+    monkeypatch.setattr(space, "wiki_path", lambda: Path("relative/wiki"))
+    monkeypatch.chdir(tmp_path)
+    assert space._resolve_wiki_for_repair(None) is None
+
+
 def test_repair_resolver_refuses_invalid_config_does_not_fall_through_to_cwd(
     tmp_path, monkeypatch
 ):

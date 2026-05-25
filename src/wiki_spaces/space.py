@@ -82,8 +82,13 @@ def _resolve_wiki_strict(explicit: Path | None = None) -> Path | None:
         # but lacks `## Spaces`, refuse — don't silently fall through to a
         # CWD ancestor wiki (that would mask a real config-side spec
         # violation). The fallback only applies when no config wiki was set
-        # at all.
-        p = cfg_wiki.expanduser().resolve()
+        # at all. Same hard-stop for a non-absolute config path: doctor
+        # rejects relatives, so `.resolve()` here would silently join to
+        # CWD and pick a different wiki per-invocation.
+        cfg_expanded = cfg_wiki.expanduser()
+        if not cfg_expanded.is_absolute():
+            return None
+        p = cfg_expanded.resolve()
         if (p / "index.md").is_file() and _has_spaces_section(p):
             return p
         return None
@@ -107,7 +112,13 @@ def _resolve_wiki_for_repair(explicit: Path | None = None) -> Path | None:
         return p if (p / "index.md").is_file() else None
     cfg_wiki = wiki_path()
     if cfg_wiki is not None:
-        p = cfg_wiki.expanduser().resolve()
+        # Same absolute-path requirement as the strict resolver: a relative
+        # config path would silently join to CWD via `.resolve()`, picking
+        # a different wiki depending on where the agent runs.
+        cfg_expanded = cfg_wiki.expanduser()
+        if not cfg_expanded.is_absolute():
+            return None
+        p = cfg_expanded.resolve()
         if (p / "index.md").is_file():
             return p
         return None
