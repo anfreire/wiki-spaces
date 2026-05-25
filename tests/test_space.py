@@ -3935,6 +3935,41 @@ def test_promote_inserts_spaces_when_ancestor_bare(tmp_path):
     assert any(e.href and "page/" in e.href for e in entries)
 
 
+def test_promote_propagates_chain_repair_up_to_wiki_root(tmp_path):
+    """PR-C + OC pass #3 follow-up: `_promote_mutate` only repairs the
+    IMMEDIATE ancestor. When a higher ancestor (or the wiki root itself)
+    is bare or doesn't carry an entry for the immediate ancestor, the
+    promoted space is unreachable via the navigation contract — strict
+    consumers (audit, doctor, skills) can't traverse to it. The chain
+    helper must walk from the immediate ancestor up to the wiki root,
+    inserting `## Spaces` in bare ancestors and registering each step.
+    v1 contract: every write command maintains `## Spaces` on every
+    ancestor it crosses, not just the nearest."""
+    wiki = _make_wiki(tmp_path)  # wiki/index.md has `## Spaces`
+    # Hand-create an intermediate space that is NOT registered in the wiki's
+    # `## Spaces` and itself lacks `## Spaces`. This mimics a hand-curated
+    # wiki tree the user built up without going through `space add`.
+    (wiki / "projects").mkdir()
+    (wiki / "projects" / "index.md").write_text("# projects\n")
+    (wiki / "projects" / "foo.md").write_text("# foo\n")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "projects/foo.md"])
+    assert rc == 0, err
+    # Source moved to projects/foo/index.md.
+    assert not (wiki / "projects" / "foo.md").exists()
+    assert (wiki / "projects" / "foo" / "index.md").is_file()
+    # Immediate ancestor gets `## Spaces` + `foo/` entry (PR-C / _promote_mutate).
+    proj_text = (wiki / "projects" / "index.md").read_text()
+    assert "## Spaces" in proj_text
+    proj_entries = _md.parse_section_entries(proj_text, "Spaces")
+    assert any(e.href and "foo/" in e.href for e in proj_entries)
+    # Wiki root must now register `projects/` so strict consumers can
+    # traverse: wiki → projects → foo. Without chain propagation this
+    # entry would be missing and audit would report drift.
+    root_text = (wiki / "index.md").read_text()
+    root_entries = _md.parse_section_entries(root_text, "Spaces")
+    assert any(e.href and "projects/" in e.href for e in root_entries)
+
+
 def test_promote_ancestor_uses_atomic_mutate_index(tmp_path, monkeypatch):
     """The ancestor write must happen under flock against FRESH text — not
     against the text read at command start. Inject a concurrent modification

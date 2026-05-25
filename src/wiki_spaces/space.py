@@ -3287,6 +3287,38 @@ def cmd_promote(args: argparse.Namespace) -> int:
         if info in ("added", "inserted-and-added"):
             print(f"  ~ {printable}index.md ## Spaces  += [{label}]")
 
+        # `_promote_mutate` only repairs the IMMEDIATE ancestor's `## Spaces`.
+        # If the wiki has bare intermediate ancestors above it (e.g., a
+        # hand-curated `projects/index.md` without `## Spaces`, with the wiki
+        # root above), the leaf edge alone leaves the chain unreachable to
+        # strict consumers. v1 contract (AGENTS.md / Write commands): "When
+        # an ancestor's `index.md` is missing the heading, the CLI inserts
+        # it as the first step of the mutation." Walk the chain from the
+        # immediate ancestor up to wiki_root, ensuring `## Spaces` and
+        # registering each space in its parent so strict consumers can
+        # traverse to the newly-promoted space.
+        if ancestor != wiki_root:
+            try:
+                chain_notices, chain_added = _ensure_spaces_chain_and_register(
+                    wiki_root, ancestor
+                )
+                for n in chain_notices:
+                    print(n)
+            except EnsureChainError as ce:
+                for n in ce.notices:
+                    print(n)
+                _rollback_added_entries(ce.added)
+                # Undo the entry we just added at the immediate ancestor so
+                # the move-rollback below leaves no orphan `## Spaces` entry.
+                # `_ensure_section_at`'s appended `## Spaces` heading stays
+                # (append-only, non-destructive — same policy as the chain
+                # helper's rollback contract).
+                if info in ("added", "inserted-and-added"):
+                    _atomic_remove_from_spaces(
+                        ancestor, ancestor_index, href
+                    )
+                raise RuntimeError(f"chain propagation failed: {ce}")
+
         print(f"  + promoted {rel} -> {target_rel}")
         if rewrite_files:
             print(f"  ~ rewrote links in {rewrite_files} file(s)")
