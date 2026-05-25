@@ -318,9 +318,10 @@ def append_log_with_rotation(
 ) -> Path | None:
     """Append `entry` to `log_path` with rotation under a single lock.
 
-    Sequence (one `fcntl.flock` covering all of it):
-      1. (Optionally) create `log_path` atomically if `create_if_missing`.
-      2. Acquire exclusive lock on `log_path`.
+    Sequence (one `fcntl.flock` on the PARENT DIRECTORY covering all of it):
+      1. Acquire exclusive lock on `log_path.parent` (stable inode — survives
+         our own `unlink`/`os.replace` of `log_path` itself).
+      2. (Optionally) create `log_path` atomically if `create_if_missing`.
       3. Read current content. If the file was just created (empty), write
          `initial_content` first.
       4. If `len(current) + len(entry) > cap`, parse into entries, split at
@@ -338,6 +339,17 @@ def append_log_with_rotation(
     two concurrent callers can't both clobber each other's scaffold and
     lose entries. Without the flag, raises `FileNotFoundError`.
 
+    Locking note: the lock is on the PARENT DIRECTORY's inode, matching
+    `_atomic_mutate_index`'s pattern. Locking the `log.md` inode itself
+    (an earlier design) raced with the over-cap unlink path — a concurrent
+    `--create` caller could acquire its own fd on the same inode, wait
+    for the first caller's flock, and after that caller unlinked the file
+    end up writing to an inode no longer linked at `log.md` (data lost).
+    The parent-directory lock serializes the create / unlink / replace
+    decisions, so a second caller always sees `log_path` in a coherent
+    state (either present with the first caller's content, or absent and
+    safe to scaffold afresh).
+
     POSIX-only locking. On Windows, the lock is best-effort (a one-time
     stderr notice per process); concurrent writes may interleave but the
     sequence itself still completes correctly within a single process.
@@ -347,20 +359,25 @@ def append_log_with_rotation(
             f"{log_path} does not exist; caller must create it first "
             "(logging is opt-in)"
         )
-    # `O_CREAT | O_RDWR` is atomic create-or-open. With flock taken
-    # immediately, a concurrent first-call sequence serializes — the
-    # second caller sees the first caller's scaffold (and entries)
-    # already in place. Without this, two `--create` calls race between
-    # the existence check and `write_text`, losing one caller's entry.
-    flags = os.O_RDWR | (os.O_CREAT if create_if_missing else 0)
-    pre_existed = log_path.is_file()
-    fd = os.open(log_path, flags, 0o644)
+    parent_fd = os.open(str(log_path.parent), os.O_RDONLY)
     try:
         if sys.platform != "win32":
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            fcntl.flock(parent_fd, fcntl.LOCK_EX)
         else:
             _maybe_emit_win32_notice()
 
+        # `O_CREAT | O_RDWR` is atomic create-or-open *under the parent
+        # lock*. Two concurrent first-call sequences serialize: the
+        # second caller sees the first caller's scaffold (and entries)
+        # already on disk, or — if the first caller failed the cap check
+        # and unlinked its empty file — the second caller's O_CREAT
+        # creates a fresh inode at the (now-empty) `log_path`.
+        flags = os.O_RDWR | (os.O_CREAT if create_if_missing else 0)
+        pre_existed = log_path.is_file()
+        fd = os.open(log_path, flags, 0o644)
+        # Re-flag inside the lock+inside-open so callers see a single
+        # coherent state. (Tracked separately so the inner `finally`
+        # always closes `fd` regardless of what happens below.)
         current_bytes = b""
         offset = 0
         while True:
@@ -494,10 +511,18 @@ def append_log_with_rotation(
             os.write(fd, b"\n")
         os.write(fd, entry_normalized.encode("utf-8"))
         os.fsync(fd)
+        os.close(fd)
         return archive_path
     finally:
+        # The inner fd was closed on the success path above; on the
+        # exception path it may still be open. Close best-effort.
         try:
-            if sys.platform != "win32":
-                fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
             os.close(fd)
+        except (OSError, NameError):
+            pass
+        if sys.platform != "win32":
+            try:
+                fcntl.flock(parent_fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+        os.close(parent_fd)

@@ -2845,6 +2845,95 @@ def test_log_create_refuses_atomically_when_scaffold_plus_entry_overflows(tmp_pa
     )
 
 
+def test_log_create_unlink_recreate_clean_after_failed_first_call(tmp_path):
+    """OC phase-3 finding: locking `log.md`'s own inode races with the
+    cap-overflow unlink path. A first `--create` caller that fails the
+    scaffold-cap check unlinks the freshly-created empty file; a second
+    caller that had already opened the same inode and was waiting on
+    flock could then write to an inode no longer linked at `log.md`
+    (data lost). The fix moves the lock to the parent directory's inode,
+    which is stable across our own unlink/replace.
+
+    Single-process regression covering the underlying mechanism: a refused
+    `--create` must leave the parent directory in a state where a
+    subsequent `--create` with a fit-sized entry scaffolds and persists
+    cleanly. (The pure concurrent variant requires fault injection to
+    trigger deterministically; this test pins the sequential primitive.)
+    """
+    wiki = _make_wiki(tmp_path)
+    (wiki / "_meta").mkdir()
+    (wiki / "_meta" / "limits.md").write_text(
+        "| Pattern | Cap (chars) |\n|---|---|\n| log.md | 20 |\n"
+    )
+    # First --create: huge entry overflows scaffold+entry → refuses + unlinks.
+    rc1, _, _ = _run([
+        "--wiki", str(wiki), "log", "--create", "--raw",
+        "- [t] HUGE " + "x" * 100,
+    ])
+    assert rc1 != 0
+    assert not (wiki / "log.md").is_file(), (
+        "refused --create must unlink the empty scaffold"
+    )
+    # Relax the cap so a second --create with a small entry fits cleanly.
+    (wiki / "_meta" / "limits.md").write_text(
+        "| Pattern | Cap (chars) |\n|---|---|\n| log.md | 200 |\n"
+    )
+    rc2, _, _ = _run([
+        "--wiki", str(wiki), "log", "--create", "--raw", "- [t] OK",
+    ])
+    assert rc2 == 0
+    assert (wiki / "log.md").is_file()
+    body = (wiki / "log.md").read_text()
+    assert "OK" in body
+
+
+def _space_log_create_worker(args):
+    """Module-level worker for the --create contention test (pickleable)."""
+    import io
+    from contextlib import redirect_stdout, redirect_stderr
+    from wiki_spaces import space as _space
+    wiki_str, i = args
+    line = f"- [t] FIT n={i:03d}"
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        return _space.main([
+            "--wiki", wiki_str, "log", "--create", "--raw", line,
+        ])
+
+
+def test_space_log_create_concurrent_callers_all_persist(tmp_path):
+    """Concurrent `--create` callers that all fit: each successful worker's
+    entry must land on disk. Under the old per-file flock design, the
+    first caller's `os.open(O_CREAT|O_RDWR)` raced with the second
+    caller's create-then-flock — if the cap check failed on caller A
+    and A unlinked the empty file mid-flight, caller B's write went
+    to an unlinked inode. With the parent-directory flock, the
+    create/unlink decisions serialize so every fit-sized entry that
+    reports rc=0 is present on disk afterward.
+    """
+    import multiprocessing
+    import os as _os
+    if _os.name == "nt":
+        pytest.skip("flock-based atomicity not enforced on Windows")
+    if "fork" not in multiprocessing.get_all_start_methods():
+        pytest.skip("requires fork-capable multiprocessing")
+    wiki = _make_wiki(tmp_path)
+    # No `_meta/limits.md` → default `log.md` cap (100K) admits every entry.
+    ctx = multiprocessing.get_context("fork")
+    with ctx.Pool(processes=8) as pool:
+        args = [(str(wiki), i) for i in range(40)]
+        results = pool.map(_space_log_create_worker, args)
+    assert all(r == 0 for r in results), f"some workers failed: {results}"
+    assert (wiki / "log.md").is_file(), "log.md missing after --create contention"
+    body = (wiki / "log.md").read_text()
+    found = sum(
+        1 for i in range(40) if f"FIT n={i:03d}" in body
+    )
+    assert found == 40, (
+        f"expected 40 lines on disk, got {found}; "
+        "the --create race lost entries (parent-dir lock missing?)"
+    )
+
+
 def test_log_rotation_refuses_archive_write_when_archive_would_exceed_cap(tmp_path):
     """Archive writes are themselves framework writes; the v1 contract
     says every framework write enforces a cap. The default
