@@ -1295,6 +1295,41 @@ def test_md_files_walker_skips_shared_plain_folder_by_default(tmp_path):
     )
 
 
+def test_space_files_owned_scope_excludes_external_descendants_by_default(tmp_path):
+    """Naming an OWNED scope (e.g. `projects/foo`) doesn't opt into the
+    user's externals. Only naming the external scope itself counts as
+    the per-scope opt-in. An escaping-symlink `notes-from-friend/`
+    under projects/foo (external by realpath) should stay invisible
+    unless `--include-external` is passed or the symlink itself is
+    named."""
+    import os
+    wiki = _make_wiki(tmp_path)
+    rc, _, _ = _run(["--wiki", str(wiki), "add", "projects/foo"])
+    assert rc == 0
+    # Owned page inside the owned scope.
+    (wiki / "projects" / "foo" / "owned.md").write_text("# owned\n")
+    # External descendant: a symlink under projects/foo pointing OUTSIDE
+    # the wiki tree (classified external by realpath escape).
+    outside = tmp_path / "outside-tree"
+    outside.mkdir()
+    (outside / "secret.md").write_text("# external secret\n")
+    notes_link = wiki / "projects" / "foo" / "notes-from-friend"
+    os.symlink(outside, notes_link, target_is_directory=True)
+    rc, out, err = _run([
+        "--wiki", str(wiki), "files", "projects/foo",
+    ])
+    assert rc == 0, err
+    # Owned content surfaces.
+    assert "projects/foo/owned.md" in out
+    # External descendant of the owned scope does NOT surface (no
+    # `--include-external`, the named scope is owned).
+    assert "projects/foo/notes-from-friend/secret.md" not in out, (
+        "naming an owned scope leaked external (escaping-symlink) "
+        "descendants — the per-scope opt-in must fire only when the "
+        "named scope is itself external"
+    )
+
+
 def test_space_files_dot_scope_honors_default_external_opt_out(tmp_path):
     """`space files .` is naming the wiki root, NOT opting into externals.
     The default scope is owned-only per AGENTS.md trust scope; only an
@@ -2103,6 +2138,51 @@ def test_init_with_force_overwrites_pre_existing_bare_index(tmp_path):
     rc = init_wiki.main([str(root), "--force", "--no-config"])
     assert rc == 0
     assert "## Spaces" in (root / "index.md").read_text()
+
+
+def test_init_log_md_extra_enforces_size_cap(tmp_path, capsys):
+    """`init --with log.md` is a framework write — the v1 contract says
+    every framework write enforces the cap. A degenerate configured
+    `log.md` cap below the initial `# Log\\n` content (6 chars) must
+    refuse rather than leak an over-cap scaffold file. This is edge,
+    but the contract is uniform: no carve-outs."""
+    root = tmp_path / "wiki"
+    root.mkdir()
+    # Tight log.md cap (5 chars — below `# Log\n` size of 6).
+    (root / "_meta").mkdir()
+    (root / "_meta" / "limits.md").write_text(
+        "| Pattern | Cap (chars) |\n"
+        "|---|---|\n"
+        "| log.md | 5 |\n"
+    )
+    from wiki_spaces import init_wiki
+    init_wiki.main([str(root), "--with", "log.md", "--no-config"])
+    # log.md must NOT have been written (cap rejection).
+    assert not (root / "log.md").is_file(), (
+        "init wrote an over-cap log.md despite the size-cap helper — "
+        "every framework write must enforce the cap"
+    )
+    err = capsys.readouterr().err
+    assert "size cap" in err
+
+
+def test_space_log_create_enforces_size_cap(tmp_path):
+    """`space log --create` scaffolds `log.md` before the first entry.
+    Same contract: the scaffold write enforces the cap."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "_meta").mkdir()
+    (wiki / "_meta" / "limits.md").write_text(
+        "| Pattern | Cap (chars) |\n"
+        "|---|---|\n"
+        "| log.md | 5 |\n"
+    )
+    rc, _, err = _run([
+        "--wiki", str(wiki),
+        "log", "--create", "--raw", "- [t] entry",
+    ])
+    assert rc != 0
+    assert "size cap" in err
+    assert not (wiki / "log.md").is_file()
 
 
 def test_init_adopt_returns_nonzero_on_partial_failure(tmp_path, capsys):

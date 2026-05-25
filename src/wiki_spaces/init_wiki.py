@@ -254,7 +254,11 @@ def main(argv: list[str] | None = None) -> int:
         # PR-L: framework writes route through `_enforce_size_cap`. `init`
         # never silently truncates a too-long description — refuse so the
         # user can shorten it. Late import to keep the cold-start path light.
-        if rel.endswith(".md") and rel != "log.md":
+        # All `.md` writes route through here, including `log.md` (the
+        # initial `# Log\n` is tiny but the v1 contract is "every framework
+        # write enforces the cap"; an absurdly tight configured `log.md`
+        # cap would otherwise leak an over-cap framework file onto disk).
+        if rel.endswith(".md"):
             from . import space as _space
             try:
                 _space._enforce_size_cap(f, content, root)

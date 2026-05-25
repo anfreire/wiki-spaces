@@ -2638,14 +2638,20 @@ def cmd_files(args: argparse.Namespace) -> int:
         #
         # Naming an external scope explicitly opts the consumer in per
         # AGENTS.md / trust scope: "External spaces are visited only when
-        # the user explicitly names one or asks to include all." But naming
-        # the WIKI ROOT (`.`) is NOT a per-external opt-in — it's the
-        # default scope; we must honor the global flag there. So the
-        # external opt-in fires only when the named scope is NOT the wiki
-        # root.
-        scope_is_root = scope_root == wiki_root
+        # the user explicitly names one or asks to include all." The
+        # opt-in is THE NAMED SCOPE specifically — not "any non-root
+        # scope". So:
+        #   - Named scope is external (under shared/, foreign submodule,
+        #     escaping symlink, or any ancestor thereof): opt-in.
+        #   - Named scope is owned (e.g. `projects/foo`): default — owned
+        #     external descendants under projects/foo are NOT surfaced
+        #     unless the global --include-external flag is set.
+        #   - Named scope is the wiki root: default; honor the global flag.
+        scope_is_external, _why = _is_in_external_scope(
+            scope_root, wiki_root
+        )
         scope_include_external = (
-            args.include_external if scope_is_root else True
+            scope_is_external or args.include_external
         )
         reachable: set[Path] = set()
         for s, _ in _walk_via_spaces_contract(
@@ -2661,12 +2667,15 @@ def cmd_files(args: argparse.Namespace) -> int:
             )
             return 2
 
-    # When the user named an explicit non-root scope, traverse with
-    # include_external=True so a named external scope returns its files;
-    # for the wiki root or no scope, honor the global --include-external
-    # flag.
-    if scope_root is not None and scope_root != wiki_root:
-        traverse_external = True
+    # Traverse with the same external-opt-in semantics: only when the
+    # NAMED scope is itself external (or the global flag is on). For an
+    # owned named scope, default behavior — external descendants stay
+    # hidden.
+    if scope_root is not None:
+        scope_is_external, _why = _is_in_external_scope(
+            scope_root, wiki_root
+        )
+        traverse_external = scope_is_external or args.include_external
     else:
         traverse_external = args.include_external
     all_files = list(
@@ -3152,7 +3161,18 @@ def cmd_log(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 2
-        log_path.write_text("# Log\n", encoding="utf-8")
+        # Framework write — enforce the per-file cap. The initial body
+        # is tiny (6 bytes) but the v1 contract is "every framework write
+        # enforces the cap": a degenerate user-configured `log.md` cap
+        # below 6 chars would otherwise leak an over-cap scaffold file
+        # onto disk.
+        initial = "# Log\n"
+        try:
+            _enforce_size_cap(log_path, initial, wiki_root)
+        except SizeCapExceeded as e:
+            print(f"  ! size cap: {e}", file=sys.stderr)
+            return 2
+        log_path.write_text(initial, encoding="utf-8")
 
     if args.raw is not None:
         message = args.raw
