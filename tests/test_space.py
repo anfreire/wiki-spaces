@@ -1310,6 +1310,46 @@ def test_md_files_walker_skips_escaping_md_symlink_in_plain_folder(tmp_path):
     assert aliases[0][1] is True
 
 
+def test_promote_refuses_symlinked_source_pointing_outside(tmp_path):
+    """Promote moves the source file then writes new content via
+    `target.write_text(...)`. If the source is a symlink, the rename
+    moves the SYMLINK, and the subsequent write follows the link target.
+    For an escaping `.md` symlink that target lives outside the wiki —
+    promote would silently mutate external content. Refuse outright."""
+    wiki = _make_wiki(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "secret.md"
+    secret.write_text("# secret\n")
+    import os
+    os.symlink(secret, wiki / "alias.md")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "alias.md"])
+    assert rc == 2
+    assert "external" in err.lower() or "symlink" in err.lower()
+    # External content stays untouched.
+    assert secret.read_text() == "# secret\n"
+    # No partial promote: no `alias/` directory created.
+    assert not (wiki / "alias").exists()
+
+
+def test_promote_refuses_symlinked_source_pointing_inside(tmp_path):
+    """Even when the symlink target is inside the wiki, promote refuses:
+    the mechanic of moving the link and rewriting through it is
+    surprising. The user should resolve the symlink or operate on the
+    canonical file directly."""
+    wiki = _make_wiki(tmp_path)
+    real = wiki / "real.md"
+    real.write_text("# real\n")
+    import os
+    os.symlink(real, wiki / "alias.md")
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "alias.md"])
+    assert rc == 2
+    assert "symlink" in err.lower()
+    # No mutation: the real file and the alias stay as they were.
+    assert real.read_text() == "# real\n"
+    assert (wiki / "alias.md").is_symlink()
+
+
 def test_walk_owned_md_files_skips_escaping_md_symlink(tmp_path):
     """The FS walker that audit/promote use also needs the .md symlink
     escape check — without it, a `notes/alias.md` symlinked at an

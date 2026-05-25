@@ -2670,6 +2670,38 @@ def cmd_promote(args: argparse.Namespace) -> int:
         )
         return 2
 
+    # Promote moves the source file (via `source.rename(target)` or `git mv`)
+    # then writes the new content via `target.write_text(...)`. If `source`
+    # is a symlink, the rename moves the SYMLINK, and the subsequent
+    # `write_text` follows the link and overwrites the TARGET — for an
+    # escaping `.md` symlink, that target lives outside the wiki tree.
+    # Refuse outright: promote's mechanic assumes the source is a regular
+    # file under owned scope. Symlinked sources point at content we don't
+    # own; rewriting them would mutate someone else's content silently.
+    if source.is_symlink():
+        try:
+            source_target_real = source.resolve()
+            source_target_real.relative_to(wiki_root.resolve())
+            escapes = False
+        except (OSError, ValueError):
+            escapes = True
+        if escapes:
+            print(
+                f"  ! refusing to promote {rel}: source is a symlink whose "
+                "target resolves outside the wiki tree (external content).",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"  ! refusing to promote {rel}: source is a symlink. "
+                "Promote moves the link and rewrites via the link, which "
+                "would mutate the symlink target unexpectedly. Operate on "
+                "the resolved file directly, or replace the symlink with a "
+                "regular file first.",
+                file=sys.stderr,
+            )
+        return 2
+
     target = source.with_suffix("") / "index.md"
     target_dir = target.parent
     target_rel = target.relative_to(wiki_root).as_posix()
