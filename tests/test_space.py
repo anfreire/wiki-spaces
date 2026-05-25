@@ -2687,6 +2687,90 @@ def test_mount_preflights_ancestor_cap_before_running_mechanism(tmp_path):
     assert (wiki / "index.md").read_text() == big
 
 
+def test_mount_preflights_full_chain_caps_not_just_nearest_ancestor(tmp_path):
+    """OC phase-2 finding: the cmd_mount pre-flight only cap-checked the
+    nearest ancestor. But the chain helper walks UP from leaf to wiki root,
+    writing to every ancestor on the way. An upper-ancestor overflow that
+    the nearest-ancestor check misses would only surface AFTER the destructive
+    mount mechanism had already run (and for `--mode submodule`, rollback is
+    only a manual-recovery notice). The full-chain pre-flight refuses BEFORE
+    any FS mutation, regardless of mechanism.
+
+    Setup: wiki has `## Spaces` near cap; nested `foo/` is a space with a
+    generous cap and is NOT yet registered in the wiki root. Mounting into
+    `foo/bar/` chains TWO edges: register `bar/` in `foo/index.md` (small,
+    OK) AND register `foo/` in `wiki/index.md` (overflow). The old preflight
+    saw only `foo`'s cap and let the mount proceed; the new full-chain
+    preflight catches `wiki/index.md`'s cap and refuses.
+    """
+    wiki = _make_wiki(tmp_path)
+    # Custom limits: `foo/index.md` is generous, root and every other
+    # `index.md` cap at 100 chars. Pattern order matters; the path-glob
+    # for `foo/index.md` must come first so the basename fallback doesn't
+    # eat it.
+    (wiki / "_meta").mkdir()
+    (wiki / "_meta" / "limits.md").write_text(
+        "| Pattern | Cap (chars) |\n"
+        "|---|---|\n"
+        "| foo/index.md | 5000 |\n"
+        "| index.md | 100 |\n"
+    )
+    # Push root `index.md` just under its 100-char cap.
+    root_body = "# wiki\n\n## Spaces\n\n" + ("x" * 70)
+    (wiki / "index.md").write_text(root_body)
+    # Nested space `foo/` exists with `## Spaces` but isn't registered up
+    # in the root (drift — chain helper will walk through it).
+    (wiki / "foo").mkdir()
+    (wiki / "foo" / "index.md").write_text("# foo\n\n## Spaces\n\n")
+    foo_before = (wiki / "foo" / "index.md").read_text()
+    # External source to mount.
+    src = tmp_path / "external-src"
+    src.mkdir()
+    (src / "index.md").write_text("# ext\n\n## Spaces\n\n")
+    rc, _, err = _run([
+        "--wiki", str(wiki),
+        "mount", str(src), "foo/bar", "--mode", "symlink",
+    ])
+    assert rc != 0, "preflight should refuse before any FS mutation"
+    assert "size cap" in err
+    # Mount mechanism never ran (no symlink at foo/bar) AND chain helper
+    # never ran (foo/index.md unchanged, bar/ NOT registered in foo).
+    assert not (wiki / "foo" / "bar").exists()
+    assert (wiki / "foo" / "index.md").read_text() == foo_before
+    # Root index.md untouched too.
+    assert (wiki / "index.md").read_text() == root_body
+
+
+def test_add_preflights_full_chain_caps_not_just_leaf_or_nearest_ancestor(tmp_path):
+    """Mirror of the mount full-chain pre-flight, for `space add`. The leaf
+    cap check at `cmd_add` covers the new child's own `index.md`; the new
+    full-chain pre-flight covers every ancestor the chain helper would
+    write. Without it, an upper-ancestor overflow would create the leaf
+    directory + index.md before the chain helper raised `EnsureChainError`
+    mid-walk, leaving the rollback to undo half-applied state.
+    """
+    wiki = _make_wiki(tmp_path)
+    (wiki / "_meta").mkdir()
+    (wiki / "_meta" / "limits.md").write_text(
+        "| Pattern | Cap (chars) |\n"
+        "|---|---|\n"
+        "| foo/index.md | 5000 |\n"
+        "| index.md | 100 |\n"
+    )
+    root_body = "# wiki\n\n## Spaces\n\n" + ("x" * 70)
+    (wiki / "index.md").write_text(root_body)
+    (wiki / "foo").mkdir()
+    (wiki / "foo" / "index.md").write_text("# foo\n\n## Spaces\n\n")
+    foo_before = (wiki / "foo" / "index.md").read_text()
+    rc, _, err = _run(["--wiki", str(wiki), "add", "foo/bar"])
+    assert rc != 0, "preflight should refuse before any FS mutation"
+    assert "size cap" in err
+    # No leaf directory or index.md created; foo and root both untouched.
+    assert not (wiki / "foo" / "bar").exists()
+    assert (wiki / "foo" / "index.md").read_text() == foo_before
+    assert (wiki / "index.md").read_text() == root_body
+
+
 def test_log_append_size_check_includes_separator_newline(tmp_path):
     """The fit check must account for the conditional `\\n` separator
     the write path adds when the existing log lacks a trailing

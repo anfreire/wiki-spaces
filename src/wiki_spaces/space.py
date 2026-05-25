@@ -886,6 +886,15 @@ def cmd_add(args: argparse.Namespace) -> int:
         except SizeCapExceeded as e:
             print(f"  ! size cap: {e}", file=sys.stderr)
             return 2
+    # Pre-flight every ancestor write the chain helper would make. Refuses
+    # BEFORE `mkdir` so an upper-ancestor cap overflow can't strand an empty
+    # leaf directory. The in-lock cap check inside the chain helper still
+    # catches concurrent growth.
+    try:
+        _preflight_chain_caps(wiki_root, new_space)
+    except SizeCapExceeded as e:
+        print(f"  ! size cap: {e}", file=sys.stderr)
+        return 2
     created_dir_this_call = False
     created_index_this_call = False
     # Track every directory THIS call creates (the leaf and any intermediate
@@ -1841,28 +1850,23 @@ def cmd_mount(args: argparse.Namespace) -> int:
         )
         return 0
 
-    # Pre-flight the ancestor cap check BEFORE running the mount mechanism.
+    # Pre-flight the FULL chain's size caps BEFORE running the mount mechanism.
     # `git submodule add` stages a gitlink + edits `.gitmodules`; a cap
-    # rejection after that would require manual cleanup the user has to
-    # run by hand. Project the registration against the ancestor's current
-    # text and refuse early. The in-lock check inside the chain helper
-    # still catches concurrent growth between this pre-flight and the
-    # actual mutation — pre-flight catches the easy case before any FS
-    # mutation, the in-lock check is the authoritative gate.
+    # rejection after that would require manual cleanup the user has to run
+    # by hand. The chain helper walks UP from the leaf and writes to every
+    # ancestor on the way to the wiki root — checking only the nearest
+    # ancestor misses overflow on an upper ancestor's `## Spaces` registration,
+    # which the chain helper would surface as `EnsureChainError` after the
+    # destructive mount step had already run. Refuse early instead. The
+    # in-lock check inside the chain helper is still authoritative for
+    # concurrent growth between this pre-flight and the actual mutation.
     try:
-        ancestor_text_now = ancestor_index.read_text(encoding="utf-8")
-    except OSError:
-        ancestor_text_now = ""
-    projected_ancestor = ancestor_text_now
-    if not _md.has_section(projected_ancestor, "Spaces"):
-        if projected_ancestor and not projected_ancestor.endswith("\n"):
-            projected_ancestor += "\n"
-        projected_ancestor += "\n## Spaces\n\n"
-    projected_ancestor = _add_space_entry(
-        projected_ancestor, label, href, args.description
-    )
-    try:
-        _enforce_size_cap(ancestor_index, projected_ancestor, wiki_root)
+        _preflight_chain_caps(
+            wiki_root,
+            dest,
+            leaf_label=args.name,
+            leaf_description=args.description,
+        )
     except SizeCapExceeded as e:
         print(
             f"  ! size cap: {e}. Refusing to mount before any FS "
@@ -2287,6 +2291,60 @@ def _ensure_spaces_chain_and_register(
             break
         child = ancestor
     return notices, added
+
+
+def _preflight_chain_caps(
+    wiki_root: Path,
+    leaf_space: Path,
+    *,
+    leaf_label: str | None = None,
+    leaf_description: str | None = None,
+) -> None:
+    """Pre-flight every ancestor write `_ensure_spaces_chain_and_register`
+    would make, BEFORE any destructive FS mutation runs.
+
+    Walks the same `(ancestor, child)` edges as the chain helper. For each
+    edge, projects the write (insert `## Spaces` if missing, register
+    `child`) and runs `_enforce_size_cap` on the projection. Raises
+    `SizeCapExceeded` on the first overflow. Returns silently on success.
+
+    Used by `cmd_mount` and `cmd_add` to catch ancestor-cap overflow BEFORE
+    running destructive operations (`git submodule add`, `git clone`,
+    `mkdir`, symlink creation) that the in-lock cap check inside the chain
+    helper would otherwise leave half-applied — the chain helper raises
+    `EnsureChainError` on mid-chain cap rejection, and for `--mode
+    submodule` the rollback is only a manual-recovery notice.
+    """
+    if leaf_space == wiki_root:
+        return
+    child = leaf_space
+    is_leaf_edge = True
+    while child != wiki_root:
+        ancestor = _nearest_ancestor_space(wiki_root, child)
+        if ancestor == child:
+            break
+        ancestor_index = ancestor / "index.md"
+        rel_from_ancestor = child.relative_to(ancestor)
+        derived_label = f"{rel_from_ancestor}/"
+        href = f"{rel_from_ancestor}/index.md"
+        label = (
+            leaf_label if (is_leaf_edge and leaf_label) else derived_label
+        )
+        description = leaf_description if is_leaf_edge else None
+        is_leaf_edge = False
+        try:
+            text = ancestor_index.read_text(encoding="utf-8")
+        except OSError:
+            text = ""
+        if not _md.has_section(text, "Spaces"):
+            if text and not text.endswith("\n"):
+                text += "\n"
+            text += "\n## Spaces\n\n"
+        projected = _add_space_entry(text, label, href, description)
+        _enforce_size_cap(ancestor_index, projected, wiki_root)
+        if ancestor == wiki_root:
+            break
+        child = ancestor
 
 
 def _rollback_added_entries(entries: list[tuple[Path, str, str]]) -> None:
