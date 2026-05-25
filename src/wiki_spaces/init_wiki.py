@@ -443,6 +443,13 @@ def main(argv: list[str] | None = None) -> int:
     # while strict consumers (audit, doctor, skills) still reject parts.
     if adopt_failed:
         return 1
+    # An over-cap framework write that wasn't `index.md` (e.g., a
+    # `--with log.md` whose cap rejected the scaffold) must also flip
+    # the exit code so the user knows a requested write was refused.
+    # The v1 contract is "errors on overflow, never silent truncation"
+    # — silent rc=0 with a missing file would be a partial-success lie.
+    if over_cap_writes:
+        return 1
     return 1 if git_failed else 0
 
 

@@ -3012,8 +3012,23 @@ def cmd_promote(args: argparse.Namespace) -> int:
     basename = source.stem
     source_resolved = source.resolve()
 
+    # Contract-walker adapter: `_find_alias_owners` expects a walker
+    # returning a flat iterable of `.md` paths. `_walk_md_files_via_contract`
+    # yields `(path, is_external)` tuples; adapt by dropping the flag.
+    # Per the plan's §S5 stance B, promote's alias checks and link
+    # rewrites consume contract-first traversal — files inside
+    # unregistered (drift) spaces are NOT consumer-visible and must not
+    # be mutated by promote. Audit / `audit --fix` is the surface that
+    # touches drift; promote is a consumer-side write that respects the
+    # navigation contract.
+    def _contract_md_walker(root, *, include_external=False):
+        for path, _is_ext in _walk_md_files_via_contract(
+            root, include_external=include_external
+        ):
+            yield path
+
     if not args.skip_aliases:
-        owners = _find_alias_owners(wiki_root)
+        owners = _find_alias_owners(wiki_root, walker=_contract_md_walker)
         collisions = owners.get(basename.casefold(), [])
         external_owners = [p for p in collisions if p.resolve() != source_resolved]
         if external_owners:
@@ -3033,9 +3048,17 @@ def cmd_promote(args: argparse.Namespace) -> int:
         summary = " ".join(summary)
     description = (str(summary).strip() if summary else "") or None
 
-    # Build candidate set from the current owned md tree.
-    all_md_files = list(_walk_owned_md_files(wiki_root))
+    # Build candidate set from the contract-first md walk. Drift files
+    # (in unregistered spaces, hidden, `_archives/`, `_meta/`) are
+    # invisible to the consumer per §S5 stance B; promote does not
+    # rewrite links inside them. Audit `--fix` is the repair surface
+    # for drift visibility; promote stays consumer-aligned.
+    all_md_files = list(_contract_md_walker(wiki_root))
+    # The source file itself may not be contract-reachable yet (it's a
+    # plain `.md` inside its ancestor space); union it in so its own
+    # rewrites work.
     candidates: set[Path] = {p.resolve() for p in all_md_files}
+    candidates.add(source_resolved)
 
     # Compute the post-move absolute target (for link rewriting).
     new_target_abs = target

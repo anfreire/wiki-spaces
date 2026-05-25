@@ -1554,6 +1554,64 @@ def test_audit_fix_does_not_register_meta_descendants_as_spaces(tmp_path):
     )
 
 
+def test_promote_does_not_rewrite_links_in_drift_files(tmp_path):
+    """§S5 stance B: promote's link rewrite uses the contract walker,
+    not the FS walker. A `.md` file inside an unregistered (drift)
+    space is consumer-invisible — promote MUST NOT mutate it. The
+    plan's split is: audit/`audit --fix` is the surface that touches
+    drift; promote is a consumer-side write that respects the
+    navigation contract."""
+    wiki = _make_wiki(tmp_path)
+    # Source: a content page at the wiki root referencing old-page.
+    (wiki / "owner.md").write_text(
+        "# owner\n\nsee [[old-page]] for context\n"
+    )
+    # The page we'll promote.
+    (wiki / "old-page.md").write_text("# old-page\n")
+    # Drift: an unregistered space with a `.md` referencing old-page.
+    # `drift-folder/` is NOT in root's `## Spaces`. Its `notes.md`
+    # is consumer-invisible per §S5 stance B.
+    (wiki / "drift-folder").mkdir()
+    (wiki / "drift-folder" / "index.md").write_text("# drift\n\n## Spaces\n\n")
+    drift_note = wiki / "drift-folder" / "notes.md"
+    drift_note.write_text("# notes\n\nsee [[old-page]] for context\n")
+    drift_before = drift_note.read_text()
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "old-page.md"])
+    assert rc == 0, err
+    # Owner's link was rewritten (consumer-visible).
+    owner_text = (wiki / "owner.md").read_text()
+    assert "[[old-page]]" not in owner_text or "old-page/index" in owner_text
+    # Drift file was NOT touched (consumer-invisible per §S5).
+    assert drift_note.read_text() == drift_before, (
+        "promote rewrote links inside a drift file — §S5 stance B says "
+        "promote uses contract-walker; drift is audit's surface, not promote's"
+    )
+
+
+def test_init_returns_nonzero_when_any_with_extra_overflows_cap(tmp_path, capsys):
+    """`init` should fail loud when a requested `--with` framework write
+    is refused by the cap helper. Previously only `index.md` overflow
+    aborted with non-zero — `--with log.md` could be refused but
+    init still returned 0 (silent partial-success lie). v1 contract:
+    every framework write enforces the cap; the exit code mirrors."""
+    root = tmp_path / "wiki"
+    root.mkdir()
+    # Tight log.md cap so the initial `# Log\n` scaffold (6 chars)
+    # blows past 5.
+    (root / "_meta").mkdir()
+    (root / "_meta" / "limits.md").write_text(
+        "| Pattern | Cap (chars) |\n|---|---|\n| log.md | 5 |\n"
+    )
+    from wiki_spaces import init_wiki
+    rc = init_wiki.main([str(root), "--with", "log.md", "--no-config"])
+    assert rc != 0, (
+        "init returned 0 despite `--with log.md` being refused by the "
+        "size cap — partial-success exit must signal failure"
+    )
+    err = capsys.readouterr().err
+    assert "size cap" in err
+
+
 def test_promote_refuses_reserved_folder_derived_target(tmp_path):
     """Promote derives the target directory from the source stem
     (`foo.md` -> `foo/index.md`). The CLI must validate the derived
