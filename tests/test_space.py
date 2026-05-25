@@ -979,6 +979,33 @@ def test_audit_remove_stale_requires_fix(tmp_path):
     assert "--fix" in err
 
 
+def test_adopt_ancestor_registration_respects_size_cap(tmp_path, capsys):
+    """`init --adopt` walks the existing tree and registers nested spaces
+    in their ancestor's `## Spaces` via the chain helper. The chain
+    helper's atomic mutation runs `_enforce_size_cap` on the projected
+    text — if a registration would push the ancestor's `index.md` past
+    the 5K cap, the chain helper aborts via the abort tuple. Adopt
+    surfaces the failure on stderr and leaves the ancestor untouched
+    rather than silently bloating the index (best-effort batch; one
+    failing registration doesn't abort the whole adoption)."""
+    root = tmp_path / "wiki"
+    root.mkdir()
+    # Plant a root index near the 5K cap so the next entry would push over.
+    root_idx = root / "index.md"
+    root_idx.write_text("# wiki\n\n## Spaces\n\n" + ("x" * 4990) + "\n")
+    # Pre-existing nested space (drift — not registered).
+    (root / "foo").mkdir()
+    (root / "foo" / "index.md").write_text("# foo\n\n## Spaces\n\n")
+    from wiki_spaces import init_wiki
+    init_wiki.main([str(root), "--adopt", "--no-config"])
+    err = capsys.readouterr().err
+    # The cap rejection is surfaced (so the user sees what failed) AND
+    # `foo` is NOT registered in the root (cap discipline holds).
+    assert "size cap" in err
+    entries = _md.parse_section_entries(root_idx.read_text(), "Spaces")
+    assert not any(e.href and "foo/" in e.href for e in entries)
+
+
 def test_adopt_inserts_spaces_in_existing_bare_indexes(tmp_path):
     """Root has `foo/index.md` with no `## Spaces` and no nested children.
     After `init --adopt`, foo's index gets `## Spaces` inserted (proves
@@ -1359,6 +1386,53 @@ def test_space_list_json_emits_path_label_description_external(tmp_path):
     assert foo_entry["external"] is False
 
 
+def test_space_list_include_boundaries_yields_external_folders_without_index_md(
+    tmp_path,
+):
+    """`--include-external --include-boundaries` also surfaces external
+    boundary folders WITHOUT `index.md` — the wiki-update placement
+    classifier needs the full exclusion set, not just spaces. Setup: a
+    `shared/forge/` (external by path, no `index.md`) and a
+    `notes-from-friend/` escaping symlink (external by symlink target,
+    no `index.md`). Both should appear under `--include-boundaries`
+    and only those WITH `index.md` should appear without it."""
+    import json as _json
+    wiki = _make_wiki(tmp_path)
+    # External-by-path boundary without `index.md` (would be a foreign
+    # submodule in real use; the trust-scope test is path-based).
+    (wiki / "shared" / "forge").mkdir(parents=True)  # no index.md
+    # External-by-symlink boundary: target lives OUTSIDE the wiki tree.
+    outside = tmp_path / "outside-tree"
+    outside.mkdir()
+    (outside / "page.md").write_text("# outside\n")
+    (wiki / "notes-from-friend").symlink_to(outside)
+
+    # Without --include-boundaries: spaces only (need `index.md`).
+    rc1, out1, _ = _run([
+        "--wiki", str(wiki), "list", "--include-external", "--json",
+    ])
+    assert rc1 == 0
+    items1 = _json.loads(out1)
+    paths1 = {it["path"] for it in items1}
+    assert "shared/forge" not in paths1
+    assert "notes-from-friend" not in paths1
+
+    # With --include-boundaries: both external paths surface.
+    rc2, out2, _ = _run([
+        "--wiki", str(wiki),
+        "list", "--include-external", "--include-boundaries", "--json",
+    ])
+    assert rc2 == 0
+    items2 = _json.loads(out2)
+    paths2 = {it["path"] for it in items2}
+    assert "shared/forge" in paths2
+    assert "notes-from-friend" in paths2
+    # All boundary entries are marked external.
+    for it in items2:
+        if it["path"] in ("shared/forge", "notes-from-friend"):
+            assert it["external"] is True
+
+
 def test_space_list_include_boundaries_requires_include_external(tmp_path):
     """`--include-boundaries` alone is rejected — it's only meaningful when
     we're already opted into externals."""
@@ -1468,6 +1542,37 @@ def test_check_size_rejects_absolute_path(tmp_path):
     ], stdin="x")
     assert rc == 2
     assert "wiki-root-relative" in err
+
+
+def test_check_size_rejects_dotdot_path(tmp_path):
+    """`..` segments are also rejected — paths must stay inside the wiki."""
+    wiki = _make_wiki(tmp_path)
+    rc, _, err = _run([
+        "--wiki", str(wiki), "check-size", "../escape.md",
+        "--projected-stdin",
+    ], stdin="x")
+    assert rc == 2
+    assert "wiki-root-relative" in err
+
+
+def test_check_size_ok_shrinking_exits_0(tmp_path):
+    """OK-SHRINKING is the legacy-bloat escape hatch: when the projected
+    text is over the cap but smaller than the file already on disk, the
+    write is allowed (you can never make legacy bloat worse, only better).
+    Exit 0 — skills that gate on `check-size` should let it through."""
+    wiki = _make_wiki(tmp_path)
+    # Plant an over-cap page first (15K cap on `*.md`; write 16K).
+    page = wiki / "huge.md"
+    page.write_text("# huge\n\n" + ("x" * 16000) + "\n", encoding="utf-8")
+    # Projected text: still over the 15K cap, but smaller than the on-disk
+    # body. The shrinking-write hatch lets it through.
+    smaller_but_still_over = "# huge\n\n" + ("x" * 15500) + "\n"
+    rc, out, _ = _run([
+        "--wiki", str(wiki), "check-size", "huge.md",
+        "--projected-stdin",
+    ], stdin=smaller_but_still_over)
+    assert rc == 0
+    assert out.startswith("OK-SHRINKING ")
 
 
 def test_add_refuses_over_cap_description_before_mkdir(tmp_path):
