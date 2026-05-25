@@ -189,8 +189,9 @@ def main(argv: list[str] | None = None) -> int:
     # Refuse to register a pre-existing folder whose `index.md` lacks
     # `## Spaces` unless the user opts in via `--adopt` (inserts the
     # heading via the chain helper) or `--force` (overwrites the index).
-    # Without this check, `init <path-with-bare-index>` would skip the
-    # `index.md` write (file exists), write the config anyway, and leave
+    # Without this check, `init <path-where-index.md-lacks-the-section>`
+    # would skip the `index.md` write (file exists), write the config
+    # anyway, and leave
     # the configured wiki rejected by every strict consumer (audit,
     # doctor, skills) — a producer/consumer break the v1 contract is
     # built to prevent.
