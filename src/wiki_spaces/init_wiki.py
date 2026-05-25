@@ -186,6 +186,42 @@ def main(argv: list[str] | None = None) -> int:
 
     root.mkdir(parents=True, exist_ok=True)
 
+    # Refuse to register a pre-existing folder whose `index.md` lacks
+    # `## Spaces` unless the user opts in via `--adopt` (inserts the
+    # heading via the chain helper) or `--force` (overwrites the index).
+    # Without this check, `init <path-with-bare-index>` would skip the
+    # `index.md` write (file exists), write the config anyway, and leave
+    # the configured wiki rejected by every strict consumer (audit,
+    # doctor, skills) — a producer/consumer break the v1 contract is
+    # built to prevent.
+    existing_index = root / "index.md"
+    if (
+        existing_index.is_file()
+        and not args.force
+        and not args.adopt
+    ):
+        from . import _md
+        try:
+            existing_text = existing_index.read_text(encoding="utf-8")
+        except OSError as e:
+            print(
+                f"  ! could not read {existing_index}: {e}",
+                file=sys.stderr,
+            )
+            return 1
+        if not _md.has_section(existing_text, "Spaces"):
+            print(
+                f"  ! {root}/index.md exists but has no `## Spaces` heading. "
+                "v1 requires the navigation contract.\n"
+                "    Either:\n"
+                "      • `wiki-spaces init <path> --adopt` to insert "
+                "`## Spaces` and register every nested space, or\n"
+                "      • `wiki-spaces init <path> --force` to overwrite the "
+                "existing index.md with a fresh one.",
+                file=sys.stderr,
+            )
+            return 2
+
     folder_collisions: list[str] = []
     for folder in folders:
         target = root / folder

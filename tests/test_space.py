@@ -1265,6 +1265,56 @@ def test_contract_walker_includes_external_with_flag(tmp_path):
     assert paths.get("shared/team") is True
 
 
+def test_contract_walker_reclassifies_resolution_escape_as_external(tmp_path):
+    """`init --adopt --include-external` can descend a foreign submodule or
+    escaping-symlink subtree and register `boundary/foo/index.md` in the
+    wiki root's `## Spaces`. The contract walker must classify the
+    yielded child as external (and emit it under `--include-external`)
+    instead of treating "resolved path escapes the wiki tree" as a
+    silent malformed-skip. Otherwise the producer (adopt) registers
+    content the consumer (space list / files) cannot reach — the v6
+    producer/consumer break OC r5 caught.
+
+    Setup: `outside_tree/foo/` is a real folder with a valid space;
+    `boundary` is a symlink at the wiki root pointing at `outside_tree`.
+    Register `boundary/foo/index.md` directly in the root's `## Spaces`.
+    Default walk omits `boundary/foo` (external scope opt-out);
+    `include_external=True` yields it with `is_external=True`."""
+    import os
+    wiki = _make_wiki(tmp_path)
+    outside = tmp_path / "outside_tree"
+    (outside / "foo").mkdir(parents=True)
+    (outside / "foo" / "index.md").write_text("# foo\n\n## Spaces\n\n")
+    boundary = wiki / "boundary"
+    os.symlink(outside, boundary, target_is_directory=True)
+    idx = wiki / "index.md"
+    idx.write_text(
+        idx.read_text()
+        + "- [boundary/foo/](boundary/foo/index.md)\n"
+    )
+    # Default scope: external is opted out, child is hidden.
+    default_paths = [
+        str(p.relative_to(wiki))
+        for p, _ in space._walk_via_spaces_contract(wiki)
+    ]
+    assert "boundary/foo" not in default_paths, (
+        "contract walker yielded a resolution-escaping child under default "
+        "scope — it must classify as external and skip without opt-in"
+    )
+    # Opt-in: yielded as external.
+    inc_pairs = list(
+        space._walk_via_spaces_contract(wiki, include_external=True)
+    )
+    classification = {
+        str(p.relative_to(wiki)): is_ext for p, is_ext in inc_pairs
+    }
+    assert classification.get("boundary/foo") is True, (
+        "contract walker did not yield the resolution-escaping child even "
+        "with include_external=True — producer (adopt) and consumer (list) "
+        "diverge on what's reachable"
+    )
+
+
 def test_contract_walker_skips_registered_child_without_spaces_section(tmp_path):
     """v1 contract: a space requires `index.md` AND `## Spaces`. A registered
     child whose `index.md` lacks the heading is drift (audit's bare-section
@@ -1920,6 +1970,54 @@ def test_init_refuses_over_cap_description(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "size cap" in err
     assert "init aborted" in err
+
+
+def test_init_refuses_pre_existing_bare_index_without_adopt(tmp_path, capsys):
+    """If `<path>/index.md` exists but lacks `## Spaces`, plain `init` must
+    refuse rather than silently registering the path as canonical wiki.
+    The default-skip write would leave the index.md bare while config
+    still points at it — strict consumers (audit, doctor, skills) then
+    reject the configured wiki. Refuse with a hint to run `--adopt`
+    (inserts `## Spaces` via the chain helper) or `--force` (overwrite).
+    Neither index nor config gets mutated on the refusal path."""
+    root = tmp_path / "wiki"
+    root.mkdir()
+    bare_text = "# wiki\n\nlegacy notes\n"
+    (root / "index.md").write_text(bare_text)
+    from wiki_spaces import init_wiki
+    rc = init_wiki.main([str(root), "--no-config"])
+    assert rc != 0, "init silently registered a wiki without `## Spaces`"
+    # Index is untouched.
+    assert (root / "index.md").read_text() == bare_text
+    err = capsys.readouterr().err
+    assert "no `## Spaces`" in err
+    assert "--adopt" in err
+    assert "--force" in err
+
+
+def test_init_with_adopt_repairs_pre_existing_bare_index(tmp_path):
+    """The same setup as above, with `--adopt`, must succeed: the chain
+    helper inserts `## Spaces` into the existing index. This is the
+    documented upgrade path."""
+    root = tmp_path / "wiki"
+    root.mkdir()
+    (root / "index.md").write_text("# wiki\n\nlegacy notes\n")
+    from wiki_spaces import init_wiki
+    rc = init_wiki.main([str(root), "--adopt", "--no-config"])
+    assert rc == 0
+    assert "## Spaces" in (root / "index.md").read_text()
+
+
+def test_init_with_force_overwrites_pre_existing_bare_index(tmp_path):
+    """`--force` is the alternative upgrade path: overwrite the existing
+    index entirely with a fresh scaffolded one."""
+    root = tmp_path / "wiki"
+    root.mkdir()
+    (root / "index.md").write_text("# legacy\n\nold notes\n")
+    from wiki_spaces import init_wiki
+    rc = init_wiki.main([str(root), "--force", "--no-config"])
+    assert rc == 0
+    assert "## Spaces" in (root / "index.md").read_text()
 
 
 # ---------- PR-M: log rotation rejection + audit summary scope ----------

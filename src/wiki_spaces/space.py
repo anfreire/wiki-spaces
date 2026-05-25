@@ -535,15 +535,20 @@ def _walk_via_spaces_contract(
             except OSError:
                 continue
             child_external = parent_external or _is_external(child, wiki_root)
-            if child_external and not include_external:
-                continue
+            # Resolution-escape is itself an external signal: a regular
+            # folder under an escaping symlink or foreign submodule whose
+            # boundary isn't itself listed in `## Spaces` (so `parent_external`
+            # is still False here) still resolves outside the wiki tree.
+            # Reclassify rather than dropping — that keeps `init --adopt
+            # --include-external` and the contract walker agreeing on what's
+            # consumer-visible.
             if not child_external:
                 try:
                     child_real.relative_to(root_real)
                 except ValueError:
-                    # Owned-by-contract but resolves outside the tree —
-                    # malformed. Audit reports separately.
-                    continue
+                    child_external = True
+            if child_external and not include_external:
+                continue
             if child_real in visited:
                 continue
             child_index = child / "index.md"
