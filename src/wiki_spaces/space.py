@@ -3182,6 +3182,32 @@ def cmd_promote(args: argparse.Namespace) -> int:
         )
         return 2
 
+    # Propagate `## Spaces` repair up the chain BEFORE any FS mutation in
+    # this command. `_promote_mutate` below only repairs the immediate
+    # ancestor; bare intermediate ancestors (e.g., a hand-curated
+    # `projects/index.md` lacking `## Spaces`, with the wiki root above)
+    # would leave the wiki unreachable to strict consumers even after a
+    # successful promote (v1 contract: write commands maintain the
+    # navigation contract on every ancestor they cross). Done first so a
+    # mid-walk failure leaves zero filesystem state to roll back — no
+    # half-rewritten links in `ancestor_index`, no orphan target dir.
+    # Chain-added entries that survive a later promote failure stay (they
+    # are append-only and consistent — `ancestor/` being registered upward
+    # is the correct end-state regardless of whether promote completed).
+    if ancestor != wiki_root:
+        try:
+            chain_notices, _chain_added = _ensure_spaces_chain_and_register(
+                wiki_root, ancestor
+            )
+            for n in chain_notices:
+                print(n)
+        except EnsureChainError as ce:
+            for n in ce.notices:
+                print(n)
+            _rollback_added_entries(ce.added)
+            print(f"  ! chain propagation failed: {ce}", file=sys.stderr)
+            return 1
+
     # Snapshot every affected file outside the wiki tree. We DELIBERATELY
     # exclude `ancestor_index` here — it is mutated only inside
     # `_atomic_mutate_index` (lock-protected atomic write). Including a
@@ -3286,38 +3312,6 @@ def cmd_promote(args: argparse.Namespace) -> int:
             print(f"  ~ {printable}index.md  +inserted `## Spaces`")
         if info in ("added", "inserted-and-added"):
             print(f"  ~ {printable}index.md ## Spaces  += [{label}]")
-
-        # `_promote_mutate` only repairs the IMMEDIATE ancestor's `## Spaces`.
-        # If the wiki has bare intermediate ancestors above it (e.g., a
-        # hand-curated `projects/index.md` without `## Spaces`, with the wiki
-        # root above), the leaf edge alone leaves the chain unreachable to
-        # strict consumers. v1 contract (AGENTS.md / Write commands): "When
-        # an ancestor's `index.md` is missing the heading, the CLI inserts
-        # it as the first step of the mutation." Walk the chain from the
-        # immediate ancestor up to wiki_root, ensuring `## Spaces` and
-        # registering each space in its parent so strict consumers can
-        # traverse to the newly-promoted space.
-        if ancestor != wiki_root:
-            try:
-                chain_notices, chain_added = _ensure_spaces_chain_and_register(
-                    wiki_root, ancestor
-                )
-                for n in chain_notices:
-                    print(n)
-            except EnsureChainError as ce:
-                for n in ce.notices:
-                    print(n)
-                _rollback_added_entries(ce.added)
-                # Undo the entry we just added at the immediate ancestor so
-                # the move-rollback below leaves no orphan `## Spaces` entry.
-                # `_ensure_section_at`'s appended `## Spaces` heading stays
-                # (append-only, non-destructive — same policy as the chain
-                # helper's rollback contract).
-                if info in ("added", "inserted-and-added"):
-                    _atomic_remove_from_spaces(
-                        ancestor, ancestor_index, href
-                    )
-                raise RuntimeError(f"chain propagation failed: {ce}")
 
         print(f"  + promoted {rel} -> {target_rel}")
         if rewrite_files:

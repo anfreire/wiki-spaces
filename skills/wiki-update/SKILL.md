@@ -17,7 +17,9 @@ Extract durable knowledge from the current source (project, conversation, or res
 
 ## Initialization
 
-When step 1 of the procedure finds no usable wiki (config missing or wiki path invalid), drive the interactive scaffold inline before doing anything else. Follow [`references/SETUP.md` § Branch A](../../references/SETUP.md) — read it from the repo (the `repo` config key points at it once installed; the canonical raw GitHub URL is the fallback when `repo` is unknown). The full briefing is one page; follow it verbatim. Keep the interview to two exchanges (gather, confirm), run every command yourself, and return to step 1 of the Procedure once `wiki-spaces init` has registered the wiki.
+When step 1 of the procedure finds no usable wiki (no config key set AND no CWD ancestor is a wiki), drive the interactive scaffold inline before doing anything else. Follow [`references/SETUP.md` § Branch A](../../references/SETUP.md) — read it from the repo (the `repo` config key points at it once installed; the canonical raw GitHub URL is the fallback when `repo` is unknown). The full briefing is one page; follow it verbatim. Keep the interview to two exchanges (gather, confirm), run every command yourself, and return to step 1 of the Procedure once `wiki-spaces init` has registered the wiki.
+
+An **invalid** configured `wiki` (path set but missing on disk, not absolute, lacks `index.md`, or for read commands lacks `## Spaces`) is a hard stop, not an inline-setup trigger — surface the error to the user and ask them to fix the config (`wiki-spaces doctor` is the diagnostic). Same for an invalid explicit path the user typed. Inline setup is reserved for the genuinely-no-wiki case.
 
 ## Procedure
 
