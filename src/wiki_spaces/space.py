@@ -534,11 +534,19 @@ def _walk_via_spaces_contract(
                 child_real = child.resolve()
             except OSError:
                 continue
-            child_external = parent_external or _is_external(child, wiki_root)
+            # Classify via `_is_in_external_scope` rather than `_is_external`
+            # so descendants of an external mount whose boundary isn't itself
+            # the listed entry (e.g. `projects/vendor/docs/index.md` listed
+            # directly when `.gitmodules path = projects/vendor`) inherit the
+            # external classification. `_is_external` only checks the exact
+            # path; the walker would otherwise treat them as owned.
+            descendant_external, _why = _is_in_external_scope(
+                child, wiki_root
+            )
+            child_external = parent_external or descendant_external
             # Resolution-escape is itself an external signal: a regular
-            # folder under an escaping symlink or foreign submodule whose
-            # boundary isn't itself listed in `## Spaces` (so `parent_external`
-            # is still False here) still resolves outside the wiki tree.
+            # folder under an escaping symlink whose boundary isn't itself
+            # listed in `## Spaces` still resolves outside the wiki tree.
             # Reclassify rather than dropping — that keeps `init --adopt
             # --include-external` and the contract walker agreeing on what's
             # consumer-visible.
@@ -622,7 +630,14 @@ def _walk_md_files_via_contract(
                 # Stop at child-space boundaries — the contract walker owns them.
                 if (entry / "index.md").is_file():
                     continue
-                entry_external = d_external or _is_external(entry, wiki_root)
+                # Walk up to catch descendants of external boundaries
+                # whose own path isn't itself external (foreign submodule
+                # nested folders, etc.). `_is_in_external_scope` is the
+                # ancestry-aware check; `_is_external` is exact-path only.
+                ancestor_external, _why = _is_in_external_scope(
+                    entry, wiki_root
+                )
+                entry_external = d_external or ancestor_external
                 if entry.is_symlink():
                     try:
                         target_real = entry.resolve()
@@ -3202,7 +3217,11 @@ def cmd_log(args: argparse.Namespace) -> int:
     cap = _limits_module.cap_for(log_path, wiki_root, limits)
     try:
         archive = _limits_module.append_log_with_rotation(
-            log_path, message, cap=cap
+            log_path,
+            message,
+            cap=cap,
+            wiki_root=wiki_root,
+            limits=limits,
         )
     except FileNotFoundError as e:
         # Race: log.md was deleted between our check above and the lock

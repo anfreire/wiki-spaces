@@ -307,7 +307,12 @@ def _maybe_emit_win32_notice() -> None:
 
 
 def append_log_with_rotation(
-    log_path: Path, entry: str, cap: int
+    log_path: Path,
+    entry: str,
+    cap: int,
+    *,
+    wiki_root: Path | None = None,
+    limits: list[tuple[str, int]] | None = None,
 ) -> Path | None:
     """Append `entry` to `log_path` with rotation under a single lock.
 
@@ -401,6 +406,27 @@ def append_log_with_rotation(
                             log_path, datetime.now(timezone.utc)
                         )
                         archive_content = "".join(real_entries[:midpoint])
+                        # Pre-flight the archive write against its own cap
+                        # (matched via the same `_meta/limits.md` config —
+                        # `log.archive-*.md` carries the same 100K cap as
+                        # `log.md` by default). Without this check, a
+                        # pathological rotation could write an over-cap
+                        # archive — a framework write that the next
+                        # `space audit` would flag. v1 contract: every
+                        # framework write enforces its cap.
+                        if wiki_root is not None and limits is not None:
+                            archive_cap = cap_for(
+                                archive_path, wiki_root, limits
+                            )
+                            if len(archive_content) > archive_cap:
+                                raise ValueError(
+                                    f"log rotation would write an over-cap "
+                                    f"archive ({len(archive_content)} chars "
+                                    f"> {archive_cap} cap for "
+                                    f"{archive_path.name}); shrink the log "
+                                    "or increase the log.archive-*.md cap "
+                                    "in _meta/limits.md"
+                                )
                         _atomic_write(archive_path, archive_content)
                         kept = projected_kept
                         # Truncate + rewrite log_path inside the lock.

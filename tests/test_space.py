@@ -1385,6 +1385,61 @@ def test_space_files_explicit_external_scope_allowed_without_global_flag(tmp_pat
     assert "shared/team/page.md" in out
 
 
+def test_contract_walker_classifies_descendant_of_foreign_submodule_as_external(tmp_path):
+    """A `## Spaces` entry that lists a deeper path under a foreign-origin
+    submodule's mount must be classified external, even when the entry's
+    exact path isn't itself the submodule directory. `_is_external`
+    alone only checks the exact path; ancestry awareness comes from
+    `_is_in_external_scope`. Without that, the walker would yield
+    `projects/vendor/docs` as owned even though `.gitmodules` says
+    `projects/vendor` is a foreign submodule."""
+    import subprocess
+    wiki = _make_wiki(tmp_path)
+    # Configure the wiki as a git repo with a different origin than the
+    # submodule we'll register.
+    subprocess.run(
+        ["git", "init", "-q", "-b", "main"], cwd=wiki, check=True,
+    )
+    (wiki / ".git" / "config").write_text(
+        '[core]\n\trepositoryformatversion = 0\n'
+        '[remote "origin"]\n\turl = https://example.invalid/parent.git\n'
+    )
+    # Register a foreign-origin submodule at projects/vendor in .gitmodules.
+    (wiki / ".gitmodules").write_text(
+        '[submodule "vendor"]\n'
+        '\tpath = projects/vendor\n'
+        '\turl = https://other.invalid/external.git\n'
+    )
+    # Materialize content as if the submodule were checked out, with a
+    # nested space at `projects/vendor/docs`.
+    (wiki / "projects" / "vendor" / "docs").mkdir(parents=True)
+    (wiki / "projects" / "vendor" / "docs" / "index.md").write_text(
+        "# docs\n\n## Spaces\n\n"
+    )
+    # Register `projects/vendor/docs` directly in root's `## Spaces` —
+    # the submodule boundary itself isn't listed, only the deeper path.
+    idx = wiki / "index.md"
+    idx.write_text(
+        idx.read_text()
+        + "- [projects/vendor/docs/](projects/vendor/docs/index.md)\n"
+    )
+    # Default scope: external descendant must NOT surface.
+    default_paths = [
+        str(p.relative_to(wiki))
+        for p, _ in space._walk_via_spaces_contract(wiki)
+    ]
+    assert "projects/vendor/docs" not in default_paths, (
+        "contract walker yielded a deeper-than-boundary foreign-submodule "
+        "descendant as owned — ancestry-aware external classification missing"
+    )
+    # Opt-in: yielded as external.
+    inc_pairs = list(
+        space._walk_via_spaces_contract(wiki, include_external=True)
+    )
+    paths = {str(p.relative_to(wiki)): is_ext for p, is_ext in inc_pairs}
+    assert paths.get("projects/vendor/docs") is True
+
+
 def test_contract_walker_reclassifies_resolution_escape_as_external(tmp_path):
     """`init --adopt --include-external` can descend a foreign submodule or
     escaping-symlink subtree and register `boundary/foo/index.md` in the
@@ -2245,6 +2300,44 @@ def test_log_rotation_rejects_when_still_over_cap(tmp_path):
     rc, _, err = _run(["--wiki", str(wiki), "log", "--raw", huge_entry])
     assert rc != 0
     assert "too large" in err or "cap" in err
+
+
+def test_log_rotation_refuses_archive_write_when_archive_would_exceed_cap(tmp_path):
+    """Archive writes are themselves framework writes; the v1 contract
+    says every framework write enforces a cap. The default
+    `log.archive-*.md` cap is 100K (same as `log.md`), but a user can
+    configure a tighter archive cap. Rotation must refuse if the
+    projected archive content would overflow its cap — otherwise a
+    framework write puts an over-cap file on disk that `space audit`
+    later flags."""
+    wiki = _make_wiki(tmp_path)
+    log = wiki / "log.md"
+    # Seed 6 entries.
+    seed_entries = "\n".join(
+        f"- [2026-01-0{i+1}T00:00:00Z] OP n={i} payload={'x' * 60}"
+        for i in range(6)
+    ) + "\n"
+    log.write_text("# Log\n" + seed_entries)
+    # log.md = 1000 cap; archive cap = 50 (extremely tight). The kept
+    # half is ~500 chars (so log.md fits), but the archive half is ~250
+    # which exceeds the 50-char archive cap → must refuse.
+    (wiki / "_meta").mkdir()
+    (wiki / "_meta" / "limits.md").write_text(
+        "| Pattern | Cap (chars) |\n"
+        "|---|---|\n"
+        "| log.md | 600 |\n"
+        "| log.archive-*.md | 50 |\n"
+    )
+    huge_entry = "- [2026-01-10T00:00:00Z] " + ("y" * 200)
+    rc, _, err = _run(["--wiki", str(wiki), "log", "--raw", huge_entry])
+    assert rc != 0
+    assert "archive" in err
+    # No archive landed on disk (refusal happened before write).
+    archives = sorted(wiki.glob("log.archive-*.md"))
+    assert archives == [], (
+        f"rotation wrote an over-cap archive {archives} — the cap must "
+        "be enforced before the archive write"
+    )
 
 
 def test_log_rotation_does_not_partially_commit_when_post_rotation_still_over_cap(tmp_path):
