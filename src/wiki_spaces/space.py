@@ -2706,6 +2706,20 @@ def cmd_promote(args: argparse.Namespace) -> int:
     target_dir = target.parent
     target_rel = target.relative_to(wiki_root).as_posix()
     if target_dir.exists():
+        # Symlink target dir: even if it's empty, `source.rename(target)`
+        # would follow the link and write into whatever the symlink
+        # resolves to — including outside the wiki tree. Refuse before the
+        # rename, mirroring the symlinked-source refusal above.
+        if target_dir.is_symlink():
+            print(
+                f"  ! refusing to promote into {target_dir.relative_to(wiki_root).as_posix()}/: "
+                "target directory is a symlink. Promote would follow the "
+                "link and create `index.md` at the symlink target, mutating "
+                "content the wiki may not own. Remove or rename the symlink "
+                "before promoting.",
+                file=sys.stderr,
+            )
+            return 2
         try:
             entries = list(target_dir.iterdir())
         except OSError:

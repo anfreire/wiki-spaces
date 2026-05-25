@@ -1310,6 +1310,27 @@ def test_md_files_walker_skips_escaping_md_symlink_in_plain_folder(tmp_path):
     assert aliases[0][1] is True
 
 
+def test_promote_refuses_symlinked_target_dir(tmp_path):
+    """Promote refuses when `<source>/` (the target directory) is a
+    symlink. Even when empty, `source.rename(target)` follows the link
+    and writes `index.md` at the symlink's resolved location — which
+    for an escaping symlink means external content. Mirrors the
+    symlinked-source refusal (which closes the source path); this
+    closes the destination path."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "page.md").write_text("# page\n")
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    import os
+    os.symlink(outside_dir, wiki / "page")  # target dir is a symlink
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "page.md"])
+    assert rc == 2
+    assert "symlink" in err.lower()
+    # No partial mutation: source untouched, external dir untouched.
+    assert (wiki / "page.md").is_file()
+    assert not (outside_dir / "index.md").exists()
+
+
 def test_promote_refuses_symlinked_source_pointing_outside(tmp_path):
     """Promote moves the source file then writes new content via
     `target.write_text(...)`. If the source is a symlink, the rename
