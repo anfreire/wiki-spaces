@@ -1415,6 +1415,25 @@ def test_audit_json_emits_structured_payload(tmp_path):
     assert any("empty" in m["issue"] for m in payload["malformed_entries"])
 
 
+def test_audit_json_emits_missing_spaces_section_for_bare_index_child(tmp_path):
+    """`audit --json` exposes registered children whose `index.md` lacks
+    `## Spaces` in a dedicated `missing_spaces_section` array. Without it,
+    JSON consumers see `exit_code: 1` but every other category is empty —
+    no actionable finding for a non-zero exit. (Human output reports
+    these inline; JSON has to match.)"""
+    import json as _json
+    wiki = _make_wiki(tmp_path)
+    rc, _, _ = _run(["--wiki", str(wiki), "add", "foo"])
+    assert rc == 0
+    # Strip foo's `## Spaces` so it's a registered bare-index child.
+    (wiki / "foo" / "index.md").write_text("# foo\n")
+    rc_j, out_j, _ = _run(["--wiki", str(wiki), "audit", "--json"])
+    assert rc_j == 1
+    payload = _json.loads(out_j)
+    assert payload["exit_code"] == 1
+    assert "foo" in payload["missing_spaces_section"]
+
+
 # ---------- PR-L: size discipline + check-size + outgoing-link mask ----------
 
 def test_check_size_ok(tmp_path):

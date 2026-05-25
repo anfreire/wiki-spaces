@@ -11,3 +11,5 @@ build/
 .vscode/
 .omo/
 .pytest_cache/
+.claude/
+_archives/

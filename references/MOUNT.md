@@ -56,8 +56,8 @@ The `space mount` command wraps these. Drop to the raw form when you need finer 
 1. Confirm the canonical wiki is itself a git repo. If not: `cd <wiki>; git init -b main; git add -A; git commit -m "initial"`.
 2. Decide the mount path (typically `<wiki>/shared/<name>/`).
 3. Add the submodule: `cd <wiki>; git submodule add <repo-url> shared/<name>`.
-4. Verify the submodule has `index.md`. If it does NOT, the mounted repo isn't a wiki-spaces wiki — abort, or coordinate with its owner to add `index.md`.
-5. Register the entry: `wiki-spaces space add shared/<name> --force-external` (or update the parent's `## Spaces` by hand). `--force-external` is required because `shared/` paths are classified external by the trust-scope heuristic; `space add` refuses external scopes by default.
+4. Verify the submodule has `index.md` *and* a `## Spaces` heading (the v1 navigation contract). If either is missing, the mounted repo isn't a wiki-spaces wiki — abort, or coordinate with its owner. wiki-spaces does not write into an external mount to repair its spec.
+5. Register the entry: `wiki-spaces space add shared/<name> --force-external`. `--force-external` is required because `shared/` paths are classified external by the trust-scope heuristic; `space add` refuses external scopes by default. The chain helper auto-inserts `## Spaces` into the parent's `index.md` if missing — no manual edit needed.
 6. Commit the submodule pointer in the parent: `cd <wiki>; git commit -am "add submodule shared/<name>"`.
 7. Push the parent if it has a remote.
 
@@ -66,15 +66,15 @@ Note for cloners of your wiki: they need `git clone --recursive` (or `git submod
 ### Branch B — Git clone (read-only reference)
 
 1. `git clone <repo-url> <wiki>/shared/<name>` — **place under `shared/`** to get the read-only / external trust-scope semantics. Placing a clone elsewhere (e.g., `<wiki>/projects/<name>/`) makes it *owned* by the heuristic — writes are allowed by default.
-2. Verify `index.md` exists in the clone.
-3. Register the entry: `wiki-spaces space add shared/<name> --force-external`. `--force-external` is required because `shared/` paths are classified external by the trust-scope heuristic.
+2. Verify `index.md` exists in the clone *and* carries a `## Spaces` heading (v1 navigation contract). If `## Spaces` is missing, coordinate with the upstream owner — wiki-spaces does not write into an external mount to repair its spec.
+3. Register the entry: `wiki-spaces space add shared/<name> --force-external`. `--force-external` is required because `shared/` paths are classified external by the trust-scope heuristic. The chain helper auto-inserts `## Spaces` into the parent if missing.
 4. To pull updates later: `cd <wiki>/shared/<name>; git pull`.
 
 ### Branch C — Symlink (local mount)
 
 1. `ln -s /absolute/path/to/source <wiki>/shared/<name>` (or wherever).
-2. Verify the symlink target has `index.md`.
-3. Register the entry: `wiki-spaces space add shared/<name> --force-external`. `--force-external` is required because `shared/` paths are classified external by the trust-scope heuristic.
+2. Verify the symlink target has `index.md` *and* a `## Spaces` heading (v1 navigation contract). If `## Spaces` is missing, fix the upstream folder before mounting — wiki-spaces does not write into an external mount to repair its spec.
+3. Register the entry: `wiki-spaces space add shared/<name> --force-external`. `--force-external` is required because `shared/` paths are classified external by the trust-scope heuristic. The chain helper auto-inserts `## Spaces` into the parent if missing.
 4. The symlinked folder is autonomous — operations within it stay local to the symlink target. The `realpath` resolves outside the canonical wiki tree, so the heuristic classifies the symlinked space as external regardless of where you mount it. The space IS in scope when the user explicitly targets it.
 
 ## Trust scope reminder

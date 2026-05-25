@@ -1189,6 +1189,11 @@ def cmd_audit(args: argparse.Namespace) -> int:
             expected[parent].add(s.relative_to(parent).as_posix())
 
     issues = 0
+    # Track owned spaces whose `index.md` lacks `## Spaces`. Surface them in
+    # the JSON payload too so structured consumers see an actionable finding
+    # for a non-zero exit (otherwise `audit --json` returns exit_code=1 with
+    # every other category empty — the consumer has no idea what failed).
+    missing_section_spaces: list[Path] = []
     for space in all_spaces:
         text = (space / "index.md").read_text(encoding="utf-8")
         if not _md.has_section(text, "Spaces"):
@@ -1204,6 +1209,7 @@ def cmd_audit(args: argparse.Namespace) -> int:
             label = "<wiki>" if str(rel) == "." else f"<wiki>/{rel}"
             print(f"{label}/index.md:")
             print("  ! no `## Spaces` section (run `audit --fix` to insert)")
+            missing_section_spaces.append(space)
             issues += 1
             continue
         # `## Spaces` hrefs, normalized so `foo`, `foo/`, `foo/index.md`, and
@@ -1293,7 +1299,10 @@ def cmd_audit(args: argparse.Namespace) -> int:
                             print(f"  ~ {label}/index.md ## Spaces  -= [{child_rel}/]")
                             issues -= 1
 
-    drift_issues = issues
+    # `issues` accumulated drift entries (missing/stale) AND one count per
+    # owned space whose `index.md` lacked `## Spaces`. Split them so the
+    # summary doesn't mis-label the bare-section count as "drift".
+    drift_issues = issues - len(missing_section_spaces)
     broken, orphans = _audit_content(wiki_root, include_external=include_external)
 
     if broken:
@@ -1387,6 +1396,7 @@ def cmd_audit(args: argparse.Namespace) -> int:
     # entries, and duplicate aliases all do.
     errors = (
         drift_issues
+        + len(missing_section_spaces)
         + len(broken)
         + len(over_cap)
         + len(malformed)
@@ -1473,6 +1483,14 @@ def cmd_audit(args: argparse.Namespace) -> int:
                 }
                 for alias, pages in duplicate_aliases
             ],
+            # Owned spaces whose `index.md` lacks `## Spaces`. The human
+            # output reports these inline; the structured output needs the
+            # same hook so JSON consumers (skills, CI) can act on the
+            # non-zero exit code with a specific actionable item.
+            "missing_spaces_section": [
+                str(sp.relative_to(wiki_root).as_posix()) or "."
+                for sp in missing_section_spaces
+            ],
             "exit_code": exit_code,
         }
         print(_json.dumps(out, indent=2))
@@ -1490,6 +1508,10 @@ def cmd_audit(args: argparse.Namespace) -> int:
     parts: list[str] = []
     if drift_issues:
         parts.append(f"{drift_issues} `## Spaces` drift")
+    if missing_section_spaces:
+        parts.append(
+            f"{len(missing_section_spaces)} space(s) missing `## Spaces`"
+        )
     if broken:
         parts.append(f"{len(broken)} broken wikilink(s)")
     if over_cap:
