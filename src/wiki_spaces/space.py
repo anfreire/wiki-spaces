@@ -3194,7 +3194,22 @@ def cmd_promote(args: argparse.Namespace) -> int:
     # Chain-added entries that survive a later promote failure stay (they
     # are append-only and consistent — `ancestor/` being registered upward
     # is the correct end-state regardless of whether promote completed).
+    #
+    # Order matters within the chain repair: insert `## Spaces` in
+    # `ancestor/index.md` FIRST, then register `ancestor/` upward. If we
+    # registered upward before repairing ancestor's own section and the
+    # promote then failed, the rollback would leave `ancestor/` advertised
+    # in its parent's `## Spaces` while `ancestor/index.md` itself stayed
+    # bare — a producer/consumer break the contract walker would skip.
     if ancestor != wiki_root:
+        try:
+            _ensure_section_at(ancestor, wiki_root)
+        except RuntimeError as e:
+            print(
+                f"  ! could not insert `## Spaces` into {printable}index.md: {e}",
+                file=sys.stderr,
+            )
+            return 1
         try:
             chain_notices, _chain_added = _ensure_spaces_chain_and_register(
                 wiki_root, ancestor

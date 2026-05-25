@@ -3970,6 +3970,49 @@ def test_promote_propagates_chain_repair_up_to_wiki_root(tmp_path):
     assert any(e.href and "projects/" in e.href for e in root_entries)
 
 
+def test_promote_repairs_ancestor_section_before_upward_registration(
+    tmp_path, monkeypatch
+):
+    """OC convergence #5: when chain repair runs against a bare intermediate
+    ancestor, the order must be (1) `_ensure_section_at(ancestor)` to insert
+    `## Spaces` in ancestor's index.md, THEN (2) `_ensure_spaces_chain_and_register`
+    to register ancestor upward. If we registered first and then promote
+    failed, the rollback would leave `ancestor/` advertised in its parent's
+    `## Spaces` while `ancestor/index.md` itself stayed bare — a producer/
+    consumer break the contract walker would skip. Test pins the
+    post-failure invariant: even when promote fails mid-mutation, the
+    intermediate ancestor whose entry is now in the parent's contract
+    actually has `## Spaces` itself."""
+    wiki = _make_wiki(tmp_path)  # wiki/index.md has `## Spaces`
+    (wiki / "projects").mkdir()
+    (wiki / "projects" / "index.md").write_text("# projects\n")  # BARE
+    (wiki / "projects" / "foo.md").write_text("# foo\n")
+    # Trigger a mid-promote failure AFTER chain repair has registered
+    # projects/ in wiki/index.md. Patch Path.rename so the source→target
+    # move raises — `cmd_promote` uses `source.rename(target)` for the
+    # source move on non-git wikis (line 3267 region).
+    real_rename = Path.rename
+    def patched_rename(self, target):
+        if str(self).endswith("/projects/foo.md"):
+            raise OSError("simulated post-chain failure")
+        return real_rename(self, target)
+    monkeypatch.setattr(Path, "rename", patched_rename)
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "projects/foo.md"])
+    assert rc != 0, "promote should fail due to simulated move failure"
+    # Producer/consumer invariant: if `projects/` is registered in the
+    # wiki's `## Spaces` (chain succeeded), then `projects/index.md` must
+    # carry `## Spaces` too — otherwise the contract walker would treat
+    # `projects/` as drift even though the parent advertises it.
+    root_text = (wiki / "index.md").read_text()
+    root_entries = _md.parse_section_entries(root_text, "Spaces")
+    if any(e.href and "projects/" in e.href for e in root_entries):
+        proj_text = (wiki / "projects" / "index.md").read_text()
+        assert "## Spaces" in proj_text, (
+            "wiki advertised projects/ but projects/index.md is bare — "
+            "producer/consumer break the contract walker would skip"
+        )
+
+
 def test_promote_ancestor_uses_atomic_mutate_index(tmp_path, monkeypatch):
     """The ancestor write must happen under flock against FRESH text — not
     against the text read at command start. Inject a concurrent modification
