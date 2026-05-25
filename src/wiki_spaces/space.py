@@ -3211,27 +3211,28 @@ def cmd_log(args: argparse.Namespace) -> int:
     from . import _limits as _limits_module
 
     log_path = wiki_root / "log.md"
-    if not log_path.is_file():
-        if not getattr(args, "create", False):
-            print(
-                f"  ! {log_path.relative_to(wiki_root)} does not exist. "
-                "Pass --create to scaffold it, or opt in by running "
-                "`wiki-spaces init <wiki> --with log.md`.",
-                file=sys.stderr,
-            )
-            return 2
+    create_if_missing = bool(getattr(args, "create", False))
+    if not log_path.is_file() and not create_if_missing:
+        print(
+            f"  ! {log_path.relative_to(wiki_root)} does not exist. "
+            "Pass --create to scaffold it, or opt in by running "
+            "`wiki-spaces init <wiki> --with log.md`.",
+            file=sys.stderr,
+        )
+        return 2
+    if create_if_missing and not log_path.is_file():
         # Framework write — enforce the per-file cap. The initial body
         # is tiny (6 bytes) but the v1 contract is "every framework write
         # enforces the cap": a degenerate user-configured `log.md` cap
         # below 6 chars would otherwise leak an over-cap scaffold file
-        # onto disk.
-        initial = "# Log\n"
+        # onto disk. The actual scaffold write happens INSIDE
+        # `append_log_with_rotation`'s lock (race-safe across concurrent
+        # first-time --create calls); this is the pre-flight only.
         try:
-            _enforce_size_cap(log_path, initial, wiki_root)
+            _enforce_size_cap(log_path, "# Log\n", wiki_root)
         except SizeCapExceeded as e:
             print(f"  ! size cap: {e}", file=sys.stderr)
             return 2
-        log_path.write_text(initial, encoding="utf-8")
 
     if args.raw is not None:
         message = args.raw
@@ -3266,6 +3267,7 @@ def cmd_log(args: argparse.Namespace) -> int:
             cap=cap,
             wiki_root=wiki_root,
             limits=limits,
+            create_if_missing=create_if_missing,
         )
     except FileNotFoundError as e:
         # Race: log.md was deleted between our check above and the lock

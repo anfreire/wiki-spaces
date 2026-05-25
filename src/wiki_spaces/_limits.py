@@ -313,36 +313,47 @@ def append_log_with_rotation(
     *,
     wiki_root: Path | None = None,
     limits: list[tuple[str, int]] | None = None,
+    create_if_missing: bool = False,
+    initial_content: str = "# Log\n",
 ) -> Path | None:
     """Append `entry` to `log_path` with rotation under a single lock.
 
     Sequence (one `fcntl.flock` covering all of it):
-      1. Acquire exclusive lock on `log_path`.
-      2. Read current content.
-      3. If `len(current) + len(entry) > cap`, parse into entries, split at
+      1. (Optionally) create `log_path` atomically if `create_if_missing`.
+      2. Acquire exclusive lock on `log_path`.
+      3. Read current content. If the file was just created (empty), write
+         `initial_content` first.
+      4. If `len(current) + len(entry) > cap`, parse into entries, split at
          midpoint by entry count, write oldest half to a uniquely-named
          archive (`log.archive-<YYYYMMDD-HHMMSS>[-N].md`) atomically, keep
          newest half in `log.md`.
-      4. Append `entry` to `log.md` (ensuring trailing newline).
-      5. Release lock.
+      5. Append `entry` to `log.md` (ensuring trailing newline).
+      6. Release lock.
 
     Returns the archive path when rotation happened, None otherwise.
 
     `log.md` must already exist (logging is opt-in per CONVENTIONS.md /
-    log.md). The caller scaffolds the file before calling — `cmd_log
-    --create` does this for the CLI surface. Raises `FileNotFoundError`
-    otherwise.
+    log.md) unless `create_if_missing=True`. With the flag, the create +
+    scaffold + lock + append all happen atomically under the same lock —
+    two concurrent callers can't both clobber each other's scaffold and
+    lose entries. Without the flag, raises `FileNotFoundError`.
 
     POSIX-only locking. On Windows, the lock is best-effort (a one-time
     stderr notice per process); concurrent writes may interleave but the
     sequence itself still completes correctly within a single process.
     """
-    if not log_path.is_file():
+    if not log_path.is_file() and not create_if_missing:
         raise FileNotFoundError(
             f"{log_path} does not exist; caller must create it first "
             "(logging is opt-in)"
         )
-    fd = os.open(log_path, os.O_RDWR, 0o644)
+    # `O_CREAT | O_RDWR` is atomic create-or-open. With flock taken
+    # immediately, a concurrent first-call sequence serializes — the
+    # second caller sees the first caller's scaffold (and entries)
+    # already in place. Without this, two `--create` calls race between
+    # the existence check and `write_text`, losing one caller's entry.
+    flags = os.O_RDWR | (os.O_CREAT if create_if_missing else 0)
+    fd = os.open(log_path, flags, 0o644)
     try:
         if sys.platform != "win32":
             fcntl.flock(fd, fcntl.LOCK_EX)
@@ -358,6 +369,16 @@ def append_log_with_rotation(
             current_bytes += chunk
             offset += len(chunk)
         current = current_bytes.decode("utf-8", errors="replace")
+        # Freshly created file (or pre-existing empty file): write the
+        # initial scaffold INSIDE the lock so a parallel caller's lock
+        # ordering preserves the contents. Race-safety: if two callers
+        # both opened a missing file via O_CREAT and one has the lock,
+        # the other waits; the second caller reads non-empty content
+        # (because the first wrote the scaffold + its entry) and skips
+        # the scaffold step.
+        if create_if_missing and not current:
+            os.write(fd, initial_content.encode("utf-8"))
+            current = initial_content
 
         entry_normalized = entry if entry.endswith("\n") else entry + "\n"
         archive_path: Path | None = None

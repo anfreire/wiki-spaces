@@ -352,6 +352,46 @@ def test_concurrent_appends_lose_no_lines(tmp_path):
     )
 
 
+def _concurrent_create_worker(args):
+    log_path_str, i = args
+    _limits.append_log_with_rotation(
+        Path(log_path_str),
+        _make_log_entry(i),
+        cap=100000,
+        create_if_missing=True,
+    )
+
+
+def test_concurrent_create_lose_no_lines(tmp_path):
+    """100 concurrent `--create` appends against a missing log.md — none
+    of the workers pre-creates the file; each calls
+    `append_log_with_rotation(..., create_if_missing=True)`. Without the
+    atomic-create-under-lock contract, two workers race between the
+    existence check and the scaffold write, clobbering each other's
+    entries. With it, the create + scaffold + lock + append all happen
+    under the same lock and no entry is lost. Skipped on Windows where
+    locking is best-effort."""
+    if os.name == "nt":  # pragma: no cover
+        pytest.skip("flock-based atomicity not enforced on Windows")
+    log = tmp_path / "log.md"
+    # Deliberately NOT pre-creating — the workers must race the create.
+    assert not log.exists()
+    with multiprocessing.Pool(processes=8) as pool:
+        pool.map(
+            _concurrent_create_worker,
+            [(str(log), i) for i in range(100)],
+        )
+    body = log.read_text()
+    written = sum(
+        1 for line in body.splitlines() if line.strip().startswith("- [")
+    )
+    assert written == 100, (
+        f"expected 100 entries after concurrent --create appends, got "
+        f"{written} — one or more workers raced the scaffold write and "
+        "lost an entry"
+    )
+
+
 # ---------- _md.strip_frontmatter (factored from split_frontmatter) ----------
 
 
