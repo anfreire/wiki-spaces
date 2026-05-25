@@ -398,7 +398,17 @@ def append_log_with_rotation(
 
         archive_path: Path | None = None
 
-        if len(current) + len(entry_normalized) > cap:
+        # Project the post-write size including the conditional
+        # separator newline. The write path adds `b"\n"` before the
+        # entry when `current` lacks a trailing newline (see "Append
+        # the new entry" below); the fit check must include that byte
+        # so a too-tight cap with a header like `# Log` (no `\n`)
+        # doesn't pass the check and then write 1 byte over cap.
+        def _projected_size(curr: str) -> int:
+            sep = 1 if (curr and not curr.endswith("\n")) else 0
+            return len(curr) + sep + len(entry_normalized)
+
+        if _projected_size(current) > cap:
             entries = _split_log_entries(current)
             if len(entries) >= 2:
                 # Header (everything before the first `- [` entry) stays with
@@ -428,9 +438,7 @@ def append_log_with_rotation(
                             "".join(header_entries)
                             + "".join(real_entries[midpoint:])
                         )
-                        if (
-                            len(projected_kept) + len(entry_normalized) > cap
-                        ):
+                        if _projected_size(projected_kept) > cap:
                             raise ValueError(
                                 f"log entry too large to fit within cap "
                                 f"({cap} chars) even after rotation would "
@@ -474,7 +482,7 @@ def append_log_with_rotation(
         # Last-resort fit check: with no rotation possible (single entry,
         # or pathological content). Reject rather than silently committing
         # an over-cap write.
-        if len(current) + len(entry_normalized) > cap:
+        if _projected_size(current) > cap:
             raise ValueError(
                 f"log entry too large to fit within cap ({cap} chars); "
                 "rotate manually or increase the log.md cap in "

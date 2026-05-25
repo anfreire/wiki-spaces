@@ -2647,6 +2647,51 @@ def test_mount_preflights_ancestor_cap_before_running_mechanism(tmp_path):
     assert (wiki / "index.md").read_text() == big
 
 
+def test_log_append_size_check_includes_separator_newline(tmp_path):
+    """The fit check must account for the conditional `\\n` separator
+    the write path adds when the existing log lacks a trailing
+    newline. Example: `current = "# Log"` (5 chars, no `\\n`),
+    `entry_normalized = "- [t] x\\n"` (8 chars), `cap = 12`. The bare
+    `len(current) + len(entry)` = 13 > 12 → would refuse. But the
+    OFF-BY-ONE bug was the OTHER direction: tighten `current` to a
+    length that just passes the bare check but fails when the
+    separator newline is included. We pick `current = "# Log"` (5)
+    + entry (7) + sep (1) = 13 vs cap=12: must REFUSE."""
+    wiki = _make_wiki(tmp_path)
+    log = wiki / "log.md"
+    log.write_text("# Log")  # 5 chars, deliberately NO trailing newline
+    (wiki / "_meta").mkdir()
+    (wiki / "_meta" / "limits.md").write_text(
+        "| Pattern | Cap (chars) |\n|---|---|\n| log.md | 12 |\n"
+    )
+    # Entry normalized would be `- [t]\n` (6 chars). Bare check:
+    # 5 + 6 = 11 ≤ 12 → passes. WITH separator newline:
+    # 5 + 1 + 6 = 12 ≤ 12 → still passes. Let's use a slightly larger
+    # entry to push past.
+    rc, _, err = _run(["--wiki", str(wiki), "log", "--raw", "- [t] x"])
+    # Entry normalized = 8 chars. 5 + 1 + 8 = 14 > 12 → must refuse.
+    # Without the separator-aware fix: 5 + 8 = 13 > 12 → also refuses
+    # in THIS case. So pick a tighter example that exposes the bug:
+    # use a smaller entry that passes bare but fails with separator.
+    # Reset:
+    log.write_text("# Log")
+    rc, _, err = _run(["--wiki", str(wiki), "log", "--raw", "- t"])
+    # Entry normalized = "- t\n" (4 chars). Bare check: 5 + 4 = 9 ≤ 12 → passes.
+    # WITH sep: 5 + 1 + 4 = 10 ≤ 12 → also passes. Need cap=9.
+    log.write_text("# Log")
+    (wiki / "_meta" / "limits.md").write_text(
+        "| Pattern | Cap (chars) |\n|---|---|\n| log.md | 9 |\n"
+    )
+    rc, _, err = _run(["--wiki", str(wiki), "log", "--raw", "- t"])
+    # Entry normalized = 4 chars. Bare check: 5 + 4 = 9 ≤ 9 → passes.
+    # WITH sep: 5 + 1 + 4 = 10 > 9 → must refuse.
+    assert rc != 0, (
+        "off-by-one in log fit check: separator newline not counted, "
+        "wrote 1 byte over cap"
+    )
+    assert "too large" in err or "cap" in err
+
+
 def test_log_create_refuses_atomically_when_scaffold_plus_entry_overflows(tmp_path):
     """`space log --create` is the first-call scaffold path. With a
     cap that admits the `# Log\\n` scaffold (6 chars) but NOT the
