@@ -115,9 +115,10 @@ def test_nearest_space_root_strict_accepts_index_with_spaces(tmp_path):
     assert _common.nearest_space_root_strict(tmp_path) == tmp_path.resolve()
 
 
-def test_nearest_space_root_strict_walks_up_past_bare_index(tmp_path):
+def test_nearest_space_root_strict_walks_up_past_missing_section(tmp_path):
     """Strict resolver skips folders that lack `## Spaces` while walking up
-    — the closest valid ancestor wins, not the closest bare-index folder."""
+    — the closest valid ancestor wins, not the closest folder with
+    `index.md` but no `## Spaces`."""
     outer = tmp_path / "outer"
     outer.mkdir()
     (outer / "index.md").write_text("# outer\n\n## Spaces\n\n")

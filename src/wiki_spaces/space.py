@@ -750,7 +750,7 @@ def cmd_add(args: argparse.Namespace) -> int:
         # The pre-existing target's own index might lack `## Spaces` (a wiki
         # adopted from a folder of notes before v1). Repair it before we
         # register it upward — otherwise a re-registered existing space
-        # remains bare-index.
+        # would otherwise stay without `## Spaces`.
         try:
             _ensure_section_at(new_space, wiki_root)
         except RuntimeError as e:
@@ -1130,7 +1130,7 @@ def _summary_header(
 
 
 def cmd_audit(args: argparse.Namespace) -> int:
-    # Read-only by default → strict resolver (refuses bare-index).
+    # Read-only by default → strict resolver (refuses missing `## Spaces`).
     # With `--fix` we're a repair surface → repair resolver + an explicit
     # ensure-section pass on the root before we enumerate drift.
     fix = getattr(args, "fix", False)
@@ -1946,7 +1946,7 @@ def _ensure_section_at(space: Path, wiki_root: Path) -> str:
 
     Returns `"inserted"` or `"noop"`. Does NOT walk up; does NOT register
     anything in any parent. Used by `cmd_remove` (so a child entry can be
-    removed once a `## Spaces` exists), by `audit --fix`'s bare-index
+    removed once a `## Spaces` exists), by `audit --fix`'s missing-section
     repair pass (PR-E), and by `init --adopt`'s leaf section repair
     (PR-E). Size-capped via `_enforce_size_cap`.
 

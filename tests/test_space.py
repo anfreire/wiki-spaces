@@ -52,8 +52,8 @@ def test_audit_strict_resolver_rejects_bare_index_via_explicit_path(tmp_path):
 
 def test_audit_strict_resolver_rejects_bare_index_via_cwd(tmp_path, monkeypatch):
     """Same contract through the CWD fallback: the strict resolver walks up
-    looking for `index.md` + `## Spaces` together. A bare-index ancestor is
-    invisible to the read-only path."""
+    looking for `index.md` + `## Spaces` together. An ancestor with
+    `index.md` but no `## Spaces` is invisible to the read-only path."""
     wiki = _make_wiki(tmp_path, with_spaces_section=False)
     # Move into the wiki so the CWD fallback runs.
     monkeypatch.chdir(wiki)
@@ -67,7 +67,7 @@ def test_audit_strict_resolver_rejects_bare_index_via_cwd(tmp_path, monkeypatch)
 def test_audit_strict_resolver_rejects_bare_index_via_config(tmp_path, monkeypatch):
     """Same contract through the `wiki` config key: the strict resolver
     rejects a configured wiki that has `index.md` but no `## Spaces`.
-    Without this test, a config-pointed bare-index wiki could silently pass
+    Without this test, a config-pointed wiki missing `## Spaces` could silently pass
     audit even though no other resolution path accepts it."""
     wiki = _make_wiki(tmp_path, with_spaces_section=False)
     # Don't pass --wiki; have the config point at the bare wiki instead.
@@ -257,7 +257,7 @@ def test_ensure_section_at_only_touches_that_space(tmp_path):
 def test_cmd_add_existing_target_ensures_target_has_spaces_section(tmp_path):
     """`space add foo` against a pre-existing bare `foo/index.md` leaves
     foo with a `## Spaces` section so re-registered existing targets
-    aren't bare-index after the call."""
+    carry `## Spaces` after the call."""
     wiki = _make_wiki(tmp_path)
     (wiki / "foo").mkdir()
     (wiki / "foo" / "index.md").write_text("# foo\n")  # bare; no `## Spaces`
@@ -873,7 +873,7 @@ def test_audit_fix_inserts_spaces_into_bare_index_folder(tmp_path):
 
 
 def test_audit_fix_recomputes_drift_after_section_repair(tmp_path):
-    """A nested bare-index space is invisible to drift detection until the
+    """A nested space whose `index.md` lacks `## Spaces` is invisible to drift detection until the
     bare-section pass runs (because the parser skips entries when the
     section header is missing). `--fix` makes a single pass do both."""
     wiki = _make_wiki(tmp_path)
@@ -1029,7 +1029,7 @@ def test_adopt_inserts_spaces_in_existing_bare_indexes(tmp_path):
 
 def test_adopt_repairs_root_even_with_no_nested_spaces(tmp_path):
     """Bare root + zero children → `--adopt` still inserts `## Spaces`
-    into the root. Otherwise the spec floor is violated on day 1."""
+    into the root. Otherwise the navigation contract is violated on day 1."""
     root = tmp_path / "empty"
     root.mkdir()
     (root / "index.md").write_text("# empty\n")
@@ -1654,7 +1654,7 @@ def test_audit_json_emits_missing_spaces_section_for_bare_index_child(tmp_path):
     wiki = _make_wiki(tmp_path)
     rc, _, _ = _run(["--wiki", str(wiki), "add", "foo"])
     assert rc == 0
-    # Strip foo's `## Spaces` so it's a registered bare-index child.
+    # Strip foo's `## Spaces` so it's a registered child without `## Spaces`.
     (wiki / "foo" / "index.md").write_text("# foo\n")
     rc_j, out_j, _ = _run(["--wiki", str(wiki), "audit", "--json"])
     assert rc_j == 1
@@ -1948,7 +1948,7 @@ _HAS_GIT = _shutil.which("git") is not None
 
 def _make_space_dir(path: Path, title: str = "mounted") -> Path:
     """A plain external space: a folder with `index.md` carrying `## Spaces`
-    (the v1 spec floor — mounted targets must satisfy it for mount to accept)."""
+    (the v1 navigation contract — mounted targets must satisfy it for mount to accept)."""
     path.mkdir(parents=True, exist_ok=True)
     (path / "index.md").write_text(f"# {title}\n\n## Spaces\n\n")
     return path
@@ -1958,7 +1958,7 @@ def _make_git_repo(path: Path, title: str = "cloned", *, with_index: bool = True
     """A real local git repo with one commit (for clone tests).
 
     With `with_index` (default) the repo contains an `index.md` with
-    `## Spaces` (the v1 spec floor); otherwise only `notes.md` — used to
+    `## Spaces` (the v1 navigation contract); otherwise only `notes.md` — used to
     exercise the not-a-wiki mount path.
     """
     import os

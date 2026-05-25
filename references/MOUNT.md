@@ -26,7 +26,7 @@ wiki-spaces space mount <source> [path] --mode submodule|clone|symlink \
 - `--mode` — required. Mount mechanism changes trust semantics, so the choice is explicit.
 - `--dry-run` — print the plan; touch nothing.
 
-**The CLI auto-inserts `## Spaces`** into a bare-`index.md` ancestor as the first step of the mutation (via the chain helper, atomic under `flock`) — no manual setup required. The mount step refuses when the mounted source itself fails the v1 spec floor (no `index.md`, OR `index.md` exists but has no `## Spaces`); auto-inserting into an external mount would mutate someone else's repo, so wiki-spaces leaves that to the upstream owner. On a refusal the mount is rolled back per-mode; if rollback fails, you get a clear "manual cleanup required" message.
+**The CLI auto-inserts `## Spaces`** into an ancestor's `index.md` that lacks it, as the first step of the mutation (via the chain helper, atomic under `flock`) — no manual setup required. The mount step refuses when the mounted source itself fails the v1 navigation contract (no `index.md`, OR `index.md` exists but has no `## Spaces`); auto-inserting into an external mount would mutate someone else's repo, so wiki-spaces leaves that to the upstream owner. On a refusal the mount is rolled back per-mode; if rollback fails, you get a clear "manual cleanup required" message.
 
 Examples:
 

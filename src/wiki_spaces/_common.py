@@ -208,7 +208,7 @@ def nearest_space_root_strict(start: Path | None = None) -> Path | None:
     """Walk up from `start` (or CWD) returning the nearest folder with
     `index.md` containing a `## Spaces` heading.
 
-    The v1 spec floor: a wiki is `index.md` + `## Spaces`. Strict callers
+    The v1 navigation contract: a wiki is `index.md` + `## Spaces`. Strict callers
     (read-only commands, skills, doctor without `--fix`) refuse to operate
     on a folder that has `index.md` but no navigation contract.
     """
