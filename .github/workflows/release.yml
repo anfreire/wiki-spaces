@@ -65,7 +65,7 @@ jobs:
           path: dist/
 
       - name: Tag matches pyproject version
-        if: github.event_name == 'push'
+        if: github.ref_type == 'tag'
         run: |
           tag="${GITHUB_REF_NAME#v}"
           pkg=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
@@ -106,6 +106,11 @@ jobs:
     name: Publish to PyPI
     needs: [build, smoke]
     runs-on: ubuntu-latest
+    # Only publish from a tag ref. `workflow_dispatch` lets us trigger
+    # the test+build+smoke pipeline manually (e.g. to verify the wheel
+    # without publishing), but the publish step is gated on a real
+    # `v*.*.*` tag so a manual dispatch from `main` can't push a wheel.
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
     environment:
       name: pypi
       url: https://pypi.org/p/wiki-spaces
