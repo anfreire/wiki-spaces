@@ -1310,6 +1310,38 @@ def test_md_files_walker_skips_escaping_md_symlink_in_plain_folder(tmp_path):
     assert aliases[0][1] is True
 
 
+def test_walk_owned_md_files_skips_escaping_md_symlink(tmp_path):
+    """The FS walker that audit/promote use also needs the .md symlink
+    escape check — without it, a `notes/alias.md` symlinked at an
+    outside target would be audited as owned and promoted, even though
+    its content lives outside the wiki tree."""
+    wiki = _make_wiki(tmp_path)
+    notes = wiki / "notes"
+    notes.mkdir()
+    (notes / "ok.md").write_text("# ok\n")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "secret.md"
+    secret.write_text("# secret\n")
+    import os
+    os.symlink(secret, notes / "alias.md")
+
+    # Default scope: escaping `.md` symlink is invisible to the audit walker.
+    files_default = [
+        str(f.relative_to(wiki))
+        for f in space._walk_owned_md_files(wiki)
+    ]
+    assert "notes/ok.md" in files_default
+    assert "notes/alias.md" not in files_default
+
+    # With include_external=True: the file IS surfaced.
+    files_ext = [
+        str(f.relative_to(wiki))
+        for f in space._walk_owned_md_files(wiki, include_external=True)
+    ]
+    assert "notes/alias.md" in files_ext
+
+
 def test_space_files_refuses_unregistered_symlink_alias_scope(tmp_path):
     """`space files <symlink-alias-to-registered-space>` must refuse —
     the contract is exhaustive, and a user-made symlink whose target is

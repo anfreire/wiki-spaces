@@ -983,6 +983,18 @@ def _walk_owned_md_files(wiki_root: Path, *, include_external: bool = False) -> 
         for entry in entries:
             name = entry.name
             if entry.is_file() and entry.suffix == ".md":
+                # `.md` symlinks pointing outside the wiki tree are external
+                # content masquerading as owned — `audit`/`promote` would
+                # otherwise rewrite or report them under default scope.
+                # Apply the same escape check the directory branch below
+                # uses: skip by default, include only when caller opted in.
+                if entry.is_symlink():
+                    try:
+                        entry_real = entry.resolve()
+                        entry_real.relative_to(root_real)
+                    except (OSError, ValueError):
+                        if not include_external:
+                            continue
                 out.append(entry)
                 continue
             if not entry.is_dir():
