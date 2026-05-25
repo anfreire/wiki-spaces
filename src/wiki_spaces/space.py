@@ -499,6 +499,12 @@ def _walk_via_spaces_contract(
     Owned children are required to resolve under `wiki_root` (escaping
     paths are skipped); external children may legitimately resolve outside
     (that's the whole point of `shared/` symlinks).
+
+    Per the v1 contract, a child is a space only when its `index.md` is
+    present AND carries a `## Spaces` heading. A registered child whose
+    `index.md` lacks `## Spaces` is drift (audit reports it via the bare-
+    section pass) and is NOT yielded — consumer-visible spaces always
+    satisfy the navigation contract.
     """
     try:
         root_real = wiki_root.resolve()
@@ -540,7 +546,19 @@ def _walk_via_spaces_contract(
                     continue
             if child_real in visited:
                 continue
-            if not (child / "index.md").is_file():
+            child_index = child / "index.md"
+            if not child_index.is_file():
+                continue
+            # v1 contract: a space requires `index.md` AND `## Spaces`.
+            # A registered child whose `index.md` lacks the heading is
+            # drift; audit's bare-section pass reports it. Consumer
+            # traversal must not yield it (otherwise `space list` /
+            # `space files` would expose pre-v1 layouts as if valid).
+            try:
+                child_text = child_index.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if not _md.has_section(child_text, "Spaces"):
                 continue
             visited.add(child_real)
             yield (child, child_external)

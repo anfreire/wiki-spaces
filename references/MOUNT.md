@@ -14,7 +14,7 @@ Three mechanisms; pick by use case. The source can be any space — someone's wh
 
 ## The fast path: `wiki-spaces space mount`
 
-One command covers all three mechanisms. It validates the parent's `## Spaces` requirement, executes the mount, verifies the result has `index.md`, rolls back on failure, and registers the `## Spaces` entry:
+One command covers all three mechanisms. It validates the parent's `## Spaces` requirement, executes the mount, verifies the result has `index.md` with `## Spaces` (the v1 navigation contract; refuses on a bare target — auto-inserting into an external mount would mutate someone else's repo), rolls back on failure, and registers the `## Spaces` entry:
 
 ```sh
 wiki-spaces space mount <source> [path] --mode submodule|clone|symlink \

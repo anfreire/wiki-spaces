@@ -82,10 +82,10 @@ The commands below show the recommended `uvx` form (no install). If wiki-spaces 
 See [`MOUNT.md`](MOUNT.md) for the full playbook and trade-offs. Quick summary:
 
 1. The user must already have a canonical wiki set up (Branch A above). Confirm `wiki` is set in the config and valid.
-2. Identify the external wiki: a git URL, a local clone, or a folder with `index.md`.
+2. Identify the external wiki: a git URL, a local clone, or a folder with `index.md` carrying `## Spaces` (the upstream owner is responsible for the navigation contract — `space mount` refuses to insert it remotely).
 3. Decide the mount mechanism with the user: submodule (collaborative; recommended), clone (read-only one-time fetch), or symlink (local convenience).
 4. Decide the path inside the canonical wiki: typically `<wiki>/shared/<name>/` for team wikis.
-5. Run `uvx wiki-spaces space mount <source> --mode <mechanism>` — one command that executes the mount, verifies the result has `index.md`, and adds the `## Spaces` entry atomically. The destination path defaults to `shared/<basename-of-source>/`; pass an explicit path (e.g., `shared/<custom-name>`) only when the default doesn't fit. When the parent's `index.md` lacks `## Spaces`, the CLI inserts it as the first mutation step — no manual setup required. Use `--dry-run` to preview without touching anything, `--name "Display Label"` to override the registered entry label.
+5. Run `uvx wiki-spaces space mount <source> --mode <mechanism>` — one command that executes the mount, verifies the result has `index.md` with `## Spaces` (the v1 navigation contract; refuses on a bare target since auto-inserting into an external mount would mutate someone else's repo), and adds the `## Spaces` entry atomically. The destination path defaults to `shared/<basename-of-source>/`; pass an explicit path (e.g., `shared/<custom-name>`) only when the default doesn't fit. When the parent's `index.md` lacks `## Spaces`, the CLI inserts it as the first mutation step — no manual setup required. Use `--dry-run` to preview without touching anything, `--name "Display Label"` to override the registered entry label.
 
 ## Edge cases
 

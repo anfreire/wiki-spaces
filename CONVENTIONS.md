@@ -46,7 +46,7 @@ Skills locate the user's canonical wiki by reading `${XDG_CONFIG_HOME:-~/.config
 
 ```
 # wiki-spaces config
-# wiki: canonical wiki path (must contain index.md)
+# wiki: canonical wiki path (must contain index.md with `## Spaces`)
 # repo: path to wiki-spaces install (share dir from `wiki-spaces install`, or source checkout)
 wiki = /home/you/Wiki
 repo = /home/you/.local/share/wiki-spaces

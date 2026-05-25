@@ -208,6 +208,7 @@ def main(argv: list[str] | None = None) -> int:
 
     written: list[str] = []
     skipped: list[str] = []
+    over_cap_writes: list[str] = []
 
     def write(rel: str, content: str) -> None:
         f = root / rel
@@ -222,16 +223,31 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 _space._enforce_size_cap(f, content, root)
             except _space.SizeCapExceeded as e:
-                # Surface and skip this single write; the caller already
-                # returns 1 on git_failed; emit the same shape here.
+                # Surface and skip this single write. Track the over-cap
+                # path so we can fail the whole `init` invocation if the
+                # over-cap write was the wiki's `index.md` (without it,
+                # the rest of the scaffold is meaningless and we MUST NOT
+                # write the config pointing at a non-wiki path).
                 print(f"  ! size cap: {e}", file=sys.stderr)
                 skipped.append(rel + " (over cap)")
+                over_cap_writes.append(rel)
                 return
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(content)
         written.append(rel)
 
     write("index.md", build_index_md(name, description))
+    # If the wiki's `index.md` itself was refused by the size-cap helper,
+    # there is no wiki — every later step (folders, adopt, config write)
+    # assumes the index exists. Stop with a non-zero exit so the user
+    # shortens the description and re-runs.
+    if "index.md" in over_cap_writes:
+        print(
+            "  ! init aborted: `index.md` would exceed the per-file cap. "
+            "Shorten `--description` and re-run.",
+            file=sys.stderr,
+        )
+        return 2
 
     for opt in args.extras:
         match opt:

@@ -1222,6 +1222,27 @@ def test_contract_walker_includes_external_with_flag(tmp_path):
     assert paths.get("shared/team") is True
 
 
+def test_contract_walker_skips_registered_child_without_spaces_section(tmp_path):
+    """v1 contract: a space requires `index.md` AND `## Spaces`. A registered
+    child whose `index.md` lacks the heading is drift (audit's bare-section
+    pass reports it). The consumer walker MUST NOT yield it — `space list`
+    and `space files` would otherwise surface a non-wiki as a valid space."""
+    wiki = _make_wiki(tmp_path)
+    # Register `foo/` in root's `## Spaces` then strip foo's heading so the
+    # child looks valid by inode-presence but fails the v1 contract.
+    rc, _, _ = _run(["--wiki", str(wiki), "add", "foo"])
+    assert rc == 0
+    (wiki / "foo" / "index.md").write_text("# foo\n")  # no `## Spaces`
+    yielded = list(space._walk_via_spaces_contract(wiki))
+    paths = [str(p.relative_to(wiki)) for p, _ in yielded]
+    assert "foo" not in paths, (
+        "contract walker yielded a registered child whose index.md lacks "
+        "`## Spaces` — consumer traversal must skip drift, not surface it"
+    )
+    # `.` (the wiki root) is yielded as always.
+    assert "." in paths
+
+
 def test_md_files_walker_descends_plain_folders_inside_registered_space(tmp_path):
     """Inside a registered space, plain folders (no `index.md`) are traversed
     for `.md` files — but child-space boundaries are skipped (those are
@@ -1835,20 +1856,27 @@ def test_promote_in_lock_size_check_catches_concurrent_growth(tmp_path, monkeypa
     assert (wiki / "page.md").is_file()
 
 
-def test_init_refuses_over_cap_description(tmp_path):
+def test_init_refuses_over_cap_description(tmp_path, capsys):
     """init's `--description` writes to `index.md` whose cap is 5000.
-    A 6000-char description is refused; no `index.md` is left behind."""
+    A 6000-char description is refused: no `index.md` is left behind AND
+    `init` exits non-zero so the user fixes the description before
+    re-running. The config is NOT written either — pointing it at a
+    non-wiki path would corrupt later resolves."""
     huge = "x" * 6000
     root = tmp_path / "wiki"
     from wiki_spaces import init_wiki
     rc = init_wiki.main([
         str(root), "--description", huge, "--no-config",
     ])
-    # init's write helper logs the size-cap skip but exits 0 (other writes
-    # may still happen). The critical check: the over-cap index.md is NOT
-    # on disk after the call.
+    # Exit non-zero so callers / CI can detect the failure.
+    assert rc != 0, "init returned 0 despite refusing the wiki index"
+    # The over-cap index.md is NOT on disk.
     assert not (root / "index.md").is_file(), \
         "init wrote an over-cap index.md despite the size-cap helper"
+    # Stderr explains the failure so the user sees what to fix.
+    err = capsys.readouterr().err
+    assert "size cap" in err
+    assert "init aborted" in err
 
 
 # ---------- PR-M: log rotation rejection + audit summary scope ----------
