@@ -31,8 +31,9 @@ One-shot maintenance for the user's canonical wiki: status, audit (read-only), n
 
    For `audit` and `status`: report only. For `normalize`, `colorize`, and full sweep: preview changes and ask before modifying unless the user explicitly said "fix" or "apply".
 4. **Status.** Walk the wiki via `wiki-spaces space files` (add `--include-external` when the user opted in). The contract walker honors trust scope automatically — external spaces are excluded by default. Always exclude `.obsidian/` and `_archives/` (the framework already skips those). Count pages per top-level folder; report `.manifest.json` synced projects (if present); count tags and top 10 by usage (if frontmatter in use); show last `log.md` entry (if present).
-5. **Audit (report only).** Run `wiki-spaces space audit --json` (add `--wiki <path>` when the scope is a named sub-space) for the structural facts and consume the JSON document — easier than parsing human output, and the exit code is included. It walks owned scope and reports seven things:
+5. **Audit (report only).** Run `wiki-spaces space audit --json` (add `--wiki <path>` when the scope is a named sub-space) for the structural facts and consume the JSON document — easier than parsing human output, and the exit code is included. It walks owned scope and reports eight things:
    - **`## Spaces` drift** — listed entries with no space on disk, and sub-folders with `index.md` not listed (the navigation contract per AGENTS.md; `## Items` is human-maintained and not audited).
+   - **Missing `## Spaces` section** (`missing_spaces_section` in the JSON payload) — owned spaces whose `index.md` lacks the heading entirely. Violates the v1 navigation contract ("no `## Spaces` means no wiki"). `audit --fix` inserts an empty section to repair. Flips the exit code.
    - **Broken `[[wikilinks]]`** — links resolving to no page by path, filename, or frontmatter alias; links inside fenced/inline code and frontmatter are ignored.
    - **Size violations** — pages exceeding their per-pattern cap from CONVENTIONS / `_meta/limits.md` (defaults: `index.md` 5K, `log.md` 100K, `*.md` 15K). Flips the exit code like drift and broken links.
    - **Approaching cap** — pages at ≥80% of their cap. Informational; does not flip the exit code. Surface these in the report so the producer can plan a split before the next over-cap rejection.
@@ -40,7 +41,7 @@ One-shot maintenance for the user's canonical wiki: status, audit (read-only), n
    - **Malformed `## Spaces` entries** — empty href, absolute href, `..` segment, escape-after-resolution, duplicate dir target. Author errors the framework cannot reconstruct; `audit --fix` does NOT repair these. Flips the exit code.
    - **Duplicate aliases** — two owned pages declaring the same alias make wikilink resolution nondeterministic. Flips the exit code; the producer disambiguates.
 
-   The CLI is the source of truth for those seven — don't re-derive them by hand. Then add the two judgment-bearing checks it does not do:
+   The CLI is the source of truth for those eight — don't re-derive them by hand. Then add the two judgment-bearing checks it does not do:
    - **Frontmatter field completeness.** On pages that already have frontmatter, check required fields per CONVENTIONS / Frontmatter schema. Pages without frontmatter are NOT flagged (mixed adoption is allowed). Special files exempt.
    - **Stale content.** Only if `.manifest.json` is present. Compare `updated:` to `last_synced`; flag project-scoped pages stale > 30 days.
 
