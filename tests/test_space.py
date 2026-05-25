@@ -1509,6 +1509,33 @@ def test_audit_fix_does_not_register_meta_descendants_as_spaces(tmp_path):
     )
 
 
+def test_audit_flags_reserved_folder_entries_as_malformed(tmp_path):
+    """The contract walker prunes `## Spaces` entries pointing at hidden,
+    `_archives`, or `_meta` paths (consumer-invisible). Audit MUST flag
+    such entries as malformed — otherwise a pre-v1 wiki carrying e.g.
+    `- [_meta/internal/](_meta/internal/index.md)` produces a clean
+    audit while `space list` and `space files` hide the entry. That's
+    the producer/consumer break audit exists to surface."""
+    wiki = _make_wiki(tmp_path)
+    # Plant a v1-incompatible layout: registered `_meta/internal/` with an
+    # actual index.md on disk (so it's NOT stale per existing checks).
+    (wiki / "_meta" / "internal").mkdir(parents=True)
+    (wiki / "_meta" / "internal" / "index.md").write_text(
+        "# internal\n\n## Spaces\n\n"
+    )
+    idx = wiki / "index.md"
+    idx.write_text(
+        idx.read_text()
+        + "- [_meta/internal/](_meta/internal/index.md)\n"
+    )
+    rc, out, err = _run(["--wiki", str(wiki), "audit"])
+    # Must flip exit code because the entry is malformed under v1.
+    assert rc != 0, "audit passed a reserved-folder `## Spaces` entry clean"
+    combined = out + err
+    assert "_meta/internal" in combined
+    assert "reserved" in combined or "malformed" in combined
+
+
 def test_contract_walker_skips_reserved_folder_entries(tmp_path):
     """Belt-and-suspenders: even when `## Spaces` lists an entry under
     a reserved folder (hidden / `_archives` / `_meta`) — e.g. a pre-v1

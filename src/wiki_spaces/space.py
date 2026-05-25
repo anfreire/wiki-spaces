@@ -2346,6 +2346,25 @@ def _audit_malformed_entries(
             if ".." in href_path.parts:
                 issues.append((space, f"href contains `..`: {href}"))
                 continue
+            # Reserved-folder hrefs per CONVENTIONS / Reserved top-level
+            # folder names. The consumer walker prunes these on read, so
+            # an entry like `- [_meta/internal/](_meta/internal/index.md)`
+            # is invisible to `space list` / `space files`. Audit must
+            # flag it — otherwise a pre-v1 layout passes clean while
+            # consumers can't see the registered space (producer/consumer
+            # break unrepaired).
+            if any(
+                part.startswith(".") or part in ("_archives", "_meta")
+                for part in href_path.parts
+            ):
+                issues.append((
+                    space,
+                    f"reserved-folder href: {href} (hidden / `_archives` "
+                    "/ `_meta` paths are pruned by the consumer walker; "
+                    "remove the entry or move the content to a non-reserved "
+                    "path)",
+                ))
+                continue
             try:
                 resolved = (space / href).resolve()
             except OSError:
