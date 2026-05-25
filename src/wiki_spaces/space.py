@@ -1053,8 +1053,11 @@ def _walk_owned_md_files(wiki_root: Path, *, include_external: bool = False) -> 
     pruned — a foreign submodule at `projects/external/` is skipped even
     though `projects/` itself is owned (a plain `rglob` plus top-level filter
     would miss it). Mirrors `_walk_owned_spaces`'s realpath-visited guard so
-    in-tree symlink cycles can't hang the walk. Hidden directories and
-    `_archives/` are excluded.
+    in-tree symlink cycles can't hang the walk. Hidden directories,
+    `_archives/`, and `_meta/` are excluded — `_meta/limits.md` /
+    `_meta/taxonomy.md` are configuration files the audit/promote walkers
+    should never treat as content (CONVENTIONS / Reserved top-level
+    folder names).
 
     When `include_external=True`, external subtrees are descended into and
     their `.md` files are included — used by `audit --include-external`.
@@ -1091,7 +1094,7 @@ def _walk_owned_md_files(wiki_root: Path, *, include_external: bool = False) -> 
                 continue
             if not entry.is_dir():
                 continue
-            if name.startswith(".") or name == "_archives":
+            if name.startswith(".") or name in ("_archives", "_meta"):
                 continue
             if name.startswith("wiki-spaces-promote-"):
                 # Defensive: snapshots used by `space promote` live in /tmp, but

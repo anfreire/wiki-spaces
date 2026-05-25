@@ -1431,6 +1431,32 @@ def test_space_files_explicit_external_scope_allowed_without_global_flag(tmp_pat
     assert "shared/team/page.md" in out
 
 
+def test_walk_owned_md_files_skips_meta_directory(tmp_path):
+    """`_meta/` holds config files (limits.md, taxonomy.md) per CONVENTIONS
+    / Reserved top-level folder names. The owned-md walker feeds audit's
+    content/size/broken-wikilink checks and promote's link-rewrite
+    candidate collection — none of which should treat `_meta/*.md` as
+    content. Skip the directory the same way `_archives/` is skipped."""
+    wiki = _make_wiki(tmp_path)
+    # An owned content page that the walker SHOULD surface.
+    (wiki / "owned.md").write_text("# owned\n")
+    # `_meta/*.md` files the walker MUST skip.
+    (wiki / "_meta").mkdir()
+    (wiki / "_meta" / "limits.md").write_text(
+        "| Pattern | Cap (chars) |\n|---|---|\n| index.md | 5000 |\n"
+    )
+    (wiki / "_meta" / "taxonomy.md").write_text("# taxonomy\n")
+    files = space._walk_owned_md_files(wiki)
+    paths = [str(p.relative_to(wiki)) for p in files]
+    assert "owned.md" in paths
+    for bad in ("_meta/limits.md", "_meta/taxonomy.md"):
+        assert bad not in paths, (
+            f"owned-md walker yielded `_meta/` file {bad!r} — "
+            "the walker must skip `_meta/` so audit/promote don't "
+            "treat config files as content"
+        )
+
+
 def test_audit_fix_does_not_register_meta_descendants_as_spaces(tmp_path):
     """`_meta/` is reserved for config files (limits.md, taxonomy.md);
     no space lives there. The FS walker (`_walk_classified`, used by
