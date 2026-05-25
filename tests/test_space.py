@@ -93,10 +93,30 @@ def test_validate_rel_path_accepts_nested():
     assert ok and err is None
 
 
-def test_validate_rel_path_accepts_hidden_non_git():
-    # Matches `init --folders` policy: only .git is reserved.
-    ok, err = space._validate_rel_path(".archive")
-    assert ok and err is None
+def test_validate_rel_path_rejects_hidden_segments():
+    """Hidden directories (dot-prefixed) are skipped by every consumer
+    walker per CONVENTIONS / Reserved top-level folder names. The
+    producer must not register them either, or the entry lands in
+    `## Spaces` with no consumer to read it (producer/consumer break).
+    Refuse every hidden segment, not just `.git`."""
+    for bad in (".archive", ".config", ".cache", ".obsidian", ".hidden"):
+        ok, err = space._validate_rel_path(bad)
+        assert not ok, f"hidden segment {bad!r} accepted"
+        assert "hidden" in err or ".git" in err
+    # Nested hidden also rejected.
+    ok, err = space._validate_rel_path("projects/.cache")
+    assert not ok
+
+
+def test_validate_rel_path_rejects_reserved_underscore_segments():
+    """`_archives/` and `_meta/` carry tool-level behavior — `_archives`
+    is excluded from audit walks; `_meta` holds config files like
+    `_meta/limits.md`. Neither should be registered as a space; a
+    `## Spaces` entry there would never be reachable by consumers."""
+    for bad in ("_archives", "_meta", "projects/_archives", "_meta/foo"):
+        ok, err = space._validate_rel_path(bad)
+        assert not ok, f"reserved segment {bad!r} accepted"
+        assert "reserved" in err
 
 
 def test_validate_rel_path_rejects_dot_git():
@@ -1409,6 +1429,45 @@ def test_space_files_explicit_external_scope_allowed_without_global_flag(tmp_pat
     ])
     assert rc == 0, err
     assert "shared/team/page.md" in out
+
+
+def test_contract_walker_skips_reserved_folder_entries(tmp_path):
+    """Belt-and-suspenders: even when `## Spaces` lists an entry under
+    a reserved folder (hidden / `_archives` / `_meta`) — e.g. a pre-v1
+    wiki that registered such paths before the producer-side validator
+    refused them — the contract walker must skip them per CONVENTIONS /
+    Reserved top-level folder names. Otherwise consumers surface
+    content the rest of the toolchain (audit walks, wiki-tend scans)
+    deliberately excludes."""
+    wiki = _make_wiki(tmp_path)
+    # Manually create the (would-be-refused-by-producer) reserved layouts.
+    (wiki / ".old-notes").mkdir()
+    (wiki / ".old-notes" / "index.md").write_text("# old\n\n## Spaces\n\n")
+    (wiki / "_archives" / "y2024").mkdir(parents=True)
+    (wiki / "_archives" / "y2024" / "index.md").write_text(
+        "# 2024\n\n## Spaces\n\n"
+    )
+    (wiki / "_meta" / "internal").mkdir(parents=True)
+    (wiki / "_meta" / "internal" / "index.md").write_text(
+        "# internal\n\n## Spaces\n\n"
+    )
+    # Hand-edit root's `## Spaces` to list all three (pre-v1 producer).
+    idx = wiki / "index.md"
+    idx.write_text(
+        idx.read_text()
+        + "- [.old-notes/](.old-notes/index.md)\n"
+        + "- [_archives/y2024/](_archives/y2024/index.md)\n"
+        + "- [_meta/internal/](_meta/internal/index.md)\n"
+    )
+    yielded = [
+        str(p.relative_to(wiki))
+        for p, _ in space._walk_via_spaces_contract(wiki)
+    ]
+    for bad in (".old-notes", "_archives/y2024", "_meta/internal"):
+        assert bad not in yielded, (
+            f"contract walker yielded reserved-folder entry {bad!r} — "
+            "the walker must prune hidden / `_archives` / `_meta` paths"
+        )
 
 
 def test_contract_walker_classifies_descendant_of_foreign_submodule_as_external(tmp_path):

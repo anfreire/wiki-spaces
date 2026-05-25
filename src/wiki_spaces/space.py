@@ -112,16 +112,24 @@ def _resolve_wiki_for_repair(explicit: Path | None = None) -> Path | None:
 def _validate_rel_path(rel: str) -> tuple[bool, str | None]:
     """Validate a user-provided relative path. (ok, error_message).
 
-    Same rule as `init --folders`: reject empty, `.`, `..`, and `.git`
-    segments. Other hidden names (`.archive`, `.config`, etc.) are allowed.
+    Rejects:
+    - empty, `.`, `..`, and `.git` segments
+    - any hidden-directory segment (`.X`): the consumer walker skips
+      hidden directories per CONVENTIONS / Reserved top-level folder
+      names; the producer must not register spaces the consumer ignores.
+    - `_archives` and `_meta` segments: reserved by convention
+      (`_archives` is excluded from audit/`wiki-tend` walks, `_meta`
+      holds config files like `_meta/limits.md`). Registering a space
+      under either creates a `## Spaces` entry no consumer reads.
+    - Markdown link metacharacters (`[`, `]`, `(`, `)`, `{`, `}`) in
+      any segment: these would otherwise land in `## Spaces` entries
+      as raw bytes inside the link syntax — `- [foo)bar/](foo)bar/index.md)`
+      — which the parser's `ENTRY_RE` cannot read (regex stops at the
+      first `)` or `]`).
 
-    Additionally refuses Markdown link metacharacters in path segments
-    (`[`, `]`, `(`, `)`). These would otherwise land in `## Spaces`
-    entries as raw bytes inside the link syntax — `- [foo)bar/](foo)bar/index.md)`
-    — which the parser's `ENTRY_RE` cannot read (regex stops at the
-    first `)` or `]`). Producing entries the consumer can't parse is
-    the v1 producer/consumer break we exist to prevent; refuse the path
-    upfront so the user picks a parser-safe name.
+    `shared/` is NOT refused at validation — it has dedicated handling
+    via `--force-external` in `cmd_add` and is the default mount
+    destination per CONVENTIONS / Reserved top-level folder names.
     """
     rel = rel.strip().rstrip("/")
     if not rel:
@@ -134,6 +142,18 @@ def _validate_rel_path(rel: str) -> tuple[bool, str | None]:
             return False, "path may not contain '.', '..', or empty segments"
         if part == ".git":
             return False, "path may not contain '.git' segments"
+        if part.startswith("."):
+            return False, (
+                f"path may not contain hidden segments ({part!r}); hidden "
+                "directories are skipped by every consumer walker per "
+                "CONVENTIONS / Reserved top-level folder names"
+            )
+        if part in ("_archives", "_meta"):
+            return False, (
+                f"path segment {part!r} is reserved by convention — "
+                f"{part}/ is excluded from consumer walks "
+                "(see CONVENTIONS / Reserved top-level folder names)"
+            )
         if any(c in part for c in "[](){}"):
             return False, (
                 "path may not contain Markdown link metacharacters "
@@ -542,6 +562,17 @@ def _walk_via_spaces_contract(
                 continue
             href_path = Path(href_norm)
             if href_path.is_absolute() or ".." in href_path.parts:
+                continue
+            # Reserved-folder pruning per CONVENTIONS / Reserved top-level
+            # folder names: hidden segments, `_archives`, and `_meta` are
+            # always skipped by the consumer walker. Belt-and-suspenders
+            # with the producer-side `_validate_rel_path` refusal — covers
+            # pre-v1 wikis that may carry `## Spaces` entries for such
+            # paths registered before the producer-side check existed.
+            if any(
+                part.startswith(".") or part in ("_archives", "_meta")
+                for part in href_path.parts
+            ):
                 continue
             child = current / href_norm
             try:
