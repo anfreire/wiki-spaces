@@ -7,7 +7,7 @@ Concrete shapes the canonical wiki can take. None are special — the spec doesn
 ## Minimum viable (any use case)
 
 ```
-~/Wiki/
+~/Documents/Wiki/
 └── index.md            ← title + `## Spaces`
 ```
 
@@ -18,7 +18,7 @@ The `wiki = /home/<user>/Wiki` entry in `~/.config/wiki-spaces/config` makes thi
 ## Developer notebook
 
 ```
-~/Wiki/
+~/Documents/Wiki/
 ├── index.md
 ├── log.md
 ├── _meta/
@@ -41,7 +41,7 @@ Cross-project knowledge at the root; project-specific knowledge under `projects/
 ## Research wiki
 
 ```
-~/Wiki/
+~/Documents/Wiki/
 ├── index.md
 ├── log.md
 ├── _meta/
@@ -62,7 +62,7 @@ Research-flavored layout. `papers/` for paper-by-paper notes; `topics/` for cros
 ## Writing project
 
 ```
-~/Wiki/
+~/Documents/Wiki/
 ├── index.md
 ├── drafts/               ← in-progress chapters / posts / pieces
 ├── characters/           ← character bios (fiction)
@@ -77,7 +77,7 @@ For fiction, journalism, or any structured writing project. Tags are usually fre
 ## Recipe collection
 
 ```
-~/Wiki/
+~/Documents/Wiki/
 ├── index.md
 ├── recipes/              ← one file per recipe
 ├── ingredients/          ← notes on ingredients, sources, substitutions
@@ -90,7 +90,7 @@ Domain-specific layout. Skills work fine — search for "what do I know about pi
 ## Personal knowledge
 
 ```
-~/Wiki/
+~/Documents/Wiki/
 ├── index.md
 ├── journal/              ← dated entries
 ├── learning/             ← topics I'm studying
@@ -105,7 +105,7 @@ A personal life wiki. Privacy matters more here — typically not git-shared, po
 ## Team reference
 
 ```
-~/Wiki/
+~/Documents/Wiki/
 ├── index.md
 ├── runbooks/             ← incident response, ops procedures
 ├── decisions/            ← architecture decisions (ADRs)
@@ -119,7 +119,7 @@ A shared team reference. Usually git-backed and shared (see the "Adding shared c
 ## Adding shared content (any of the above)
 
 ```
-~/Wiki/
+~/Documents/Wiki/
 ├── index.md
 ├── <your shape from above>
 └── shared/

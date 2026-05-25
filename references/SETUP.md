@@ -27,13 +27,13 @@ If the config is missing or `wiki` is unset, the user has not set up yet — dri
 
 ## Preflight (before anything)
 
-This briefing drives the **full installation** (skills + scaffold). For a no-install start, run `mkdir -p ~/Wiki && printf '# My Wiki\n\n## Spaces\n\n' > ~/Wiki/index.md` — that's a complete wiki. The skills resolve the target wiki via **explicit path → config → CWD ancestor**, so a no-install wiki still works as long as the agent invokes the skills with the wiki path or from inside it.
+This briefing drives the **full installation** (skills + scaffold). For a no-install start, run `mkdir -p ~/Documents/Wiki && printf '# My Wiki\n\n## Spaces\n\n' > ~/Documents/Wiki/index.md` — that's a complete wiki. The skills resolve the target wiki via **explicit path → config → CWD ancestor**, so a no-install wiki still works as long as the agent invokes the skills with the wiki path or from inside it.
 
 For the full installation, verify the user's machine has one of:
 - **Recommended:** [`uv`](https://docs.astral.sh/uv/) on PATH (`curl -LsSf https://astral.sh/uv/install.sh | sh` or `brew install uv`). Used for `uvx wiki-spaces …` (no install) or `uv tool install wiki-spaces` (permanent). uv provisions Python automatically.
 - **Fallback:** plain Python `>=3.11` + `pip` (or `pipx`). Use `pip install --user wiki-spaces` (or `pipx install wiki-spaces`) if uv is unavailable.
 
-`git` is **optional** — recommended for backing up the wiki and for the dev-from-source flow, but not required for install. If the user only wants the no-install path, the one-line recipe in the paragraph above is the complete instruction (`mkdir -p ~/Wiki && printf …`); preflight isn't needed. Pair it with `AGENTS.md` (bundled in the install) when the agent wants the spec — `README.md` is repo-only and not materialized by `wiki-spaces install`.
+`git` is **optional** — recommended for backing up the wiki and for the dev-from-source flow, but not required for install. If the user only wants the no-install path, the one-line recipe in the paragraph above is the complete instruction (`mkdir -p ~/Documents/Wiki && printf …`); preflight isn't needed. Pair it with `AGENTS.md` (bundled in the install) when the agent wants the spec — `README.md` is repo-only and not materialized by `wiki-spaces install`.
 
 ## Default path
 
@@ -47,7 +47,7 @@ The commands below show the recommended `uvx` form (no install). If wiki-spaces 
 
 1. **Ask once — gather everything in a single message.** In one message, ask the user:
    - **What the wiki is for**, in their own words (one or two sentences) — *"recipes I'm tweaking, plus technique notes"*, *"homeschool curriculum across four kids"*.
-   - **Whether they already have a folder of notes** (or an existing wiki) they want to use — and if so, its path — **or want a fresh one.** Default location for a fresh wiki: `~/Wiki`.
+   - **Whether they already have a folder of notes** (or an existing wiki) they want to use — and if so, its path — **or want a fresh one.** Default location for a fresh wiki: `~/Documents/Wiki`.
 
    Don't show a menu and don't split this across messages. Everything else — folder layout, opt-in conventions, git, display name — you infer; don't ask.
 
@@ -62,7 +62,7 @@ The commands below show the recommended `uvx` form (no install). If wiki-spaces 
    | **Personal knowledge** | `journal/`, `learning/`, `contacts/`, `places/`, `interests/` | (none recommended) | optional, often no (privacy) |
    | **Team reference** | `runbooks/`, `decisions/`, `services/`, `people/`, `clients/` | `_meta/taxonomy.md` + `log.md` | yes |
 
-   Present the result in one plain-language block — never enumerate internal files like `log.md` or `.manifest.json` as menu items: *"I'll &lt;create a wiki at ~/Wiki | adopt your folder at ~/notes&gt;, set up &lt;folders&gt;, &lt;a tag vocabulary and an audit log / nothing extra&gt;, and &lt;initialize git / skip git&gt;, then link the skills into your AI tools. Sound right, or adjust anything?"* Take adjustments in the user's own words (*"rename recipes to desserts"*, *"skip git"*) and re-present until confirmed. If they ask what an opt-in does, answer in 1-2 sentences. Flat wikis (no folders) are fully valid — the proposal can be just `index.md`. See `references/EXAMPLES.md` for full shape examples.
+   Present the result in one plain-language block — never enumerate internal files like `log.md` or `.manifest.json` as menu items: *"I'll &lt;create a wiki at ~/Documents/Wiki | adopt your folder at ~/notes&gt;, set up &lt;folders&gt;, &lt;a tag vocabulary and an audit log / nothing extra&gt;, and &lt;initialize git / skip git&gt;, then link the skills into your AI tools. Sound right, or adjust anything?"* Take adjustments in the user's own words (*"rename recipes to desserts"*, *"skip git"*) and re-present until confirmed. If they ask what an opt-in does, answer in 1-2 sentences. Flat wikis (no folders) are fully valid — the proposal can be just `index.md`. See `references/EXAMPLES.md` for full shape examples.
 
    **Adopting an existing folder.** If the user pointed at a folder they already have, the wiki *is* that folder. Adopt it with `wiki-spaces init <their-path> --adopt`: it adds `index.md` if missing (with `## Spaces` from t=0), then walks every nested folder containing `index.md` and registers each in the appropriate ancestor's `## Spaces` — so audit reports zero drift on day 1. External subtrees (under `shared/`, foreign-origin submodules, escaping symlinks) are skipped with a per-skip stderr notice; pass `--include-external` to opt back in. A fresh wiki omits `--adopt` (nothing to enumerate); it still gets `## Spaces` from t=0.
    - *Port as-is* (default) — `init <path> --adopt` with no `--folders`: leaves their structure untouched, just registers what's already there.

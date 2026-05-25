@@ -29,7 +29,7 @@ The agent reads [`SETUP.md`](references/SETUP.md), asks what the wiki is for and
 
 ```bash
 uvx wiki-spaces install                  # link skills into detected harnesses
-uvx wiki-spaces init ~/Wiki              # scaffold a fresh wiki + register it
+uvx wiki-spaces init ~/Documents/Wiki              # scaffold a fresh wiki + register it
 uvx wiki-spaces init ~/notes --adopt     # OR adopt an existing folder of notes
 uvx wiki-spaces doctor --no-net          # verify
 ```
@@ -51,7 +51,7 @@ uvx wiki-spaces space mount <url> --mode submodule              # mount an exter
 ### No tooling at all
 
 ```sh
-mkdir -p ~/Wiki && printf '# My Wiki\n\n## Spaces\n\n' > ~/Wiki/index.md
+mkdir -p ~/Documents/Wiki && printf '# My Wiki\n\n## Spaces\n\n' > ~/Documents/Wiki/index.md
 ```
 
 A folder with `index.md` + `## Spaces` is already a complete wiki — the whole spec is one page, [`AGENTS.md`](AGENTS.md). The skills still work on it (they discover the wiki from your current directory); run `wiki-spaces init` later to register it for config-based discovery.
