@@ -1284,6 +1284,34 @@ def cmd_audit(args: argparse.Namespace) -> int:
                     label_str = f"{child_rel}/"
                     href = f"{child_rel}/index.md"
 
+                    # Skip if the child's own `index.md` still lacks
+                    # `## Spaces` after pass 1 — pass 1 must have failed
+                    # to repair it (e.g., over-cap insertion was rejected).
+                    # Registering the entry here would create the producer/
+                    # consumer break the v1 contract is built to prevent:
+                    # parent's `## Spaces` would advertise the child while
+                    # the contract walker (which checks `## Spaces` on
+                    # entry) skips it. The bare-child report above already
+                    # surfaced the underlying issue; don't compound it.
+                    child_index = space / child_rel / "index.md"
+                    try:
+                        child_text = child_index.read_text(encoding="utf-8")
+                    except OSError:
+                        print(
+                            f"  ! could not register [{label_str}] in "
+                            f"{label}/index.md: child index unreadable",
+                            file=sys.stderr,
+                        )
+                        continue
+                    if not _md.has_section(child_text, "Spaces"):
+                        print(
+                            f"  ! refusing to register [{label_str}] in "
+                            f"{label}/index.md: child still lacks `## Spaces` "
+                            "(pass 1 repair failed — fix that first).",
+                            file=sys.stderr,
+                        )
+                        continue
+
                     # Route through a locked mutate that runs `_enforce_size_cap`
                     # on the projected text — `audit --fix` is a framework
                     # writer and must respect per-file caps. `_atomic_register_

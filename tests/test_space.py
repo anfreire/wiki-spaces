@@ -925,6 +925,49 @@ def test_audit_reports_bare_index_child_without_fix(tmp_path):
     assert "no `## Spaces`" in out
 
 
+def test_audit_fix_skips_registering_when_child_section_repair_failed(tmp_path):
+    """If pass 1 fails to insert `## Spaces` into a bare child (e.g.,
+    the child's `index.md` is over cap and cannot fit the heading),
+    pass 2 must NOT register the child in the parent's `## Spaces`.
+    Otherwise the parent advertises a child that the contract walker
+    will skip — the exact producer/consumer break the v1 contract
+    exists to prevent. Set `index.md` cap to 50; plant a bare child
+    whose body already exceeds 50 so the section-insert is refused;
+    assert the parent's `## Spaces` does not register the bare child."""
+    wiki = _make_wiki(tmp_path)
+    # Tight `index.md` cap so a bare child near the cap can't get the
+    # heading inserted (the insertion pushes it past).
+    (wiki / "_meta").mkdir()
+    (wiki / "_meta" / "limits.md").write_text(
+        "| Pattern | Cap (chars) |\n"
+        "|---|---|\n"
+        "| index.md | 50 |\n"
+    )
+    # Plant a bare nested space whose body already nearly fills the cap.
+    (wiki / "foo").mkdir()
+    (wiki / "foo" / "index.md").write_text("# foo\n\n" + ("x" * 45) + "\n")
+    foo_before = (wiki / "foo" / "index.md").read_text()
+
+    rc, _out, err = _run(["--wiki", str(wiki), "audit", "--fix"])
+
+    # The bare child's pass-1 repair was refused by the size cap.
+    assert (wiki / "foo" / "index.md").read_text() == foo_before
+    assert "size cap" in err
+    # And pass 2 MUST NOT have registered the bare child in root —
+    # registering would create the producer/consumer break.
+    root_entries = _md.parse_section_entries(
+        (wiki / "index.md").read_text(), "Spaces"
+    )
+    assert not any(e.href and "foo/" in e.href for e in root_entries), (
+        "audit --fix registered a child whose `## Spaces` repair failed "
+        "— parent's contract advertises a non-wiki the consumer walker skips"
+    )
+    # Refusal surfaces the rationale so the user can act.
+    assert "still lacks `## Spaces`" in err
+    # Exit non-zero — drift remains.
+    assert rc != 0
+
+
 def test_audit_fix_register_missing_entry_respects_size_cap(tmp_path, monkeypatch):
     """`audit --fix` is a framework writer — registering a missing entry
     in the ancestor's `## Spaces` must enforce the per-file cap. Pre-fix,
