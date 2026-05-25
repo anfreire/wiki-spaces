@@ -1,4 +1,4 @@
-"""`wiki-spaces space` subcommands: add, remove, mount, promote, audit, log, manifest.
+"""`wiki-spaces space` subcommands: add, remove, mount, promote, audit, list, files, log, check-size.
 
 Maintains the `## Spaces` exhaustiveness contract automatically so users
 never edit ancestor `index.md` files by hand to track child spaces.
@@ -107,12 +107,6 @@ def _resolve_wiki_for_repair(explicit: Path | None = None) -> Path | None:
         if (p / "index.md").is_file():
             return p
     return nearest_space_root_for_repair()
-
-
-# Kept as a thin alias so internal callers in the middle of the refactor
-# don't break. Equivalent to the repair resolver. Remove when all callers
-# have migrated.
-_resolve_wiki = _resolve_wiki_for_repair
 
 
 def _validate_rel_path(rel: str) -> tuple[bool, str | None]:

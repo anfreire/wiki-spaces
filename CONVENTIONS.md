@@ -268,7 +268,7 @@ Aliases are mappings the normalizer uses to rewrite non-canonical tags to canoni
 
 ## `_meta/limits.md`
 
-**Size discipline is default-on, configurable via this file.** Per-file character caps enforced at write time (by `wiki-update` and the `wiki-spaces space log` / `space manifest set` CLI helpers) and audited by `wiki-tend` / `wiki-spaces space audit`. The discipline: hard caps, errors on overflow, no silent truncation — the producer must consolidate, split, or promote before the next write.
+**Size discipline is default-on, configurable via this file.** Per-file character caps enforced at write time (by every framework writer — `wiki-spaces init`, `space add`, `space mount`, `space promote`, `space log`, the chain helper's ancestor mutations) and audited by `wiki-tend` / `wiki-spaces space audit`. The discipline: hard caps, errors on overflow, no silent truncation — the producer must consolidate, split, or promote before the next write.
 
 **Defaults (override via this file):**
 

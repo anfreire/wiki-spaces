@@ -39,7 +39,7 @@ def _run(args: list[str], *, stdin: str | None = None) -> tuple[int, str, str]:
     return rc, out.getvalue(), err.getvalue()
 
 
-# ---------- _resolve_wiki / _validate_rel_path ----------
+# ---------- _resolve_wiki_strict / _validate_rel_path ----------
 
 def test_audit_strict_resolver_rejects_bare_index_via_explicit_path(tmp_path):
     """PR-D: audit is read-only and uses the strict resolver. A folder with
