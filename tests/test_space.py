@@ -1272,6 +1272,68 @@ def test_md_files_walker_skips_escaping_symlink_in_plain_folder(tmp_path):
     assert not any("link/secret.md" in f for f in files_default)
 
 
+def test_md_files_walker_skips_escaping_md_symlink_in_plain_folder(tmp_path):
+    """A symlinked `.md` file whose target resolves outside the wiki is
+    external content masquerading as an owned page. The walker must
+    apply the same escape check it applies to symlinked directories:
+    skip by default, mark external under `--include-external`.
+    Without the file-level escape check, a `notes/alias.md` symlink
+    pointing at `/etc/passwd` would be yielded as owned."""
+    wiki = _make_wiki(tmp_path)
+    notes = wiki / "notes"
+    notes.mkdir()
+    (notes / "ok.md").write_text("# ok\n")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "secret.md"
+    secret.write_text("# secret\n")
+    import os
+    os.symlink(secret, notes / "alias.md")
+
+    # Default scope: escaping `.md` symlink is invisible.
+    files_default = [
+        str(f.relative_to(wiki))
+        for f, _ in space._walk_md_files_via_contract(wiki)
+    ]
+    assert "notes/ok.md" in files_default
+    assert "notes/alias.md" not in files_default
+
+    # With --include-external: surface it, marked external.
+    files_ext = [
+        (str(f.relative_to(wiki)), is_ext)
+        for f, is_ext in space._walk_md_files_via_contract(
+            wiki, include_external=True
+        )
+    ]
+    aliases = [(p, x) for p, x in files_ext if p == "notes/alias.md"]
+    assert aliases, files_ext
+    assert aliases[0][1] is True
+
+
+def test_space_files_refuses_unregistered_symlink_alias_scope(tmp_path):
+    """`space files <symlink-alias-to-registered-space>` must refuse —
+    the contract is exhaustive, and a user-made symlink whose target is
+    a registered space is still NOT in `## Spaces`. The pre-fix code
+    compared resolved paths, so the alias resolved to the same path as
+    the registered space and passed reachability; lexical filtering
+    then returned an empty file list. Compare lexical paths instead so
+    the alias scope is refused outright."""
+    wiki = _make_wiki(tmp_path)
+    rc, _, _ = _run(["--wiki", str(wiki), "add", "notes"])
+    assert rc == 0
+    (wiki / "notes" / "page.md").write_text("# p\n")
+    # Lexical alias to the registered space.
+    import os
+    os.symlink(wiki / "notes", wiki / "notes-alias")
+    # Direct registered scope: success.
+    rc_ok, _, _ = _run(["--wiki", str(wiki), "files", "notes"])
+    assert rc_ok == 0
+    # Alias scope: refused with the unregistered-scope diagnostic.
+    rc_alias, _, err = _run(["--wiki", str(wiki), "files", "notes-alias"])
+    assert rc_alias == 2
+    assert "not reachable" in err
+
+
 def test_audit_flags_malformed_spaces_entries(tmp_path):
     """Audit reports malformed `## Spaces` entries (empty href, absolute,
     `..`, escape, duplicate) and flips the exit code."""

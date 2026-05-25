@@ -576,7 +576,21 @@ def _walk_md_files_via_contract(
                 continue
             for entry in entries:
                 if entry.is_file() and entry.suffix == ".md":
-                    yield (entry, d_external)
+                    # Symlinked `.md` files need the same escape check as
+                    # symlinked directories: a `foo.md` symlink whose target
+                    # resolves outside the wiki tree is external content
+                    # masquerading as owned. Skip it unless `include_external`
+                    # opts the consumer in, in which case mark it external.
+                    file_external = d_external
+                    if entry.is_symlink():
+                        try:
+                            target_real = entry.resolve()
+                            target_real.relative_to(root_real)
+                        except (OSError, ValueError):
+                            if not include_external:
+                                continue
+                            file_external = True
+                    yield (entry, file_external)
                     continue
                 if not entry.is_dir():
                     continue
@@ -2549,23 +2563,21 @@ def cmd_files(args: argparse.Namespace) -> int:
         if not scope_root.is_dir():
             print(f"  ! {args.space}: not a directory", file=sys.stderr)
             return 2
-        # Contract-reachable check: build the reachable set via
-        # `_walk_via_spaces_contract` and refuse on unregistered scopes
-        # (the consumer-side traversal must respect the contract).
+        # Contract-reachable check: refuse on unregistered scopes. Compare
+        # LEXICAL paths, not resolved ones — a user-made symlink alias
+        # (`notes-alias/` -> registered `notes/`) resolves to the same path
+        # as the registered space, but its lexical path doesn't appear in
+        # the contract walker's output. Without the lexical check, an alias
+        # would "pass" reachability and then lexical filtering would return
+        # an empty list (because the walker yielded the canonical path).
+        # The consumer-side contract is exhaustive: only paths the contract
+        # walker actually emitted are valid scopes.
         reachable: set[Path] = set()
         for s, _ in _walk_via_spaces_contract(
             wiki_root, include_external=args.include_external
         ):
-            try:
-                reachable.add(s.resolve())
-            except OSError:
-                continue
-        try:
-            scope_real = scope_root.resolve()
-        except OSError:
-            print(f"  ! {args.space}: cannot resolve", file=sys.stderr)
-            return 2
-        if scope_real not in reachable:
+            reachable.add(s)
+        if scope_root not in reachable:
             print(
                 f"  ! {args.space}: not reachable via parent `## Spaces`; "
                 "unregistered spaces are not consumer-visible. Run "
@@ -2765,23 +2777,37 @@ def cmd_promote(args: argparse.Namespace) -> int:
     try:
         _enforce_size_cap(target, new_source_text, wiki_root)
         for page, new_text in planned:
+            if page.resolve() == ancestor_index.resolve():
+                # Skip the standalone ancestor-rewrite preflight here — we
+                # project the COMBINED ancestor mutation (rewrite + section
+                # insert + entry add) below so the cap is evaluated against
+                # the same text the in-lock `_promote_mutate` will write.
+                # Checking only the rewrite-alone result here would mask a
+                # combined-growth overflow.
+                continue
             _enforce_size_cap(page, new_text, wiki_root)
-        # Project the ancestor entry add (ignoring concurrent rewrites for
-        # this preflight — the in-helper check below catches mid-flight
-        # concurrent growth).
-        if _md.has_section(ancestor_text, "Spaces"):
-            projected_ancestor = _add_space_entry(
-                ancestor_text, label, href, description
-            )
-        else:
-            projected_ancestor = (
-                ancestor_text
-                + ("\n" if ancestor_text and not ancestor_text.endswith("\n") else "")
-                + "\n## Spaces\n\n"
-            )
-            projected_ancestor = _add_space_entry(
-                projected_ancestor, label, href, description
-            )
+        # Build the projected ancestor text the same way `_promote_mutate`
+        # builds it: start from whatever rewrite the planned pass produced
+        # for the ancestor (if any), then insert `## Spaces` if missing, then
+        # add the new entry. Project against the OUTER-read ancestor_text;
+        # the in-lock check at `_promote_mutate` re-evaluates against fresh
+        # text to catch any concurrent growth between preflight and lock.
+        ancestor_after_rewrite = next(
+            (
+                new_text
+                for page, new_text in planned
+                if page.resolve() == ancestor_index.resolve()
+            ),
+            ancestor_text,
+        )
+        projected_ancestor = ancestor_after_rewrite
+        if not _md.has_section(projected_ancestor, "Spaces"):
+            if projected_ancestor and not projected_ancestor.endswith("\n"):
+                projected_ancestor += "\n"
+            projected_ancestor += "\n## Spaces\n\n"
+        projected_ancestor = _add_space_entry(
+            projected_ancestor, label, href, description
+        )
         _enforce_size_cap(ancestor_index, projected_ancestor, wiki_root)
     except SizeCapExceeded as e:
         print(
