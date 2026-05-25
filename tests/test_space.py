@@ -1431,6 +1431,27 @@ def test_space_files_explicit_external_scope_allowed_without_global_flag(tmp_pat
     assert "shared/team/page.md" in out
 
 
+def test_walk_md_files_via_contract_skips_meta_directory(tmp_path):
+    """The consumer md-files walker (`space files`) must also skip
+    `_meta/` — `_meta/limits.md` and `_meta/taxonomy.md` are config,
+    not content. Symmetric with the FS walker's `_meta/` skip; without
+    this, `space files` would surface config files as consumer-visible
+    content pages, breaking the reserved-folder contract."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "owned.md").write_text("# owned\n")
+    (wiki / "_meta").mkdir()
+    (wiki / "_meta" / "limits.md").write_text(
+        "| Pattern | Cap (chars) |\n|---|---|\n| index.md | 5000 |\n"
+    )
+    files = list(space._walk_md_files_via_contract(wiki))
+    paths = [str(p.relative_to(wiki)) for p, _ in files]
+    assert "owned.md" in paths
+    assert "_meta/limits.md" not in paths, (
+        "contract md-files walker surfaced `_meta/limits.md` — `_meta/` "
+        "is reserved config, not content"
+    )
+
+
 def test_walk_owned_md_files_skips_meta_directory(tmp_path):
     """`_meta/` holds config files (limits.md, taxonomy.md) per CONVENTIONS
     / Reserved top-level folder names. The owned-md walker feeds audit's

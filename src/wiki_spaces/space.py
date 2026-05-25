@@ -679,7 +679,9 @@ def _walk_md_files_via_contract(
                     continue
                 if not entry.is_dir():
                     continue
-                if entry.name.startswith(".") or entry.name == "_archives":
+                if entry.name.startswith(".") or entry.name in (
+                    "_archives", "_meta",
+                ):
                     continue
                 # Stop at child-space boundaries — the contract walker owns them.
                 if (entry / "index.md").is_file():
