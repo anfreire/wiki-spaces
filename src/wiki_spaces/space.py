@@ -3239,10 +3239,10 @@ def main(argv: list[str] | None = None) -> int:
     p_audit.add_argument(
         "--json",
         action="store_true",
-        help="emit findings as JSON (drift, broken wikilinks, size "
-        "violations, approaching cap, orphans, malformed entries, "
-        "duplicate aliases). Skills consume this rather than parsing "
-        "the human-readable output.",
+        help="emit findings as JSON (drift, missing `## Spaces` section, "
+        "broken wikilinks, size violations, approaching cap, orphans, "
+        "malformed entries, duplicate aliases). Skills consume this "
+        "rather than parsing the human-readable output.",
     )
     p_audit.set_defaults(func=cmd_audit)
 
