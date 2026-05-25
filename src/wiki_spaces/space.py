@@ -2908,6 +2908,22 @@ def cmd_promote(args: argparse.Namespace) -> int:
     target = source.with_suffix("") / "index.md"
     target_dir = target.parent
     target_rel = target.relative_to(wiki_root).as_posix()
+    # Validate the derived target path against the same reserved-folder
+    # rules `space add` enforces — `promote _meta.md` would otherwise
+    # create `_meta/index.md`, which every consumer walker prunes per
+    # CONVENTIONS / Reserved top-level folder names. Same producer/
+    # consumer break the validator was added to prevent on the `add`
+    # surface.
+    target_rel_from_wiki = target_dir.relative_to(wiki_root).as_posix()
+    ok, why = _validate_rel_path(target_rel_from_wiki)
+    if not ok:
+        print(
+            f"  ! cannot promote {source.relative_to(wiki_root).as_posix()}: "
+            f"derived target {target_rel_from_wiki}/ is not a valid space "
+            f"path ({why}). Rename the source file first.",
+            file=sys.stderr,
+        )
+        return 2
     if target_dir.exists():
         # Symlink target dir: even if it's empty, `source.rename(target)`
         # would follow the link and write into whatever the symlink

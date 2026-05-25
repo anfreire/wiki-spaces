@@ -1509,6 +1509,26 @@ def test_audit_fix_does_not_register_meta_descendants_as_spaces(tmp_path):
     )
 
 
+def test_promote_refuses_reserved_folder_derived_target(tmp_path):
+    """Promote derives the target directory from the source stem
+    (`foo.md` -> `foo/index.md`). The CLI must validate the derived
+    name against the reserved-folder rules — `promote _meta.md` would
+    otherwise create `_meta/index.md`, a space every consumer walker
+    prunes per CONVENTIONS / Reserved top-level folder names. Same
+    producer/consumer break the `_validate_rel_path` refusal on `add`
+    exists to prevent."""
+    wiki = _make_wiki(tmp_path)
+    for bad in ("_meta.md", "_archives.md", ".hidden.md"):
+        page = wiki / bad
+        page.write_text(f"# {bad}\n")
+        rc, _, err = _run(["--wiki", str(wiki), "promote", bad])
+        assert rc == 2, f"promote {bad} should refuse"
+        # Source still in place; no derived target dir created.
+        assert page.is_file()
+        # Cleanup for next iteration.
+        page.unlink()
+
+
 def test_audit_flags_reserved_folder_entries_as_malformed(tmp_path):
     """The contract walker prunes `## Spaces` entries pointing at hidden,
     `_archives`, or `_meta` paths (consumer-invisible). Audit MUST flag
