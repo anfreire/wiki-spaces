@@ -333,6 +333,7 @@ def main(argv: list[str] | None = None) -> int:
     # skipped (unless --include-external). The chain helper inserts
     # `## Spaces` into any bare-`index.md` ancestor along the walk up.
     adopt_registered: list[tuple[str, str]] = []  # (label, ancestor-relative)
+    adopt_failed = False
     if args.adopt:
         # Late import: `space` pulls in `fcntl` and other heavy deps that
         # `init_wiki` shouldn't pay for in the no-adopt path.
@@ -389,6 +390,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"{path}/index.md: {e}",
                     file=sys.stderr,
                 )
+                adopt_failed = True
                 continue
 
             # Register `path` upward via the chain helper. Bare-index
@@ -414,6 +416,7 @@ def main(argv: list[str] | None = None) -> int:
                     file=sys.stderr,
                 )
                 _space._rollback_added_entries(e.added)
+                adopt_failed = True
 
     if not args.no_config:
         write_config({"wiki": str(root)})
@@ -429,6 +432,13 @@ def main(argv: list[str] | None = None) -> int:
         print("  (nothing written)")
     if not args.no_config:
         print(f"  → registered as canonical wiki in {CONFIG_PATH}")
+    # Best-effort batch: one failing adoption doesn't abort the whole run,
+    # but the exit code MUST signal partial failure. A success (rc=0) on
+    # `init --adopt` with unrepaired drift would lie to callers / CI
+    # gating on the return value — they'd treat the wiki as fully adopted
+    # while strict consumers (audit, doctor, skills) still reject parts.
+    if adopt_failed:
+        return 1
     return 1 if git_failed else 0
 
 

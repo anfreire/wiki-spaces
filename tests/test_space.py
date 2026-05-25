@@ -1265,6 +1265,61 @@ def test_contract_walker_includes_external_with_flag(tmp_path):
     assert paths.get("shared/team") is True
 
 
+def test_md_files_walker_skips_shared_plain_folder_by_default(tmp_path):
+    """A plain `shared/` directory at the wiki root (no `index.md`) carries
+    external trust scope per CONVENTIONS / Reserved top-level folder
+    names. The md-files walker must skip it under default scope and only
+    surface its `.md` files when `include_external=True`."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "shared").mkdir()  # plain (no index.md), external by convention
+    (wiki / "shared" / "team-notes.md").write_text("# team\n")
+    # Default scope: external is opted out — must NOT yield the file.
+    default_files = list(
+        space._walk_md_files_via_contract(wiki, include_external=False)
+    )
+    assert not any(
+        "shared/team-notes.md" in str(p) for p, _ in default_files
+    ), "md-files walker leaked a shared/ plain-folder `.md` under default scope"
+    # Opt-in: yielded as external.
+    inc_files = list(
+        space._walk_md_files_via_contract(wiki, include_external=True)
+    )
+    matched = [
+        (p, is_ext) for p, is_ext in inc_files
+        if "shared/team-notes.md" in str(p)
+    ]
+    assert matched, "md-files walker did not yield shared/ content under include_external"
+    assert matched[0][1] is True, (
+        "shared/ plain-folder content yielded with is_external=False — "
+        "the walker must propagate external classification down"
+    )
+
+
+def test_space_files_explicit_external_scope_allowed_without_global_flag(tmp_path):
+    """AGENTS.md trust scope: `External spaces are visited only when the
+    user explicitly names one or asks to include all`. Naming
+    `shared/team` IS the opt-in; `--include-external` shouldn't also be
+    required when a single scope is named. Without this, the user has
+    no way to read a single external space without opting into ALL
+    externals across the wiki."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "shared" / "team").mkdir(parents=True)
+    (wiki / "shared" / "team" / "index.md").write_text(
+        "# team\n\n## Spaces\n\n"
+    )
+    (wiki / "shared" / "team" / "page.md").write_text("# page\n")
+    idx = wiki / "index.md"
+    idx.write_text(
+        idx.read_text() + "- [shared/team/](shared/team/index.md)\n"
+    )
+    # Name shared/team explicitly. No --include-external.
+    rc, out, err = _run([
+        "--wiki", str(wiki), "files", "shared/team",
+    ])
+    assert rc == 0, err
+    assert "shared/team/page.md" in out
+
+
 def test_contract_walker_reclassifies_resolution_escape_as_external(tmp_path):
     """`init --adopt --include-external` can descend a foreign submodule or
     escaping-symlink subtree and register `boundary/foo/index.md` in the
@@ -2018,6 +2073,44 @@ def test_init_with_force_overwrites_pre_existing_bare_index(tmp_path):
     rc = init_wiki.main([str(root), "--force", "--no-config"])
     assert rc == 0
     assert "## Spaces" in (root / "index.md").read_text()
+
+
+def test_init_adopt_returns_nonzero_on_partial_failure(tmp_path, capsys):
+    """`init --adopt` is best-effort batch — a single failing leaf doesn't
+    abort the whole adoption. But the exit code MUST signal partial
+    failure so callers/CI gating on rc don't treat the wiki as fully
+    adopted while drift remains. Plant a wiki where one nested space's
+    `index.md` would exceed the per-file cap; assert that adoption
+    reports the failure on stderr AND returns non-zero, while still
+    registering the spaces it COULD handle."""
+    root = tmp_path / "wiki"
+    root.mkdir()
+    (root / "index.md").write_text("# wiki\n\n## Spaces\n\n")
+    # Tight cap so a bare child whose body is just over 50 chars can't
+    # have `## Spaces` inserted by the chain helper.
+    (root / "_meta").mkdir()
+    (root / "_meta" / "limits.md").write_text(
+        "| Pattern | Cap (chars) |\n"
+        "|---|---|\n"
+        "| index.md | 50 |\n"
+    )
+    # foo is bare and oversized → adopt fails on it.
+    (root / "foo").mkdir()
+    (root / "foo" / "index.md").write_text("# foo\n\n" + ("x" * 45) + "\n")
+    # bar is bare and small → adopt succeeds.
+    (root / "bar").mkdir()
+    (root / "bar" / "index.md").write_text("# bar\n")
+    from wiki_spaces import init_wiki
+    rc = init_wiki.main([str(root), "--adopt", "--no-config"])
+    err = capsys.readouterr().err
+    # foo's repair failed.
+    assert "foo" in err
+    # rc must signal partial failure even though bar succeeded.
+    assert rc != 0, "init --adopt returned 0 despite at least one failure"
+    # bar got `## Spaces` inserted (the partial success).
+    assert "## Spaces" in (root / "bar" / "index.md").read_text()
+    # foo stayed bare.
+    assert "## Spaces" not in (root / "foo" / "index.md").read_text()
 
 
 # ---------- PR-M: log rotation rejection + audit summary scope ----------
