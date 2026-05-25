@@ -124,6 +124,51 @@ def test_validate_rel_path_rejects_dot_git():
     assert not ok
 
 
+def test_validate_rel_path_rejects_control_characters():
+    """Newlines and other control characters split a `## Spaces` entry
+    across markdown lines and break the parser. Refuse them in path
+    segments — `space add "foo\\nbar"` should fail at validation."""
+    for bad in ("foo\nbar", "foo\tbar", "foo\x00bar", "foo\rbar"):
+        ok, err = space._validate_rel_path(bad)
+        assert not ok, f"control-char path {bad!r} accepted"
+        assert "control" in err or "newline" in err
+
+
+def test_validate_entry_text_rejects_link_metachars_and_newlines():
+    """Direct test of the `_validate_entry_text` helper used by
+    `cmd_mount` for `--name` / `--description`. `]` and `)` break the
+    markdown link syntax; newlines split the entry across lines."""
+    for bad in ("label]with-bracket", "label)with-paren", "with\nnewline"):
+        ok, err = space._validate_entry_text(bad, field="--name")
+        assert not ok, f"entry text {bad!r} accepted"
+        assert "may not contain" in err
+    # Empty / None pass through.
+    ok, _ = space._validate_entry_text(None, field="--name")
+    assert ok
+    ok, _ = space._validate_entry_text("", field="--name")
+    assert ok
+    # Normal text passes.
+    ok, _ = space._validate_entry_text("Team Foo's Wiki", field="--name")
+    assert ok
+
+
+def test_mount_refuses_name_with_link_metachar(tmp_path):
+    """`space mount ... --name "broken]label"` would render
+    `- [broken]label](...)` which the consumer parser truncates at the
+    first `]`. Refuse at argparse-validation time."""
+    wiki = _make_wiki(tmp_path)
+    src = tmp_path / "external"
+    src.mkdir()
+    (src / "index.md").write_text("# ext\n\n## Spaces\n\n")
+    rc, _, err = _run([
+        "--wiki", str(wiki),
+        "mount", str(src), "shared/ext", "--mode", "symlink",
+        "--name", "broken]label",
+    ])
+    assert rc == 2
+    assert "may not contain" in err
+
+
 def test_validate_rel_path_rejects_markdown_link_metacharacters():
     """A path segment with `)`, `]`, `(`, `[`, `{`, or `}` would write a
     `## Spaces` entry like `- [foo)bar/](foo)bar/index.md)` that the
@@ -2542,6 +2587,35 @@ def test_mount_preflights_ancestor_cap_before_running_mechanism(tmp_path):
     # No mutation landed: no symlink, no entry, root index unchanged.
     assert not (wiki / "shared").exists()
     assert (wiki / "index.md").read_text() == big
+
+
+def test_log_create_refuses_atomically_when_scaffold_plus_entry_overflows(tmp_path):
+    """`space log --create` is the first-call scaffold path. With a
+    cap that admits the `# Log\\n` scaffold (6 chars) but NOT the
+    scaffold + first entry, the helper must refuse BEFORE writing the
+    scaffold — otherwise `log.md` exists on disk with just `# Log\\n`
+    after the entry refusal (partial state on the first --create call).
+    All-or-nothing scaffolding."""
+    wiki = _make_wiki(tmp_path)
+    # Cap = 10 chars: scaffold `# Log\n` (6) fits; scaffold + a 50-char
+    # entry doesn't.
+    (wiki / "_meta").mkdir()
+    (wiki / "_meta" / "limits.md").write_text(
+        "| Pattern | Cap (chars) |\n|---|---|\n| log.md | 10 |\n"
+    )
+    rc, _, err = _run([
+        "--wiki", str(wiki),
+        "log", "--create", "--raw",
+        "- [2026-01-01T00:00:00Z] LARGE ENTRY THAT WILL NOT FIT",
+    ])
+    assert rc != 0
+    assert "too large" in err or "cap" in err
+    # All-or-nothing: log.md should NOT exist on disk after the
+    # refusal (scaffold write was never committed).
+    assert not (wiki / "log.md").is_file(), (
+        "log.md exists after a refused --create — the scaffold + first "
+        "entry must be all-or-nothing"
+    )
 
 
 def test_log_rotation_refuses_archive_write_when_archive_would_exceed_cap(tmp_path):

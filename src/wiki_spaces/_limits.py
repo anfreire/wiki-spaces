@@ -353,6 +353,7 @@ def append_log_with_rotation(
     # already in place. Without this, two `--create` calls race between
     # the existence check and `write_text`, losing one caller's entry.
     flags = os.O_RDWR | (os.O_CREAT if create_if_missing else 0)
+    pre_existed = log_path.is_file()
     fd = os.open(log_path, flags, 0o644)
     try:
         if sys.platform != "win32":
@@ -369,18 +370,32 @@ def append_log_with_rotation(
             current_bytes += chunk
             offset += len(chunk)
         current = current_bytes.decode("utf-8", errors="replace")
-        # Freshly created file (or pre-existing empty file): write the
-        # initial scaffold INSIDE the lock so a parallel caller's lock
-        # ordering preserves the contents. Race-safety: if two callers
-        # both opened a missing file via O_CREAT and one has the lock,
-        # the other waits; the second caller reads non-empty content
-        # (because the first wrote the scaffold + its entry) and skips
-        # the scaffold step.
+        entry_normalized = entry if entry.endswith("\n") else entry + "\n"
+        # All-or-nothing scaffold: if we just opened a missing file via
+        # O_CREAT (the first --create call to win the lock), check
+        # whether scaffold + new entry fits the cap BEFORE writing the
+        # scaffold. Otherwise a cap that admits the scaffold but not
+        # scaffold + entry would leave `log.md` with just `# Log\n` on
+        # disk after the entry append is refused — partial state on the
+        # first --create call.
         if create_if_missing and not current:
+            if len(initial_content) + len(entry_normalized) > cap:
+                # Unlink the freshly-created empty file so the next
+                # call doesn't see "log.md exists" and skip the
+                # scaffold step.
+                try:
+                    if not pre_existed and log_path.stat().st_size == 0:
+                        log_path.unlink()
+                except OSError:
+                    pass
+                raise ValueError(
+                    f"log scaffold + first entry too large to fit "
+                    f"within cap ({cap} chars); shrink the entry or "
+                    "increase the log.md cap in _meta/limits.md"
+                )
             os.write(fd, initial_content.encode("utf-8"))
             current = initial_content
 
-        entry_normalized = entry if entry.endswith("\n") else entry + "\n"
         archive_path: Path | None = None
 
         if len(current) + len(entry_normalized) > cap:

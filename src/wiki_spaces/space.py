@@ -109,6 +109,35 @@ def _resolve_wiki_for_repair(explicit: Path | None = None) -> Path | None:
     return nearest_space_root_for_repair()
 
 
+def _validate_entry_text(value: str | None, *, field: str) -> tuple[bool, str | None]:
+    """Validate user-supplied text destined for a markdown `## Spaces` entry.
+
+    `## Spaces` entries are markdown links: `- [LABEL](HREF) — DESCRIPTION`.
+    A `]` in LABEL closes the label brace; a `)` in HREF closes the href;
+    a newline ends the entry. Either would split the produced line and
+    leave a `## Spaces` entry the consumer parser (`_md.ENTRY_RE`) can't
+    read. Refuse the value upfront so the producer can never emit an
+    entry the consumer ignores.
+    """
+    if value is None or value == "":
+        return True, None
+    # Newlines / control chars split the entry across markdown lines.
+    if any(ord(c) < 0x20 or c == "\x7f" for c in value):
+        return False, (
+            f"{field} may not contain newline / control characters — the "
+            "resulting `## Spaces` entry would be split across lines and "
+            "unparseable by the consumer walker"
+        )
+    # `]` closes a label brace; `)` closes an href; either breaks the
+    # markdown link syntax.
+    if "]" in value or ")" in value:
+        return False, (
+            f"{field} may not contain `]` or `)` — the resulting "
+            "`## Spaces` entry would be unparseable by the consumer walker"
+        )
+    return True, None
+
+
 def _validate_rel_path(rel: str) -> tuple[bool, str | None]:
     """Validate a user-provided relative path. (ok, error_message).
 
@@ -159,6 +188,14 @@ def _validate_rel_path(rel: str) -> tuple[bool, str | None]:
                 "path may not contain Markdown link metacharacters "
                 "(`[`, `]`, `(`, `)`, `{`, `}`) — the resulting `## Spaces` "
                 "entry would be unparseable by the consumer walker"
+            )
+        # Newlines and other control characters would split the `## Spaces`
+        # entry across multiple markdown lines, making it unparseable.
+        if any(ord(c) < 0x20 or c == "\x7f" for c in part):
+            return False, (
+                "path may not contain newline / control characters — the "
+                "resulting `## Spaces` entry would be split across lines "
+                "and unparseable by the consumer walker"
             )
     return True, None
 
@@ -1723,6 +1760,19 @@ def cmd_mount(args: argparse.Namespace) -> int:
     if not ok:
         print(f"  ! invalid path: {err}", file=sys.stderr)
         return 2
+
+    # `--name` and `--description` land directly inside the parent's
+    # `## Spaces` entry as `- [NAME](HREF) — DESCRIPTION`. A `]` in NAME
+    # or `)` in either value would break the markdown link syntax,
+    # producing an entry `_md.parse_section_entries` can't read.
+    for value, field in (
+        (args.name, "--name"),
+        (args.description, "--description"),
+    ):
+        ok, why = _validate_entry_text(value, field=field)
+        if not ok:
+            print(f"  ! {why}", file=sys.stderr)
+            return 2
 
     rel = path_arg.strip().rstrip("/")
     dest = wiki_root / rel
