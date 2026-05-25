@@ -91,7 +91,16 @@ jobs:
 
       - name: Packaged --help hides vendor-kepano
         run: |
-          if smoke/bin/wiki-spaces --help | grep -q 'vendor-kepano'; then
+          # Capture help first so we fail loud if `--help` itself broke.
+          # Piping directly into grep would mask a packaged-help crash —
+          # grep would see empty input, return 1, and the `if !` would
+          # treat the step as passing.
+          help_output=$(smoke/bin/wiki-spaces --help)
+          if [ -z "$help_output" ]; then
+            echo "packaged --help produced no output"
+            exit 1
+          fi
+          if echo "$help_output" | grep -q 'vendor-kepano'; then
             echo "packaged --help should not advertise vendor-kepano"
             exit 1
           fi
