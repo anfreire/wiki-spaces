@@ -33,7 +33,7 @@ For the full installation, verify the user's machine has one of:
 - **Recommended:** [`uv`](https://docs.astral.sh/uv/) on PATH (`curl -LsSf https://astral.sh/uv/install.sh | sh` or `brew install uv`). Used for `uvx wiki-spaces …` (no install) or `uv tool install wiki-spaces` (permanent). uv provisions Python automatically.
 - **Fallback:** plain Python `>=3.11` + `pip` (or `pipx`). Use `pip install --user wiki-spaces` (or `pipx install wiki-spaces`) if uv is unavailable.
 
-`git` is **optional** — recommended for backing up the wiki and for the dev-from-source flow, but not required for install. If the user only wants the no-install path, redirect them to the README; preflight isn't needed.
+`git` is **optional** — recommended for backing up the wiki and for the dev-from-source flow, but not required for install. If the user only wants the no-install path, the one-line recipe in the paragraph above is the complete instruction (`mkdir -p ~/Wiki && printf …`); preflight isn't needed. Pair it with `AGENTS.md` (bundled in the install) when the agent wants the spec — `README.md` is repo-only and not materialized by `wiki-spaces install`.
 
 ## Default path
 
