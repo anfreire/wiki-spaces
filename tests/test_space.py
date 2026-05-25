@@ -77,6 +77,27 @@ def test_audit_strict_resolver_rejects_bare_index_via_config(tmp_path, monkeypat
     assert "Spaces" in err
 
 
+def test_repair_resolver_refuses_invalid_config_does_not_fall_through_to_cwd(
+    tmp_path, monkeypatch
+):
+    """PR-D: when `wiki` config points at a path with no `index.md`, the
+    repair resolver MUST refuse — not silently fall through to a CWD
+    ancestor wiki. Strict resolver got this right at the start (cf.
+    `_resolve_wiki_strict` comment); repair must match. Otherwise a write
+    command (`space add`, `space mount`, `space remove`, `audit --fix`,
+    `init --adopt`) typed against a broken config would write to whatever
+    wiki the user happened to be cd'd into — masking a real config-side
+    spec violation."""
+    (tmp_path / "cwd_wiki").mkdir()
+    cwd_wiki = _make_wiki(tmp_path / "cwd_wiki")
+    bad_cfg = tmp_path / "does_not_exist"
+    monkeypatch.setattr(space, "wiki_path", lambda: bad_cfg)
+    monkeypatch.chdir(cwd_wiki)
+    # No --wiki passed: resolver should hit the config path, see no index.md,
+    # and refuse — not redirect to cwd_wiki.
+    assert space._resolve_wiki_for_repair(None) is None
+
+
 def test_validate_rel_path_rejects_dot_dot():
     ok, err = space._validate_rel_path("../escape")
     assert not ok

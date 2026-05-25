@@ -96,7 +96,11 @@ def _resolve_wiki_for_repair(explicit: Path | None = None) -> Path | None:
     Accepts a bare `index.md` (no `## Spaces`) — the caller's chain helper
     inserts the section atomically as the first mutation step. The
     explicit / config / CWD fallback order matches the strict resolver;
-    only the `## Spaces` requirement differs.
+    only the `## Spaces` requirement differs. When the config points at a
+    path that does not exist or lacks `index.md`, refuse rather than fall
+    through to CWD (mirrors strict's "don't mask a config-side violation"
+    behavior — a write command must never silently redirect to a different
+    wiki than the user configured).
     """
     if explicit:
         p = explicit.expanduser().resolve()
@@ -106,6 +110,7 @@ def _resolve_wiki_for_repair(explicit: Path | None = None) -> Path | None:
         p = cfg_wiki.expanduser().resolve()
         if (p / "index.md").is_file():
             return p
+        return None
     return nearest_space_root_for_repair()
 
 
