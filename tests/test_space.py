@@ -104,6 +104,32 @@ def test_validate_rel_path_rejects_dot_git():
     assert not ok
 
 
+def test_validate_rel_path_rejects_markdown_link_metacharacters():
+    """A path segment with `)`, `]`, `(`, `[`, `{`, or `}` would write a
+    `## Spaces` entry like `- [foo)bar/](foo)bar/index.md)` that the
+    consumer parser's `ENTRY_RE` can't read. Refuse the path before any
+    FS mutation so producers can't emit entries consumers ignore."""
+    for bad in ("foo)bar", "foo(bar", "foo]bar", "foo[bar", "foo{bar", "foo}bar"):
+        ok, err = space._validate_rel_path(bad)
+        assert not ok, f"path {bad!r} accepted despite containing link metachars"
+        assert "Markdown link metacharacters" in err
+    # And in nested segments.
+    ok, err = space._validate_rel_path("projects/foo)bar")
+    assert not ok
+    # Plain paths still pass.
+    ok, _ = space._validate_rel_path("projects/foo-bar.baz")
+    assert ok
+
+
+def test_add_refuses_path_with_markdown_link_metacharacter(tmp_path):
+    """`space add` integrates the validator — refuse before mkdir."""
+    wiki = _make_wiki(tmp_path)
+    rc, _, err = _run(["--wiki", str(wiki), "add", "foo)bar"])
+    assert rc == 2
+    assert "Markdown link metacharacters" in err
+    assert not (wiki / "foo)bar").exists()
+
+
 # ---------- space add ----------
 
 def test_add_creates_space_and_updates_parent(tmp_path):
@@ -2300,6 +2326,38 @@ def test_log_rotation_rejects_when_still_over_cap(tmp_path):
     rc, _, err = _run(["--wiki", str(wiki), "log", "--raw", huge_entry])
     assert rc != 0
     assert "too large" in err or "cap" in err
+
+
+def test_mount_preflights_ancestor_cap_before_running_mechanism(tmp_path):
+    """`space mount` runs `git submodule add` / `git clone` / symlink
+    BEFORE the chain helper attempts the registration. If the chain
+    helper's in-lock cap check rejects the ancestor mutation, the mount
+    mechanism has already mutated state — for submodules this means a
+    staged gitlink + edited `.gitmodules` the user has to clean up by
+    hand. The pre-flight cap check moves the rejection BEFORE any FS
+    mutation, so a near-cap ancestor never causes a partial mount.
+
+    Setup: a wiki with `index.md` near the per-file cap; mount a
+    symlink (no git config needed) and verify it's refused with
+    `size cap` on stderr and no symlink lands on disk."""
+    wiki = _make_wiki(tmp_path)
+    # Push root `index.md` near the 5K cap so the mount entry would
+    # push past.
+    big = "# wiki\n\n## Spaces\n\n" + ("x" * 4980) + "\n"
+    (wiki / "index.md").write_text(big)
+    # External source to mount.
+    src = tmp_path / "external-src"
+    src.mkdir()
+    (src / "index.md").write_text("# ext\n\n## Spaces\n\n")
+    rc, _, err = _run([
+        "--wiki", str(wiki),
+        "mount", str(src), "shared/external", "--mode", "symlink",
+    ])
+    assert rc != 0
+    assert "size cap" in err
+    # No mutation landed: no symlink, no entry, root index unchanged.
+    assert not (wiki / "shared").exists()
+    assert (wiki / "index.md").read_text() == big
 
 
 def test_log_rotation_refuses_archive_write_when_archive_would_exceed_cap(tmp_path):

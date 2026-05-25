@@ -114,6 +114,14 @@ def _validate_rel_path(rel: str) -> tuple[bool, str | None]:
 
     Same rule as `init --folders`: reject empty, `.`, `..`, and `.git`
     segments. Other hidden names (`.archive`, `.config`, etc.) are allowed.
+
+    Additionally refuses Markdown link metacharacters in path segments
+    (`[`, `]`, `(`, `)`). These would otherwise land in `## Spaces`
+    entries as raw bytes inside the link syntax — `- [foo)bar/](foo)bar/index.md)`
+    — which the parser's `ENTRY_RE` cannot read (regex stops at the
+    first `)` or `]`). Producing entries the consumer can't parse is
+    the v1 producer/consumer break we exist to prevent; refuse the path
+    upfront so the user picks a parser-safe name.
     """
     rel = rel.strip().rstrip("/")
     if not rel:
@@ -126,6 +134,12 @@ def _validate_rel_path(rel: str) -> tuple[bool, str | None]:
             return False, "path may not contain '.', '..', or empty segments"
         if part == ".git":
             return False, "path may not contain '.git' segments"
+        if any(c in part for c in "[](){}"):
+            return False, (
+                "path may not contain Markdown link metacharacters "
+                "(`[`, `]`, `(`, `)`, `{`, `}`) — the resulting `## Spaces` "
+                "entry would be unparseable by the consumer walker"
+            )
     return True, None
 
 
@@ -1715,6 +1729,36 @@ def cmd_mount(args: argparse.Namespace) -> int:
             f"in {printable}index.md ## Spaces"
         )
         return 0
+
+    # Pre-flight the ancestor cap check BEFORE running the mount mechanism.
+    # `git submodule add` stages a gitlink + edits `.gitmodules`; a cap
+    # rejection after that would require manual cleanup the user has to
+    # run by hand. Project the registration against the ancestor's current
+    # text and refuse early. The in-lock check inside the chain helper
+    # still catches concurrent growth between this pre-flight and the
+    # actual mutation — pre-flight catches the easy case before any FS
+    # mutation, the in-lock check is the authoritative gate.
+    try:
+        ancestor_text_now = ancestor_index.read_text(encoding="utf-8")
+    except OSError:
+        ancestor_text_now = ""
+    projected_ancestor = ancestor_text_now
+    if not _md.has_section(projected_ancestor, "Spaces"):
+        if projected_ancestor and not projected_ancestor.endswith("\n"):
+            projected_ancestor += "\n"
+        projected_ancestor += "\n## Spaces\n\n"
+    projected_ancestor = _add_space_entry(
+        projected_ancestor, label, href, args.description
+    )
+    try:
+        _enforce_size_cap(ancestor_index, projected_ancestor, wiki_root)
+    except SizeCapExceeded as e:
+        print(
+            f"  ! size cap: {e}. Refusing to mount before any FS "
+            "mutation — fix the ancestor's index.md or its cap first.",
+            file=sys.stderr,
+        )
+        return 2
 
     dest.parent.mkdir(parents=True, exist_ok=True)
 
