@@ -186,7 +186,7 @@ Skip the optional `## What this space is` or `## Items` sections and `index.md` 
 
 1. **Refuse on absent.** Logging is opt-in; so is the manifest. If the file isn't there, the user hasn't opted in — surface the absence rather than scaffolding.
 2. **Refuse on schema-invalid.** Don't silently overwrite a malformed file; warn and treat as absent for this run.
-3. **Lock the file** with `fcntl.flock` so concurrent writers serialize.
+3. **Lock the parent directory** with `fcntl.flock` so concurrent writers serialize. Locking the file itself doesn't serialize past an `os.replace` — the lock is inode-based, and `os.replace` swaps the inode out from under any holder. The parent directory's inode is stable.
 4. **Read fresh inside the lock.** Other writers may have committed since the caller's last read.
 5. **Write via `tempfile.NamedTemporaryFile` + `os.replace`** for crash safety.
 
@@ -201,10 +201,19 @@ def manifest_set(wiki_root: Path, project: str, key: str, value):
     if not manifest.is_file():
         raise FileNotFoundError(f"{manifest} not present; opt in first")
 
-    fd = os.open(manifest, os.O_RDWR)
+    # Lock the PARENT DIRECTORY's inode, not the file's. The file inode
+    # changes under `os.replace`, so a second writer would acquire a
+    # stale lock against a unlinked inode and race; the directory inode
+    # is stable across the swap and serializes correctly. Mirrors
+    # `_atomic_mutate_index` in src/wiki_spaces/space.py.
+    dir_fd = os.open(str(manifest.parent), os.O_RDONLY)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        raw = os.read(fd, 16 * 1024 * 1024)
+        fcntl.flock(dir_fd, fcntl.LOCK_EX)
+        # Read fresh inside the lock to pick up any concurrent commits.
+        try:
+            raw = manifest.read_bytes()
+        except FileNotFoundError as e:
+            raise FileNotFoundError(f"{manifest} not present; opt in first") from e
         try:
             doc = json.loads(raw or b"{}")
         except json.JSONDecodeError as e:
@@ -226,8 +235,8 @@ def manifest_set(wiki_root: Path, project: str, key: str, value):
             except OSError: pass
             raise
     finally:
-        try: fcntl.flock(fd, fcntl.LOCK_UN)
-        finally: os.close(fd)
+        try: fcntl.flock(dir_fd, fcntl.LOCK_UN)
+        finally: os.close(dir_fd)
 ```
 
 Typed-field coercion (e.g. `pages_in_vault` is an int, `last_commit_synced` may be `null`) is the writer's responsibility — pass already-typed values to the helper above. Skills should use this pattern rather than writing `.manifest.json` directly.
