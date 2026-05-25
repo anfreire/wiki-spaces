@@ -445,6 +445,15 @@ def _walk_classified(wiki_root: Path, *, include_external: bool = False):
                 continue
             if child.name == "_archives":  # retired content — out of audit scope
                 continue
+            # `_meta/` holds config files (`limits.md`, `taxonomy.md`); no
+            # space lives there. Skip so audit/adopt repair passes never
+            # register `_meta/...` descendants as spaces — the contract
+            # walker prunes those entries (CONVENTIONS / Reserved top-
+            # level folder names), so registering would create a
+            # producer/consumer break where audit --fix writes an entry
+            # `space list` / `space files` can't read.
+            if child.name == "_meta":
+                continue
             try:
                 child_real = child.resolve()
             except OSError:

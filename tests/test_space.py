@@ -1431,6 +1431,37 @@ def test_space_files_explicit_external_scope_allowed_without_global_flag(tmp_pat
     assert "shared/team/page.md" in out
 
 
+def test_audit_fix_does_not_register_meta_descendants_as_spaces(tmp_path):
+    """`_meta/` is reserved for config files (limits.md, taxonomy.md);
+    no space lives there. The FS walker (`_walk_classified`, used by
+    `audit --fix` and `init --adopt`) MUST skip `_meta/`, so repair
+    passes never register `_meta/...` descendants in a parent's
+    `## Spaces`. Otherwise a producer/consumer break: audit --fix
+    writes an entry the contract walker (which prunes `_meta/`)
+    will never read.
+
+    Setup: plant `_meta/whatever/index.md` (a hypothetical pre-v1
+    layout). Run `audit --fix`. Assert the entry is NOT registered
+    in root's `## Spaces`."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "_meta" / "whatever").mkdir(parents=True)
+    (wiki / "_meta" / "whatever" / "index.md").write_text(
+        "# whatever\n\n## Spaces\n\n"
+    )
+    rc, _, _ = _run(["--wiki", str(wiki), "audit", "--fix"])
+    # audit may return 0 (no drift visible) or non-zero (other issues);
+    # the point is what's NOT in root's `## Spaces`.
+    root_text = (wiki / "index.md").read_text()
+    entries = _md.parse_section_entries(root_text, "Spaces")
+    assert not any(
+        e.href and "_meta" in e.href for e in entries
+    ), (
+        "audit --fix registered a `_meta/` descendant — the FS walker "
+        "must skip `_meta/` so the repair pass doesn't write entries "
+        "the consumer prunes"
+    )
+
+
 def test_contract_walker_skips_reserved_folder_entries(tmp_path):
     """Belt-and-suspenders: even when `## Spaces` lists an entry under
     a reserved folder (hidden / `_archives` / `_meta`) — e.g. a pre-v1
