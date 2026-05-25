@@ -1295,6 +1295,36 @@ def test_md_files_walker_skips_shared_plain_folder_by_default(tmp_path):
     )
 
 
+def test_space_files_dot_scope_honors_default_external_opt_out(tmp_path):
+    """`space files .` is naming the wiki root, NOT opting into externals.
+    The default scope is owned-only per AGENTS.md trust scope; only an
+    explicit non-root external scope counts as an opt-in. Regression
+    for the r6 fix that auto-opted-in for any named scope and ended up
+    leaking shared/ content under the root scope."""
+    wiki = _make_wiki(tmp_path)
+    (wiki / "shared" / "team").mkdir(parents=True)
+    (wiki / "shared" / "team" / "index.md").write_text(
+        "# team\n\n## Spaces\n\n"
+    )
+    (wiki / "shared" / "team" / "external.md").write_text("# external\n")
+    idx = wiki / "index.md"
+    idx.write_text(
+        idx.read_text() + "- [shared/team/](shared/team/index.md)\n"
+    )
+    # Also plant an owned page so the listing isn't empty.
+    (wiki / "owned-note.md").write_text("# owned\n")
+    rc, out, err = _run(["--wiki", str(wiki), "files", "."])
+    assert rc == 0, err
+    # Owned content surfaces.
+    assert "owned-note.md" in out
+    # External content does NOT surface (no --include-external).
+    assert "shared/team/external.md" not in out, (
+        "`space files .` leaked external content under the default "
+        "scope — root scope must honor the global --include-external flag, "
+        "not auto-opt-in"
+    )
+
+
 def test_space_files_explicit_external_scope_allowed_without_global_flag(tmp_path):
     """AGENTS.md trust scope: `External spaces are visited only when the
     user explicitly names one or asks to include all`. Naming
@@ -2135,6 +2165,45 @@ def test_log_rotation_rejects_when_still_over_cap(tmp_path):
     rc, _, err = _run(["--wiki", str(wiki), "log", "--raw", huge_entry])
     assert rc != 0
     assert "too large" in err or "cap" in err
+
+
+def test_log_rotation_does_not_partially_commit_when_post_rotation_still_over_cap(tmp_path):
+    """When rotation can't satisfy the cap (a single oversized entry against
+    a tight cap), the rotation must refuse BEFORE writing the archive +
+    truncating log.md — otherwise the user ends up with an archive file
+    on disk, a truncated log, but no new entry committed (partial
+    mutation). Pre-flight the projected post-rotation size against the
+    cap; if still over, raise BEFORE any FS write."""
+    wiki = _make_wiki(tmp_path)
+    log = wiki / "log.md"
+    # Seed with several real entries so rotation would split if allowed.
+    seed_entries = "\n".join(
+        f"- [2026-01-0{i+1}T00:00:00Z] OP n={i}" for i in range(6)
+    ) + "\n"
+    log.write_text("# Log\n" + seed_entries)
+    log_size_before = log.stat().st_size
+    (wiki / "_meta").mkdir()
+    (wiki / "_meta" / "limits.md").write_text(
+        "| Pattern | Cap (chars) |\n"
+        "|---|---|\n"
+        "| log.md | 100 |\n"
+    )
+    # Each existing entry is ~30 chars; the kept half is ~90; adding
+    # this entry (>50 chars) would still overflow. The rotation must
+    # refuse without writing an archive or truncating the log.
+    huge_entry = "- [2026-01-10T00:00:00Z] " + ("y" * 200)
+    rc, _, err = _run(["--wiki", str(wiki), "log", "--raw", huge_entry])
+    assert rc != 0
+    # No archive file landed on disk.
+    archives = sorted(wiki.glob("log.archive-*.md"))
+    assert archives == [], (
+        f"rotation wrote an archive ({archives}) despite refusing the "
+        "post-rotation fit check — the rotation must be all-or-nothing"
+    )
+    # Log untouched.
+    assert log.stat().st_size == log_size_before, (
+        "log.md was truncated despite the rotation refusal"
+    )
 
 
 def test_audit_summary_respects_include_external(tmp_path):

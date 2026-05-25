@@ -31,6 +31,11 @@ from . import _md
 DEFAULTS: list[tuple[str, int]] = [
     ("index.md", 5000),
     ("log.md", 100000),
+    # Archives are log overflow — they share the log's discipline, not
+    # the generic 15K content-page cap. Without this, a rotation that
+    # legitimately needs more than 15K worth of older entries would be
+    # blocked by the default `*.md` rule.
+    ("log.archive-*.md", 100000),
     ("*.md", 15000),
 ]
 
@@ -355,7 +360,6 @@ def append_log_with_rotation(
         if len(current) + len(entry_normalized) > cap:
             entries = _split_log_entries(current)
             if len(entries) >= 2:
-                midpoint = len(entries) // 2
                 # Header (everything before the first `- [` entry) stays with
                 # the kept half so the file remains well-formed.
                 first_entry_idx = next(
@@ -371,28 +375,48 @@ def append_log_with_rotation(
                     real_entries = entries[first_entry_idx:]
                     midpoint = len(real_entries) // 2
                     if midpoint > 0:
+                        # PRE-FLIGHT: refuse BEFORE writing the archive or
+                        # truncating the log if rotation can't satisfy the
+                        # cap. Without this check, a too-large entry would
+                        # commit the archive write + truncation, then raise
+                        # at the post-rotation fit check below — leaving the
+                        # rotation half-applied (archive on disk, log
+                        # truncated, no new entry). "Errors on overflow,
+                        # never silent truncation, never partial mutation."
+                        projected_kept = (
+                            "".join(header_entries)
+                            + "".join(real_entries[midpoint:])
+                        )
+                        if (
+                            len(projected_kept) + len(entry_normalized) > cap
+                        ):
+                            raise ValueError(
+                                f"log entry too large to fit within cap "
+                                f"({cap} chars) even after rotation would "
+                                "drop the oldest half; shrink the entry, "
+                                "rotate manually, or increase the log.md "
+                                "cap in _meta/limits.md"
+                            )
                         archive_path = _unique_archive_path(
                             log_path, datetime.now(timezone.utc)
                         )
                         archive_content = "".join(real_entries[:midpoint])
                         _atomic_write(archive_path, archive_content)
-                        kept = "".join(header_entries) + "".join(real_entries[midpoint:])
+                        kept = projected_kept
                         # Truncate + rewrite log_path inside the lock.
                         os.lseek(fd, 0, os.SEEK_SET)
                         os.ftruncate(fd, 0)
                         os.write(fd, kept.encode("utf-8"))
                         current = kept
 
-        # PR-M / §26: rotation may not free enough space — a single entry
-        # bigger than half the cap, or a cap small enough that even the
-        # kept half plus the new entry still overflows. Reject rather than
-        # silently committing an over-cap write; that preserves the
-        # "errors on overflow, never silent truncation" guarantee.
+        # Last-resort fit check: with no rotation possible (single entry,
+        # or pathological content). Reject rather than silently committing
+        # an over-cap write.
         if len(current) + len(entry_normalized) > cap:
             raise ValueError(
-                f"log entry too large to fit within cap ({cap} chars) "
-                "after rotation; rotate manually or increase the log.md "
-                "cap in _meta/limits.md"
+                f"log entry too large to fit within cap ({cap} chars); "
+                "rotate manually or increase the log.md cap in "
+                "_meta/limits.md"
             )
 
         # Append the new entry.

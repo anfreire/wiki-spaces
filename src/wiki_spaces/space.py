@@ -2638,12 +2638,15 @@ def cmd_files(args: argparse.Namespace) -> int:
         #
         # Naming an external scope explicitly opts the consumer in per
         # AGENTS.md / trust scope: "External spaces are visited only when
-        # the user explicitly names one or asks to include all." So the
-        # reachability walk uses include_external=True even if the flag
-        # wasn't passed — naming `shared/team` IS the opt-in for that
-        # scope. The traversal pass below then walks with the same flag
-        # so the scope filter sees the .md files.
-        scope_include_external = True
+        # the user explicitly names one or asks to include all." But naming
+        # the WIKI ROOT (`.`) is NOT a per-external opt-in — it's the
+        # default scope; we must honor the global flag there. So the
+        # external opt-in fires only when the named scope is NOT the wiki
+        # root.
+        scope_is_root = scope_root == wiki_root
+        scope_include_external = (
+            args.include_external if scope_is_root else True
+        )
         reachable: set[Path] = set()
         for s, _ in _walk_via_spaces_contract(
             wiki_root, include_external=scope_include_external
@@ -2658,10 +2661,14 @@ def cmd_files(args: argparse.Namespace) -> int:
             )
             return 2
 
-    # When the user named an explicit scope, traverse with
+    # When the user named an explicit non-root scope, traverse with
     # include_external=True so a named external scope returns its files;
-    # otherwise honor the global --include-external flag.
-    traverse_external = (scope_root is not None) or args.include_external
+    # for the wiki root or no scope, honor the global --include-external
+    # flag.
+    if scope_root is not None and scope_root != wiki_root:
+        traverse_external = True
+    else:
+        traverse_external = args.include_external
     all_files = list(
         _walk_md_files_via_contract(
             wiki_root, include_external=traverse_external

@@ -85,7 +85,7 @@ For git-backed mounts, push permissions on the upstream provide a publication ba
 
 ## Common pitfalls
 
-- **Forgot to update parent's `## Spaces`.** `space mount` does this for you. Manual branches need `wiki-spaces space add <path>` (or hand-edit the parent's `## Spaces`) — otherwise the space exists on disk but isn't navigable from the parent's index.
+- **Forgot to update parent's `## Spaces`.** `space mount` does this for you. Manual mount branches need `wiki-spaces space mount <source> [path] --mode <mechanism>` to register the entry — the CLI is the only writer of `## Spaces` (it locks the ancestor's `index.md`, enforces caps, and registers atomically). Hand-edits skip those guarantees; treat them as a last resort and re-run `wiki-spaces space audit` after to confirm the result is contract-clean.
 - **Clone placed outside `shared/`.** Classified as owned; writes are allowed by default. Either move it under `shared/`, or accept that the read-only semantics aren't enforced.
 - **Submodule cloned without `--recursive`.** Cloners need `git clone --recursive` (or `git submodule update --init`). Document this in your wiki's `index.md` if you use submodules.
 - **Mount has no `index.md`, or its `index.md` has no `## Spaces`.** It's not a wiki-spaces space — either ask the upstream owner to add `## Spaces` to their `index.md`, or treat the mount as a plain folder (no space, no operations). `space mount` refuses and rolls back in both cases; auto-inserting into an external mount would mutate someone else's repo, so wiki-spaces deliberately leaves that to the owner.

@@ -15,9 +15,23 @@ from wiki_spaces import _limits
 
 
 def test_defaults_ordering():
-    """Most-specific patterns first; broadest last."""
+    """Most-specific patterns first; broadest last.
+    `log.archive-*.md` shares the log's 100K cap (archives are log
+    overflow, not generic content pages) and is ordered before the
+    broad `*.md` rule so the archive pattern wins for those files."""
     patterns = [p for p, _ in _limits.DEFAULTS]
-    assert patterns == ["index.md", "log.md", "*.md"]
+    assert patterns == ["index.md", "log.md", "log.archive-*.md", "*.md"]
+
+
+def test_log_archive_default_cap_matches_log():
+    """`log.archive-*.md` files inherit the log.md cap by default —
+    rotations of a 100K log shouldn't be artificially blocked by the
+    generic 15K content-page cap."""
+    log_cap = next(c for p, c in _limits.DEFAULTS if p == "log.md")
+    archive_cap = next(
+        c for p, c in _limits.DEFAULTS if p == "log.archive-*.md"
+    )
+    assert archive_cap == log_cap
 
 
 def test_read_limits_returns_defaults_when_no_override(tmp_path):
