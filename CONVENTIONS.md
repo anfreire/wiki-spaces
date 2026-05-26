@@ -129,6 +129,20 @@ Entries in `## Items` and `## Spaces` are markdown bullet lists, one per line. O
 
 `## Items` carries no contract — it is human-maintained and tools never touch it. `## Spaces` is the opposite: meant to be exhaustive, so tools maintain it and flag sub-folders with `index.md` that aren't listed.
 
+### Malformed `## Spaces` entries
+
+Audit reports the following entry shapes as errors (and flips the exit code):
+
+- Empty href (e.g. `- []()`).
+- Absolute-path href (e.g. `- [foo](/abs/path/index.md)`).
+- Href containing `..` segments.
+- Href that escapes the wiki root after symlink resolution (excluding legitimate external mounts under `shared/` or foreign submodules, which are classified external rather than malformed).
+- Reserved-name href segment (hidden `.X`, `_archives`, `_meta`) — consumer walkers prune these by convention; the entry is unreachable.
+- Markdown link metacharacters (`[`, `]`, `(`, `)`, `{`, `}`) in the href — the entry regex stops at the first `)` and the registration becomes silently incomplete.
+- Duplicate entries pointing at the same directory.
+
+Consumer traversal (`space list`, `space files`, the contract walker) silently skips these entries; `space audit` surfaces them so the user can repair. `audit --fix` does **NOT** auto-repair malformed entries — they signal author intent the framework can't reconstruct from disk.
+
 Skip the optional `## What this space is` or `## Items` sections and `index.md` still marks the folder as a wiki **provided `## Spaces` is present** (per the [spec](AGENTS.md)). Tools that lean on optional conventions degrade where they aren't followed — your wiki is still your wiki.
 
 **If absent:** This folder is not a wiki. Tools refuse to operate.
@@ -444,12 +458,12 @@ Cost-ordered lookup table for `wiki-search`. Use the cheapest primitive that ans
 
 | Need | Primitive | Cost |
 |---|---|---|
-| Page exists? Title/tags? | `index.md` scan or grep frontmatter | Cheapest |
+| Page exists? Title/tags? | `wiki-spaces space files [--include-external] [--json]` (contract walker — exhaustive list of consumer-visible `.md` files), then grep frontmatter on the matches | Cheapest |
 | 1–2 sentence preview | `summary:` frontmatter field | Cheap |
 | Specific claim or section | `grep -A 10 -B 2 "<term>" <file>` (or your harness's grep tool) | Medium |
 | Full page content | read the file | Expensive |
 
-Grep-style search is preferred over full reads. Full reads are capped at 3 candidates per query.
+`index.md` is **not** an exhaustive page index — `## Items` is hand-maintained and `## Spaces` only lists child spaces, not files. Page enumeration goes through `wiki-spaces space files` so the consumer set matches the navigation contract: registered spaces (and the plain folders inside them) are visible, unregistered drift is invisible until `space audit` surfaces it. Grep-style search is preferred over full reads. Full reads are capped at 3 candidates per query.
 
 ### Recommended search backends
 
