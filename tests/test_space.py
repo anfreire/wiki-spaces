@@ -3271,6 +3271,69 @@ def test_mount_clone_without_index_is_cleaned_up(tmp_path):
     assert not (wiki / "shared" / "team").exists()
 
 
+def _make_git_repo_with_bare_index(path: Path, title: str = "bare") -> Path:
+    """A real git repo containing `index.md` WITHOUT `## Spaces` — used to
+    exercise mount strict-refusal + rollback on bare external targets."""
+    import os
+    import subprocess
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "index.md").write_text(f"# {title}\n\nno spaces section here.\n")
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e",
+    }
+    for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
+                ["git", "commit", "-q", "-m", "init"]):
+        subprocess.run(cmd, cwd=path, check=True, env=env, capture_output=True)
+    return path
+
+
+@pytest.mark.skipif(not _HAS_GIT, reason="git not on PATH")
+def test_mount_submodule_bare_target_auto_rolls_back(tmp_path, monkeypatch):
+    """A submodule that resolves to a bare `index.md` (no `## Spaces`) is
+    refused per the v1 strict-target contract. The rollback runs the
+    standard undo sequence (submodule deinit, git rm, prune .git/modules
+    cache) — no leftover gitlink, .gitmodules entry, or modules cache."""
+    import os
+    import subprocess
+    # Wiki itself must be a git repo for `git submodule add`.
+    wiki = _make_wiki(tmp_path)
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e",
+    }
+    for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
+                ["git", "commit", "-q", "-m", "init"]):
+        subprocess.run(cmd, cwd=wiki, check=True, env=env, capture_output=True)
+    # Allow file:// submodule sources for the rest of the test (git refuses
+    # them by default since 2.38 CVE-2022-39253). GIT_CONFIG_COUNT/KEY/VALUE
+    # injects the override into every git subprocess _run_git spawns.
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "protocol.file.allow")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "always")
+    src = _make_git_repo_with_bare_index(tmp_path / "src-repo")
+    rc, _, err = _run(
+        ["--wiki", str(wiki), "mount", f"file://{src}", "shared/team",
+         "--mode", "submodule"]
+    )
+    # Mount strict-refuses the bare-`## Spaces` target.
+    assert rc == 1, f"expected refusal exit 1, got {rc}: {err}"
+    assert "`## Spaces` section" in err
+    # Auto-rollback removed the submodule + cache + .gitmodules entry.
+    assert not (wiki / "shared" / "team").exists(), \
+        "submodule path should be gone after rollback"
+    assert not (wiki / ".git" / "modules" / "shared" / "team").exists(), \
+        ".git/modules cache should be pruned after rollback"
+    gitmodules = wiki / ".gitmodules"
+    if gitmodules.is_file():
+        assert "shared/team" not in gitmodules.read_text(), \
+            ".gitmodules should not reference the rolled-back submodule"
+    # Index entry was never added (mount refused before chain helper ran).
+    assert "shared/team" not in (wiki / "index.md").read_text()
+
+
 # ---------- _derive_default_path (unit) ----------
 
 def test_derive_default_https_with_dot_git():

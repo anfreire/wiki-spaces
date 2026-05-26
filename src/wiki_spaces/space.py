@@ -1903,9 +1903,10 @@ def cmd_mount(args: argparse.Namespace) -> int:
     # The v1 contract requires `index.md` AND `## Spaces` on the mounted
     # target. Auto-inserting `## Spaces` into an external mount would mutate
     # someone else's repo, so we refuse instead — the user coordinates with
-    # the upstream owner. A symlink or clone is cleaned up; a submodule
-    # cannot be auto-undone safely (`submodule add` already staged a gitlink
-    # and edited .gitmodules), so the exact recovery commands are printed.
+    # the upstream owner. `_rollback_mount` auto-undoes all three mount
+    # mechanisms (symlink unlink, clone rmtree, submodule deinit+rm+cache
+    # prune); residue from a partial submodule undo gets a manual-recovery
+    # hint on stderr.
     if not (dest / "index.md").is_file():
         print(
             f"  ! mounted {rel}/ has no index.md — it is not a wiki-spaces "
@@ -1961,9 +1962,10 @@ def cmd_mount(args: argparse.Namespace) -> int:
 def _rollback_mount(wiki_root: Path, dest: Path, rel: str, mechanism: str) -> None:
     """Undo a partial mount so the filesystem doesn't keep an orphaned space.
 
-    Symlinks and clones are removable in one step; a submodule has already
-    staged a gitlink and edited .gitmodules, so we print the manual recovery
-    commands instead of guessing.
+    All three mechanisms are auto-rolled-back. For a submodule the rollback
+    runs the standard undo sequence (`submodule deinit`, `git rm`, prune
+    the `.git/modules/<rel>` cache). If any step fails, the residual
+    manual-recovery commands are printed so the user can finish cleanup.
     """
     if mechanism == "symlink":
         try:
@@ -1971,18 +1973,40 @@ def _rollback_mount(wiki_root: Path, dest: Path, rel: str, mechanism: str) -> No
             print(f"  - removed the symlink {rel}", file=sys.stderr)
         except OSError as e:
             print(f"  ! manual cleanup required: could not remove {rel}: {e}", file=sys.stderr)
-    elif mechanism == "clone":
+        return
+    if mechanism == "clone":
         shutil.rmtree(dest, ignore_errors=True)
         print(f"  - removed the clone at {rel}/", file=sys.stderr)
-    else:  # submodule
+        return
+    # submodule: undo the gitlink + .gitmodules edit + .git/modules cache.
+    # `git submodule add` already staged the gitlink and edited .gitmodules
+    # but no commit has happened — the undo is purely local and safe.
+    failures: list[str] = []
+    deinit_rc, deinit_err = _run_git(
+        ["git", "-C", str(wiki_root), "submodule", "deinit", "-f", rel]
+    )
+    if deinit_rc != 0:
+        failures.append(f"submodule deinit -f {rel}: {deinit_err.strip()}")
+    rm_rc, rm_err = _run_git(["git", "-C", str(wiki_root), "rm", "-f", rel])
+    if rm_rc != 0:
+        failures.append(f"git rm -f {rel}: {rm_err.strip()}")
+    modules_cache = wiki_root / ".git" / "modules" / rel
+    if modules_cache.exists():
+        try:
+            shutil.rmtree(modules_cache)
+        except OSError as e:
+            failures.append(f"rm -rf {modules_cache}: {e}")
+    if failures:
         print(
-            f"    `git submodule add` left files on disk, staged a "
-            f"gitlink, and edited .gitmodules. To undo:\n"
+            f"  ! submodule rollback for {rel} left residue. Run manually:\n"
             f"      git -C {wiki_root} submodule deinit -f {rel}\n"
             f"      git -C {wiki_root} rm -f {rel}\n"
-            f"      rm -rf {wiki_root}/.git/modules/{rel}",
+            f"      rm -rf {wiki_root}/.git/modules/{rel}\n"
+            f"    Failures: {'; '.join(failures)}",
             file=sys.stderr,
         )
+    else:
+        print(f"  - removed the submodule at {rel}/", file=sys.stderr)
 
 
 def _atomic_mutate_index(
