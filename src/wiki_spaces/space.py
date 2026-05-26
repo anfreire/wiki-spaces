@@ -1495,6 +1495,25 @@ def cmd_audit(args: argparse.Namespace) -> int:
             # list, not promoted to a real space).
             if fix:
                 ancestor_index = space / "index.md"
+                # If the ancestor's `## Spaces` contains ANY unparseable
+                # bullet (broken paren, missing link, half wikilink — see
+                # `_AUDIT_BULLET_SHAPE_RE`), refuse to register missing
+                # entries in this index. Otherwise `audit --fix` would add
+                # a SECOND, valid bullet next to the broken one — compounding
+                # the malformation instead of letting it surface for repair.
+                # Per PR-K: malformed entries signal author intent the
+                # framework can't reconstruct; the user repairs first.
+                if _has_unparseable_bullet(text):
+                    rel = space.relative_to(wiki_root)
+                    label = "<wiki>" if str(rel) == "." else f"<wiki>/{rel}"
+                    print(
+                        f"  ! refusing missing-entry registration in "
+                        f"{label}/index.md: unparseable bullet present in "
+                        "`## Spaces`. Repair the malformed line first; the "
+                        "next `audit --fix` will register normally.",
+                        file=sys.stderr,
+                    )
+                    continue
                 for child_rel in missing:
                     label_str = f"{child_rel}/"
                     href = f"{child_rel}/index.md"
@@ -2517,6 +2536,41 @@ def _find_alias_owners(
 import re as _re
 
 _AUDIT_BULLET_RE = _re.compile(r"^\s*-\s+\[([^\]]*)\]\(([^)]*)\)")
+# Detect any line that LOOKS LIKE a `## Spaces` link/wikilink bullet — even
+# if it fails to parse. A line with `- [` (or `* [` / `+ [`) followed by
+# anything is the author's signal that they tried to author an entry. If
+# none of the well-formed patterns (`ENTRY_RE`, `WIKILINK_ENTRY_RE`,
+# `_AUDIT_BULLET_RE`) match, the entry is unparseable — silently invisible
+# to traversal AND to the existing malformed pass. Surface it so the user
+# can repair the bullet.
+_AUDIT_BULLET_SHAPE_RE = _re.compile(r"^\s*[-*+]\s+\[")
+
+
+def _has_unparseable_bullet(text: str) -> bool:
+    """True iff text's `## Spaces` section contains any bullet that looks
+    like a link/wikilink entry but fails to parse as either shape.
+    `audit --fix` checks this before registering missing entries — adding
+    a valid bullet next to an unparseable one would compound the malformed
+    line rather than surface it for repair.
+    """
+    in_spaces = False
+    for line in text.splitlines():
+        stripped = line.rstrip()
+        if stripped == "## Spaces":
+            in_spaces = True
+            continue
+        if in_spaces and stripped.startswith("## "):
+            in_spaces = False
+        if not in_spaces:
+            continue
+        if not _AUDIT_BULLET_SHAPE_RE.match(line):
+            continue
+        if _AUDIT_BULLET_RE.match(line):
+            continue
+        if _md.WIKILINK_ENTRY_RE.match(line):
+            continue
+        return True
+    return False
 
 
 def _audit_malformed_entries(
@@ -2563,6 +2617,22 @@ def _audit_malformed_entries(
                 continue
             m = _AUDIT_BULLET_RE.match(line)
             if not m:
+                # A bullet that LOOKS LIKE a `## Spaces` entry (starts with
+                # `- [`, `* [`, or `+ [`) but doesn't match `_AUDIT_BULLET_RE`
+                # is unparseable. Common shapes: unbalanced `(href)` (no
+                # closing paren), missing parens entirely (`- [label]`),
+                # broken wikilink (`- [[name]` with one closing bracket).
+                # Also doesn't match `_md.WIKILINK_ENTRY_RE`. Surface it so
+                # the user repairs the bullet — otherwise traversal silently
+                # skips the entry while audit reports OK, and `audit --fix`
+                # could add a SECOND, valid entry alongside the broken one.
+                if (
+                    _AUDIT_BULLET_SHAPE_RE.match(line)
+                    and not _md.WIKILINK_ENTRY_RE.match(line)
+                ):
+                    issues.append(
+                        (space, f"unparseable bullet: {line.strip()}")
+                    )
                 continue
             href = m.group(2)
             if not href.strip():

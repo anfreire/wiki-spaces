@@ -2101,6 +2101,75 @@ def test_audit_fix_does_not_repair_malformed_entries(tmp_path):
     assert bad_line in (wiki / "index.md").read_text()
 
 
+def test_audit_flags_unparseable_bullets(tmp_path):
+    """Regression: bullets that LOOK LIKE `## Spaces` entries but don't
+    match `_AUDIT_BULLET_RE` (unbalanced parens, missing parens entirely,
+    half-formed wikilinks) used to slip past both the consumer parser AND
+    the malformed scanner. Result: an unparseable line could sit in
+    `index.md` forever; `audit --fix` would even add a SECOND, valid entry
+    next to it. PR-K's contract says malformed entries are surfaced so the
+    user can repair.
+    """
+    wiki = _make_wiki(tmp_path)
+    idx = wiki / "index.md"
+    idx.write_text(
+        idx.read_text()
+        + "- [unbalanced/](child/index.md\n"      # missing closing `)`
+        + "- [no-parens]\n"                        # no link/wikilink at all
+        + "- [[half-wikilink]\n"                   # broken wikilink shape
+    )
+    rc, out, _ = _run(["--wiki", str(wiki), "audit"])
+    assert rc == 1, out
+    assert "malformed" in out
+    assert "unparseable bullet" in out
+    # All three shapes must surface individually so the user knows what
+    # to repair — a single combined "something's wrong" line would force
+    # a manual diff.
+    assert "[unbalanced/](child/index.md" in out
+    assert "[no-parens]" in out
+    assert "[[half-wikilink]" in out
+
+
+def test_audit_does_not_flag_plain_bullets(tmp_path):
+    """`_AUDIT_BULLET_SHAPE_RE` must not over-trigger on plain prose
+    bullets that happen to live in `## Spaces`. Only bullets shaped
+    like attempted entries (`- [...`) should be considered."""
+    wiki = _make_wiki(tmp_path)
+    idx = wiki / "index.md"
+    idx.write_text(
+        idx.read_text()
+        + "- plain bullet, no link\n"
+        + "  - nested bullet text\n"
+    )
+    rc, _, _ = _run(["--wiki", str(wiki), "audit"])
+    assert rc == 0
+
+
+def test_audit_fix_does_not_register_alongside_unparseable_bullet(tmp_path):
+    """An unparseable bullet for `child/` must not let `audit --fix`
+    add a SECOND valid entry next to it — that would leave the wiki
+    with two bullets pointing at the same child, one broken and one
+    new. Audit must flag the unparseable bullet (exit 1) and refuse to
+    silently work around it.
+    """
+    wiki = _make_wiki(tmp_path)
+    idx = wiki / "index.md"
+    # Author broken entry pointing at a real on-disk space.
+    (wiki / "child").mkdir()
+    (wiki / "child" / "index.md").write_text("# child\n\n## Spaces\n\n")
+    idx.write_text(idx.read_text() + "- [child/](child/index.md\n")  # no `)`
+    rc, out, _ = _run(["--wiki", str(wiki), "audit", "--fix"])
+    assert rc == 1, out  # unparseable bullet still flagged
+    final = (wiki / "index.md").read_text()
+    # The broken line stays — repair is judgment, not mechanical.
+    assert "- [child/](child/index.md" in final
+    # `audit --fix` MUST NOT have added a second `child/` entry alongside.
+    # Counting occurrences of `child/index.md` is the simplest pin: the
+    # broken bullet contributes one; a parallel registration would make
+    # two.
+    assert final.count("child/index.md") == 1, final
+
+
 def test_audit_flags_duplicate_aliases(tmp_path):
     """When two owned pages declare the same alias, wikilink resolution is
     nondeterministic. Audit reports the collision."""
