@@ -3424,12 +3424,12 @@ def cmd_promote(args: argparse.Namespace) -> int:
                         file=sys.stderr,
                     )
             _restore_from_snapshot(snapshot_dir, wiki_root)
-            # Defect #4: if we ran `git mv`, the staging index is now in a
-            # dirty state (the move was staged, but we've put the file back
-            # via snapshot restore, so the staged rename doesn't match the
-            # working tree). Unstage so `git status` shows a clean tree.
-            # Best-effort: a failure here doesn't break the working-tree
-            # rollback, only the staging-area cleanup.
+            # If we ran `git mv`, the staging index is now in a dirty state
+            # (the move was staged, but we've put the file back via snapshot
+            # restore, so the staged rename doesn't match the working tree).
+            # Unstage so `git status` shows a clean tree. Best-effort: a
+            # failure here doesn't break the working-tree rollback, only
+            # the staging-area cleanup.
             if moved_via_git:
                 try:
                     subprocess.run(

@@ -3686,8 +3686,8 @@ def _force_chain_helper_failure(monkeypatch):
 
 
 def test_space_add_rollback_removes_created_dir_on_registration_failure(tmp_path, monkeypatch):
-    """Defect #2 + PR-D: when the chain helper fails mid-registration,
-    rollback must remove the dir and its index.md."""
+    """When the chain helper fails mid-registration, rollback must remove
+    the dir and its index.md."""
     wiki = _make_wiki(tmp_path)
     _force_chain_helper_failure(monkeypatch)
 
@@ -3750,9 +3750,9 @@ def test_add_rollback_only_removes_empty_parents(tmp_path, monkeypatch):
 
 
 def test_space_remove_rollback_restores_dir_on_rmtree_failure(tmp_path, monkeypatch):
-    """Defect #2 part 2: when rmtree fails mid-delete (some files gone,
-    others remain), rollback restores the directory byte-for-byte AND
-    re-adds the index entry that was just removed."""
+    """When rmtree fails mid-delete (some files gone, others remain),
+    rollback restores the directory byte-for-byte AND re-adds the index
+    entry that was just removed."""
     wiki = _make_wiki(tmp_path)
     (wiki / "doomed").mkdir()
     (wiki / "doomed" / "index.md").write_text("# Doomed\n\nstuff\n")
@@ -3785,10 +3785,9 @@ def test_space_remove_rollback_restores_dir_on_rmtree_failure(tmp_path, monkeypa
 
 
 def test_promote_does_not_rewrite_links_inside_code_blocks(tmp_path):
-    """Defect #3: promote's link rewrite must NOT touch `[[wikilinks]]` that
-    appear inside fenced code blocks — those are code examples, not real
-    links. Pre-fix, the scanner saw them; post-fix, the offset-preserving
-    mask hides them."""
+    """Promote's link rewrite must NOT touch `[[wikilinks]]` that appear
+    inside fenced code blocks — those are code examples, not real links.
+    The offset-preserving mask hides them from the scanner."""
     wiki = _make_wiki(tmp_path)
     (wiki / "concepts").mkdir()
     (wiki / "concepts" / "foo.md").write_text("# Foo\n\ncontent\n")
@@ -3814,9 +3813,9 @@ def test_promote_does_not_rewrite_links_inside_code_blocks(tmp_path):
 
 
 def test_promote_does_not_rewrite_links_inside_frontmatter(tmp_path):
-    """Defect #3 part 2: links inside YAML frontmatter (e.g., an aliases
-    field that happens to contain `[[foo]]` syntax) are not real wikilinks
-    and must not be touched."""
+    """Links inside YAML frontmatter (e.g., an aliases field that happens
+    to contain `[[foo]]` syntax) are not real wikilinks and must not be
+    touched."""
     wiki = _make_wiki(tmp_path)
     (wiki / "concepts").mkdir()
     (wiki / "concepts" / "foo.md").write_text("# Foo\n\ncontent\n")

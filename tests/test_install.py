@@ -145,9 +145,9 @@ def test_install_with_no_harnesses_writes_repo(monkeypatch, tmp_path):
 def test_bridge_warns_when_repo_unset(monkeypatch, tmp_path):
     """`--bridge cursor` emits a stderr warning when the `repo` key is unset
     in the config. The snippet still goes to stdout unchanged — only the
-    warning is added. Defect #5: bridge snippets reference the repo path,
-    and a snippet emitted before any `wiki-spaces install` run would land
-    in a broken state."""
+    warning is added. Bridge snippets reference the repo path, so a snippet
+    emitted before any `wiki-spaces install` run would land in a broken state
+    without the warning."""
     from wiki_spaces import _common
     # Point the config at a path with no `repo` key.
     cfg_path = tmp_path / "config"
@@ -176,10 +176,9 @@ def test_bridge_no_warning_when_repo_set(monkeypatch, tmp_path):
 
 
 def test_install_unowned_dst_exits_nonzero_without_force(tmp_path, monkeypatch):
-    """Defect #6: when a destination is user-owned (not wiki-spaces-installed)
-    and `--force` is not passed, the per-skill action is recorded and the
-    final exit code is nonzero. Previously the action printed but `had_fatal`
-    stayed False, so a silently-partial install exited 0."""
+    """When a destination is user-owned (not wiki-spaces-installed) and
+    `--force` is not passed, the per-skill action is recorded and the final
+    exit code is nonzero — a silently-partial install must not exit 0."""
     from wiki_spaces import _common
 
     fake_skills = tmp_path / "claude-skills"

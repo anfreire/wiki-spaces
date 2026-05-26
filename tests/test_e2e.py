@@ -4,10 +4,6 @@ These tests exercise the full chain: a producer (CLI command or skill-equivalent
 write) emits content, then a consumer (audit, search, etc.) operates on the
 result. They catch the failure class that single-component unit tests cannot —
 where each component is correct in isolation but the loop breaks at a seam.
-
-Defect #1 (promote→audit producer/consumer break) was exactly such a bug:
-promote emitted wikilinks audit could not resolve, and 274 unit tests passed
-because no test combined the two.
 """
 
 from __future__ import annotations
@@ -36,7 +32,7 @@ def _run(args: list[str]) -> tuple[int, str, str]:
 
 
 def test_promote_then_audit_clean(tmp_path):
-    """Defect #1 regression. Sequence:
+    """Promote→audit producer/consumer regression. Sequence:
       1. Build a wiki with a content page `concepts/foo.md` and a referencing page
          `notes/ref.md` containing `[[foo]]`.
       2. `space promote concepts/foo.md` — the producer rewrites the reference to
@@ -44,9 +40,8 @@ def test_promote_then_audit_clean(tmp_path):
       3. `space audit` — the consumer must resolve that pathful wikilink to the
          new `concepts/foo/index.md` and report zero broken links.
 
-    Pre-fix: audit could only resolve base-relative + bare-name forms, so the
-    rewritten link was flagged broken. Post-fix: unified resolver handles
-    wiki-root pathful first, audit succeeds.
+    The unified resolver handles wiki-root pathful first so the rewritten link
+    is recognised by audit.
     """
     root = _make_wiki(tmp_path)
     (root / "concepts").mkdir()
