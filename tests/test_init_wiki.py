@@ -93,13 +93,38 @@ def test_init_rejects_absolute(monkeypatch, tmp_path):
     assert rc == 2
 
 
-def test_init_accepts_hidden_non_git_segment(monkeypatch, tmp_path):
-    # Only `.git` is reserved; other hidden names (`.archive`, `.config`, etc.)
-    # are allowed.
+def test_init_rejects_hidden_segment(monkeypatch, tmp_path):
+    """Reserved-folder contract is end-to-end (PR-G + 52ea345): hidden
+    segments are skipped by every consumer walker per CONVENTIONS /
+    Reserved top-level folder names. The producer side mirrors this —
+    `space._validate_rel_path` already refused hidden segments for
+    `space add`; `init --folders` must refuse them too or scaffolding
+    creates content no skill can reach.
+    """
     monkeypatch.setattr(_common, "CONFIG_PATH", tmp_path / "absent-config")
-    rc, _, _ = _run([str(tmp_path / "wiki"), "--folders", ".archive", "--no-config"])
-    assert rc == 0
-    assert (tmp_path / "wiki" / ".archive").is_dir()
+    for hidden in (".archive", ".config", ".cache", "projects/.cache"):
+        rc, _, err = _run(
+            [str(tmp_path / f"wiki-{hidden.replace('/', '-')}"),
+             "--folders", hidden, "--no-config"]
+        )
+        assert rc == 2, f"hidden segment {hidden!r} accepted"
+        assert "reserved" in err.lower() or "hidden" in err.lower() or "invalid" in err.lower()
+
+
+def test_init_rejects_reserved_underscore_segments(monkeypatch, tmp_path):
+    """`_archives` and `_meta` are excluded from consumer walks per
+    CONVENTIONS / Reserved top-level folder names. `init --folders` must
+    refuse them so the user can't accidentally scaffold a folder no skill
+    will ever read.
+    """
+    monkeypatch.setattr(_common, "CONFIG_PATH", tmp_path / "absent-config")
+    for bad in ("_archives", "_meta", "projects/_archives", "_meta/foo"):
+        rc, _, err = _run(
+            [str(tmp_path / f"wiki-{bad.replace('/', '-')}"),
+             "--folders", bad, "--no-config"]
+        )
+        assert rc == 2, f"reserved segment {bad!r} accepted"
+        assert "invalid" in err.lower() or "reserved" in err.lower()
 
 
 def test_init_accepts_trailing_slash(monkeypatch, tmp_path):

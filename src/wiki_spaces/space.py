@@ -3512,6 +3512,26 @@ def cmd_log(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 2
+
+        def _has_control_chars(value: str) -> bool:
+            # ASCII control chars (0x00–0x1F + 0x7F) and Unicode line/
+            # paragraph separators all split a `log.md` bullet across
+            # multiple physical lines and break the one-line structured
+            # contract documented in CONVENTIONS.md / log.md.
+            return any(
+                ord(c) < 0x20 or c == "\x7f" or c in "  "
+                for c in value
+            )
+
+        if _has_control_chars(args.operation):
+            print(
+                "  ! OPERATION may not contain newline / control characters "
+                "— the structured `- [TIMESTAMP] OP ...` entry must fit on "
+                "one line. Use --raw if you really need multi-line content.",
+                file=sys.stderr,
+            )
+            return 2
+
         from datetime import datetime, timezone
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         parts = [f"- [{ts}]", args.operation.upper()]
@@ -3523,6 +3543,14 @@ def cmd_log(args: argparse.Namespace) -> int:
                 )
                 return 2
             k, v = kv.split("=", 1)
+            if _has_control_chars(k) or _has_control_chars(v):
+                print(
+                    f"  ! --field {k}=... may not contain newline / control "
+                    "characters — the structured entry must fit on one line. "
+                    "Use --raw if you really need multi-line content.",
+                    file=sys.stderr,
+                )
+                return 2
             parts.append(f"{k}={v}")
         message = " ".join(parts)
 

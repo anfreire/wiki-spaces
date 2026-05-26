@@ -3554,6 +3554,55 @@ def test_space_log_raw_form_does_not_format(tmp_path):
     assert "- custom shape no timestamp" in body
 
 
+def test_space_log_structured_rejects_newlines_in_operation_and_fields(tmp_path):
+    """The structured form (PR-H §13) exists to fence off LLM-formatting
+    defects — `- [TIMESTAMP] OP key=value …` must fit on one bullet line.
+    Newlines or other control chars in OPERATION / --field key / --field
+    value would split the bullet across physical lines and break the
+    log.md structure documented in CONVENTIONS / log.md. The CLI rejects;
+    --raw stays as the escape hatch for callers that really need custom
+    shapes.
+    """
+    wiki = _make_wiki(tmp_path)
+    (wiki / "log.md").write_text("# Log\n")
+    initial = (wiki / "log.md").read_text()
+
+    # Newline in OPERATION
+    rc, _, err = _run([
+        "--wiki", str(wiki), "log", "SEARCH\ninjected",
+        "--field", "q=ok",
+    ])
+    assert rc == 2
+    assert "newline" in err.lower() or "control" in err.lower()
+    assert (wiki / "log.md").read_text() == initial  # nothing written
+
+    # Newline in --field value
+    rc, _, err = _run([
+        "--wiki", str(wiki), "log", "SEARCH",
+        "--field", "q=line1\nline2",
+    ])
+    assert rc == 2
+    assert "newline" in err.lower() or "control" in err.lower()
+    assert (wiki / "log.md").read_text() == initial
+
+    # Newline in --field key
+    rc, _, err = _run([
+        "--wiki", str(wiki), "log", "SEARCH",
+        "--field", "bad\nkey=value",
+    ])
+    assert rc == 2
+    assert (wiki / "log.md").read_text() == initial
+
+    # --raw still allows multi-line content (escape hatch, caller takes
+    # responsibility).
+    rc, _, _ = _run([
+        "--wiki", str(wiki), "log",
+        "--raw", "- custom\nmulti-line",
+    ])
+    assert rc == 0
+    assert "multi-line" in (wiki / "log.md").read_text()
+
+
 def test_space_log_atomic_under_contention(tmp_path):
     """100 concurrent `space log` invocations via multiprocessing.Pool —
     every line lands in log.md with no losses. Exercises the flock-

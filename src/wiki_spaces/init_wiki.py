@@ -5,8 +5,11 @@ Always writes the spec-required `index.md`. Optional files via --with:
 
 Optional folders via --folders (plain directories, no `index.md` — they
 become spaces only if the user later adds one). Nested paths like
-`projects/foo` are accepted; bare hidden names (`.archive`) are allowed;
-`.git` is reserved:
+`projects/foo` are accepted. Reserved segments are refused per CONVENTIONS
+/ Reserved top-level folder names: hidden directories (`.X`), `.git/`,
+`_archives/`, and `_meta/` — these are all skipped by consumer walkers,
+so creating them via `--folders` would silently produce content no skill
+can read.
   --folders concepts entities projects/acme
 
 After scaffolding, writes `wiki = <path>` to ~/.config/wiki-spaces/config so
@@ -158,7 +161,16 @@ def main(argv: list[str] | None = None) -> int:
             continue
         bad_part = False
         for part in rel.parts:
-            if part in ("", ".", "..") or part == ".git":
+            # Mirror `space._validate_rel_path` so producer-side reserved
+            # names refuse symmetrically. Hidden segments (`.X`) and
+            # `_archives` / `_meta` are skipped by every consumer walker
+            # per CONVENTIONS / Reserved top-level folder names; creating
+            # them at init time would silently produce content no skill
+            # can reach.
+            if part in ("", ".", "..") or part.startswith("."):
+                bad_part = True
+                break
+            if part in ("_archives", "_meta"):
                 bad_part = True
                 break
         if bad_part:
@@ -178,8 +190,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  ! invalid folder name(s): {bad}", file=sys.stderr)
         print(
             "    folder paths must be relative, stay inside the wiki root, "
-            "and have no '.', '..', or '.git' segments. Nested paths like "
-            "'projects/foo' are accepted.",
+            "have no '.', '..', or empty segments, and avoid reserved names "
+            "(hidden `.X` directories including `.git`; `_archives`; `_meta`) "
+            "per CONVENTIONS / Reserved top-level folder names. Nested "
+            "paths like 'projects/foo' are accepted.",
             file=sys.stderr,
         )
         return 2
