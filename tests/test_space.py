@@ -4707,6 +4707,56 @@ def test_promote_link_in_ancestor_index_is_not_clobbered_by_entry_add(tmp_path):
     assert "- [page/]" in final or "page/index.md" in final, "entry-add missing"
 
 
+def test_promote_rewrites_sibling_link_in_soon_to_be_visible_ancestor(tmp_path):
+    """Regression: when `space promote projects/foo.md` runs against a wiki
+    where `projects/` is unregistered (bare or absent from the wiki root's
+    `## Spaces`), the chain repair below makes `projects/` consumer-visible
+    AFTER the rewrite plan was computed. A sibling `projects/sibling.md`
+    that links to `foo.md` was previously invisible to the contract walker,
+    so its link was not rewritten — leaving a broken stale link in a now-
+    visible space.
+
+    Fix: promote unions every `.md` under `ancestor` into the candidate
+    set unconditionally, so soon-to-be-visible siblings get their links
+    rewritten in the same operation.
+    """
+    wiki = _make_wiki(tmp_path)
+    projects = wiki / "projects"
+    projects.mkdir()
+    # `projects/index.md` is bare — no `## Spaces`. The chain repair below
+    # will insert it AND register `projects/` in the wiki root.
+    (projects / "index.md").write_text("# projects\n")
+    (projects / "foo.md").write_text("# foo\n\nbody\n")
+    # Sibling links to `foo.md`. Pre-fix, this was skipped during the
+    # rewrite-plan loop (the contract walker didn't yield it because
+    # `projects/` had no `## Spaces`); post-fix, it lives under `ancestor`
+    # and so lands in the candidate set.
+    (projects / "sibling.md").write_text(
+        "# sibling\n\nSee [foo](foo.md) and [[foo]] for details.\n"
+    )
+
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "projects/foo.md"])
+    assert rc == 0, err
+
+    # Chain repair did happen.
+    proj_idx = (projects / "index.md").read_text()
+    assert "## Spaces" in proj_idx
+    assert "foo/" in proj_idx or "foo/index.md" in proj_idx
+    wiki_idx = (wiki / "index.md").read_text()
+    assert "projects/" in wiki_idx or "projects/index.md" in wiki_idx
+
+    # The promoted file landed at its new path.
+    assert (projects / "foo" / "index.md").is_file()
+    assert not (projects / "foo.md").exists()
+
+    # Sibling's link was rewritten to point at the new location — no stale
+    # link survives into the now-visible space.
+    sibling_text = (projects / "sibling.md").read_text()
+    assert "foo.md" not in sibling_text, (
+        f"stale `foo.md` link survived in now-visible sibling: {sibling_text!r}"
+    )
+
+
 def test_promote_rollback_removes_orphaned_target_dir(tmp_path, monkeypatch):
     """When promote fails mid-mutation, the target/ dir created by mkdir must
     be cleaned up — not left as an empty folder polluting the wiki."""

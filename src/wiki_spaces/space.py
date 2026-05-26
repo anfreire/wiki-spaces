@@ -765,6 +765,80 @@ def _walk_md_files_via_contract(
                 stack.append((entry, entry_external))
 
 
+def _walk_space_md_files(
+    space: Path, wiki_root: Path, *, include_external: bool = False,
+):
+    """Yield `.md` files inside a single space, using plain-folder semantics.
+
+    Same inner traversal as `_walk_md_files_via_contract` but for one space
+    rather than the contract-reachable set. Stops at nested child-space
+    boundaries (folders with their own `index.md`). Skips hidden, `_archives`,
+    `_meta`, and (by default) external descendants.
+
+    Used by `cmd_promote` to enumerate sibling `.md` files that will become
+    consumer-visible after chain repair registers `space` upward — those
+    files need their links to the promoted source rewritten in the same
+    operation regardless of whether `space` was contract-reachable beforehand.
+    """
+    try:
+        root_real = wiki_root.resolve()
+    except OSError:
+        return
+    space_external, _why = _is_in_external_scope(space, wiki_root)
+    if space_external and not include_external:
+        return
+    stack: list[tuple[Path, bool]] = [(space, space_external)]
+    seen: set[Path] = set()
+    while stack:
+        d, d_external = stack.pop()
+        try:
+            entries = sorted(d.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if entry.is_file() and entry.suffix == ".md":
+                file_external = d_external
+                if entry.is_symlink():
+                    try:
+                        target_real = entry.resolve()
+                        target_real.relative_to(root_real)
+                    except (OSError, ValueError):
+                        if not include_external:
+                            continue
+                        file_external = True
+                yield entry
+                continue
+            if not entry.is_dir():
+                continue
+            if entry.name.startswith(".") or entry.name in (
+                "_archives", "_meta",
+            ):
+                continue
+            # Stop at child-space boundaries — those are consumer-visible
+            # only via their own contract entry. Promote's caller deals
+            # with cross-space link rewriting via the contract walker.
+            if (entry / "index.md").is_file():
+                continue
+            ancestor_external, _why = _is_in_external_scope(entry, wiki_root)
+            entry_external = d_external or ancestor_external
+            if entry.is_symlink():
+                try:
+                    target_real = entry.resolve()
+                    target_real.relative_to(root_real)
+                except (OSError, ValueError):
+                    entry_external = True
+            if entry_external and not include_external:
+                continue
+            try:
+                er = entry.resolve()
+            except OSError:
+                continue
+            if er in seen:
+                continue
+            seen.add(er)
+            stack.append((entry, entry_external))
+
+
 def _new_index_md(name: str, description: str | None = None) -> str:
     """index.md body for a freshly created space.
 
@@ -3164,17 +3238,40 @@ def cmd_promote(args: argparse.Namespace) -> int:
     # rewrites work.
     candidates: set[Path] = {p.resolve() for p in all_md_files}
     candidates.add(source_resolved)
+    # Also union in every `.md` file inside `ancestor` (using plain-folder
+    # semantics — stop at child-space boundaries). The chain repair below
+    # will register `ancestor/` upward and insert `## Spaces` into it if
+    # missing, making `ancestor`'s subtree consumer-visible AFTER promote
+    # completes. Files that become visible MUST have their links to the
+    # promoted source rewritten in the same operation — otherwise promote
+    # leaves a producer/consumer break of its own making (sibling links
+    # pointing at the now-moved source survive into visible state). When
+    # `ancestor` was ALREADY contract-reachable, the union is a no-op
+    # (already in `all_md_files`); when it wasn't, this catches the soon-
+    # to-be-visible siblings.
+    ancestor_md_files = list(_walk_space_md_files(ancestor, wiki_root))
+    candidates.update(p.resolve() for p in ancestor_md_files)
 
     # Compute the post-move absolute target (for link rewriting).
     new_target_abs = target
     new_target_wikilink = source.with_suffix("").relative_to(wiki_root).as_posix() + "/index"
 
-    # Plan rewrites across all other owned md files.
+    # Plan rewrites across all owned md files reachable now OR through the
+    # chain-repair propagation below. Dedupe on resolved path so files that
+    # appear in both `all_md_files` and `ancestor_md_files` are processed
+    # once. Sort for deterministic plan ordering across runs.
+    rewrite_targets: dict[Path, Path] = {}
+    for page in (*all_md_files, *ancestor_md_files):
+        try:
+            real = page.resolve()
+        except OSError:
+            continue
+        if real == source_resolved:
+            continue
+        rewrite_targets.setdefault(real, page)
     planned: list[tuple[Path, str]] = []
     rewrite_files = 0
-    for page in all_md_files:
-        if page.resolve() == source_resolved:
-            continue
+    for page in sorted(rewrite_targets.values()):
         try:
             text = page.read_text(encoding="utf-8")
         except OSError:
