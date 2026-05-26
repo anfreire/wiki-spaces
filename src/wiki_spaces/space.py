@@ -1975,8 +1975,15 @@ def _rollback_mount(wiki_root: Path, dest: Path, rel: str, mechanism: str) -> No
             print(f"  ! manual cleanup required: could not remove {rel}: {e}", file=sys.stderr)
         return
     if mechanism == "clone":
-        shutil.rmtree(dest, ignore_errors=True)
-        print(f"  - removed the clone at {rel}/", file=sys.stderr)
+        try:
+            shutil.rmtree(dest)
+            print(f"  - removed the clone at {rel}/", file=sys.stderr)
+        except OSError as e:
+            print(
+                f"  ! manual cleanup required: could not remove the clone at "
+                f"{rel}/: {e}",
+                file=sys.stderr,
+            )
         return
     # submodule: undo the gitlink + .gitmodules edit + .git/modules cache.
     # `git submodule add` already staged the gitlink and edited .gitmodules
