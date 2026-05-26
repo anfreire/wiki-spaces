@@ -13,7 +13,7 @@ Concrete shapes the canonical wiki can take. None are special — the spec doesn
 
 A folder + `index.md` (with `## Spaces`). That's a complete wiki. Add files at the root or under any subfolder as you go. Works for any use case where you don't yet know the shape — start here, let folders emerge from what you actually write.
 
-The `wiki = /home/<user>/Wiki` entry in `~/.config/wiki-spaces/config` makes this discoverable from anywhere. Paths in the config are absolute (no `~/` shell expansion).
+The `wiki = /home/<user>/Documents/Wiki` entry in `~/.config/wiki-spaces/config` makes this discoverable from anywhere. Paths in the config are absolute (no `~/` shell expansion).
 
 ## Developer notebook
 

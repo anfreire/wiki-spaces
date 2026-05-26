@@ -16,7 +16,7 @@ The full spec is in `AGENTS.md` (bundled with the install or accessible via `rep
 
 ```
 # wiki-spaces config
-wiki = /home/<user>/Wiki
+wiki = /home/<user>/Documents/Wiki
 repo = /home/<user>/.local/share/wiki-spaces
 ```
 
