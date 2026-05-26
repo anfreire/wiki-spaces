@@ -2321,6 +2321,24 @@ def test_space_files_scope_restricts_to_subspace(tmp_path):
     assert "topnote.md" not in out
 
 
+def test_space_files_stops_at_unregistered_child_space(tmp_path):
+    """Files inside an on-disk child space that is NOT in any ancestor's
+    ``## Spaces`` must be invisible to ``space files`` — the contract
+    walker never descends into unregistered spaces."""
+    wiki = _make_wiki(tmp_path)
+    rc, _, _ = _run(["--wiki", str(wiki), "add", "projects/foo"])
+    assert rc == 0
+    (wiki / "projects" / "foo" / "visible.md").write_text("# v\n")
+    unreg = wiki / "projects" / "foo" / "unreg"
+    unreg.mkdir()
+    (unreg / "index.md").write_text("# unreg\n\n## Spaces\n\n")
+    (unreg / "hidden.md").write_text("# h\n")
+    rc2, out, _ = _run(["--wiki", str(wiki), "files"])
+    assert rc2 == 0
+    assert "projects/foo/visible.md" in out
+    assert "hidden.md" not in out
+
+
 def test_space_files_refuses_unregistered_scope(tmp_path):
     """An on-disk folder that isn't in any `## Spaces` is invisible to the
     consumer — refusing here closes the back-door."""
