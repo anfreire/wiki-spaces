@@ -143,7 +143,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    root = args.path.resolve()
     # Refuse wiki-root basenames that have explicit wiki-spaces semantics
     # when nested inside a parent wiki: `_archives` is excluded from audit
     # walks, `_meta` holds config files, `shared` is external-by-default.
@@ -155,16 +154,23 @@ def main(argv: list[str] | None = None) -> int:
     # asymmetry with `_validate_rel_path` (which refuses hidden child
     # paths) is intentional and reflects the difference between a wiki
     # root and a child path within a wiki.
-    if root.name in ("_archives", "_meta", "shared"):
+    #
+    # The check uses the LEXICAL basename (pre-resolve) because walker
+    # pruning operates on lexical child names — a symlink at
+    # `<parent>/_archives` → `/real-wiki` is still pruned by parent
+    # walkers as `_archives`, regardless of where the symlink resolves.
+    lexical_basename = args.path.expanduser().name
+    if lexical_basename in ("_archives", "_meta", "shared"):
         print(
-            f"  ! invalid wiki root: {root.name!r} is a reserved name "
-            "per CONVENTIONS / Reserved top-level folder names. Consumer "
-            "walkers would prune this as a child if nested under another "
-            "wiki, creating a producer/consumer break. Choose a different "
-            "basename.",
+            f"  ! invalid wiki root: {lexical_basename!r} is a reserved "
+            "name per CONVENTIONS / Reserved top-level folder names. "
+            "Consumer walkers would prune this as a child if nested under "
+            "another wiki, creating a producer/consumer break. Choose a "
+            "different basename.",
             file=sys.stderr,
         )
         return 2
+    root = args.path.resolve()
     name = args.name or root.name
     description = args.description.strip() if args.description else None
 

@@ -162,6 +162,24 @@ def test_init_accepts_hidden_wiki_root_basename(monkeypatch, tmp_path):
     assert (tmp_path / ".hidden" / "index.md").is_file()
 
 
+def test_init_rejects_reserved_basename_via_symlink(monkeypatch, tmp_path):
+    """The reserved-basename check uses the LEXICAL basename (pre-resolve)
+    because walker pruning operates on lexical child names — a symlink at
+    `<parent>/_archives` → `/real-wiki` is still pruned by parent walkers
+    as `_archives`, regardless of where it resolves. Resolving first would
+    let a symlink whose target has a non-reserved basename bypass the
+    check.
+    """
+    monkeypatch.setattr(_common, "CONFIG_PATH", tmp_path / "absent-config")
+    real_target = tmp_path / "real-wiki"
+    real_target.mkdir()
+    symlink = tmp_path / "_archives"
+    symlink.symlink_to(real_target)
+    rc, _, err = _run([str(symlink), "--no-config"])
+    assert rc == 2, "symlink with reserved-name lexical basename should be refused"
+    assert "reserved" in err.lower()
+
+
 def test_init_refuses_when_non_directory_file_collides(monkeypatch, tmp_path):
     monkeypatch.setattr(_common, "CONFIG_PATH", tmp_path / "absent-config")
     wiki = tmp_path / "wiki"
