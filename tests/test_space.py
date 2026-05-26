@@ -2403,6 +2403,44 @@ def test_promote_preflights_size_caps_before_rename(tmp_path):
     assert not (wiki / "page").exists()
 
 
+def test_promote_preflights_upper_chain_size_caps_before_any_fs_write(tmp_path):
+    """PR-L: ALL planned writes — including upper-ancestor chain repair —
+    must be preflighted BEFORE any FS mutation. The immediate ancestor's
+    combined write was already preflighted at lines 3201-3235; the chain
+    helper that walks UP from `ancestor` to `wiki_root` was not. If
+    grandparent's `index.md` is over cap when we try to register
+    `ancestor/` in it, the failure must abort BEFORE `_ensure_section_at`
+    mutates `ancestor/index.md`. Otherwise we'd half-mutate the chain.
+
+    Setup: wiki/projects/foo.md to promote. `projects/index.md` is bare
+    (no `## Spaces`) so the chain repair will need to (a) insert `##
+    Spaces` into `projects/index.md` and (b) register `projects/` in
+    the wiki root's `## Spaces`. Push the wiki root's `index.md` to just
+    under cap so registering `projects/` exceeds it. Result: promote
+    rejects with rc=2 AND `projects/index.md` retains its bare body
+    (unchanged from before the call).
+    """
+    wiki = _make_wiki(tmp_path)
+    (wiki / "projects").mkdir()
+    bare_text = "# projects\n"
+    (wiki / "projects" / "index.md").write_text(bare_text)
+    (wiki / "projects" / "foo.md").write_text("# foo\n\nbody\n")
+
+    # Push the wiki root to ~cap so registering `projects/` overflows
+    # (registering adds `- [projects/](projects/index.md)\n` ~ 33 chars).
+    idx = wiki / "index.md"
+    bulky = "x" * 4990
+    idx.write_text(idx.read_text() + bulky + "\n")
+
+    rc, _, err = _run(["--wiki", str(wiki), "promote", "projects/foo.md"])
+    assert rc == 2
+    assert "size cap" in err.lower()
+    # Producer side unchanged: bare body retained, source unmoved.
+    assert (wiki / "projects" / "index.md").read_text() == bare_text
+    assert (wiki / "projects" / "foo.md").is_file()
+    assert not (wiki / "projects" / "foo").exists()
+
+
 def test_promote_outgoing_link_does_not_rewrite_code_block(tmp_path):
     """§29 — the outgoing-link adjustment must mask code spans, same as
     the cross-page rewriter. A `[label](sibling.md)` inside a fenced

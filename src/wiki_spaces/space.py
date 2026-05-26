@@ -3260,6 +3260,22 @@ def cmd_promote(args: argparse.Namespace) -> int:
     # in its parent's `## Spaces` while `ancestor/index.md` itself stayed
     # bare — a producer/consumer break the contract walker would skip.
     if ancestor != wiki_root:
+        # Preflight every ancestor write the chain helper would make,
+        # BEFORE the section insert below. The outer preflight at
+        # 3201-3235 only projects the IMMEDIATE ancestor's combined
+        # write; an upper-ancestor cap overflow (registering `ancestor/`
+        # in grandparent, or grandparent's own section insert) would
+        # otherwise be caught only after we'd already mutated
+        # `ancestor/index.md`. PR-L's "preflight ALL planned writes
+        # BEFORE any FS mutation" requires catching that here.
+        try:
+            _preflight_chain_caps(wiki_root, ancestor)
+        except SizeCapExceeded as e:
+            print(
+                f"  ! size cap (chain repair): {e}. Aborted before any FS write.",
+                file=sys.stderr,
+            )
+            return 2
         try:
             _ensure_section_at(ancestor, wiki_root)
         except RuntimeError as e:
