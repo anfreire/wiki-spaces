@@ -144,6 +144,27 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     root = args.path.resolve()
+    # Refuse wiki-root basenames that have explicit wiki-spaces semantics
+    # when nested inside a parent wiki: `_archives` is excluded from audit
+    # walks, `_meta` holds config files, `shared` is external-by-default.
+    # The contract walker prunes these names as children regardless of
+    # whether the user later mounts the wiki under another. Refusing at
+    # init time prevents the surprise of a buried, unreachable wiki.
+    # Hidden basenames (`.notes/`, `.private/`) are NOT refused — they're
+    # a legitimate standalone-wiki UX pattern (e.g. `~/.notes/`); the
+    # asymmetry with `_validate_rel_path` (which refuses hidden child
+    # paths) is intentional and reflects the difference between a wiki
+    # root and a child path within a wiki.
+    if root.name in ("_archives", "_meta", "shared"):
+        print(
+            f"  ! invalid wiki root: {root.name!r} is a reserved name "
+            "per CONVENTIONS / Reserved top-level folder names. Consumer "
+            "walkers would prune this as a child if nested under another "
+            "wiki, creating a producer/consumer break. Choose a different "
+            "basename.",
+            file=sys.stderr,
+        )
+        return 2
     name = args.name or root.name
     description = args.description.strip() if args.description else None
 

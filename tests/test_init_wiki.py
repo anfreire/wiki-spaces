@@ -134,6 +134,34 @@ def test_init_accepts_trailing_slash(monkeypatch, tmp_path):
     assert (tmp_path / "wiki" / "concepts").is_dir()
 
 
+def test_init_rejects_reserved_wiki_root_basename(monkeypatch, tmp_path):
+    """The wiki root basename can't be a reserved wiki-spaces name.
+    Consumer walkers prune `_archives`, `_meta`, and `shared` as children
+    regardless of context — so an init at any of these would silently
+    bury the wiki if it ever ends up nested under another wiki. Refuse
+    at producer time so the user gets a clear error instead of a buried,
+    unreachable wiki later.
+    """
+    monkeypatch.setattr(_common, "CONFIG_PATH", tmp_path / "absent-config")
+    for basename in ("_archives", "_meta", "shared"):
+        rc, _, err = _run([str(tmp_path / basename), "--no-config"])
+        assert rc == 2, f"reserved basename {basename!r} accepted as wiki root"
+        assert "reserved" in err.lower()
+
+
+def test_init_accepts_hidden_wiki_root_basename(monkeypatch, tmp_path):
+    """Hidden basenames (`~/.notes/`) are a legitimate standalone-wiki UX
+    pattern and are NOT refused at the wiki root — asymmetric with
+    `_validate_rel_path` which refuses hidden child paths inside a wiki.
+    The distinction reflects the producer/consumer contract: hidden names
+    only have prune semantics as children of a wiki, not as wiki roots.
+    """
+    monkeypatch.setattr(_common, "CONFIG_PATH", tmp_path / "absent-config")
+    rc, _, err = _run([str(tmp_path / ".hidden"), "--no-config"])
+    assert rc == 0, f"hidden wiki root refused (err={err})"
+    assert (tmp_path / ".hidden" / "index.md").is_file()
+
+
 def test_init_refuses_when_non_directory_file_collides(monkeypatch, tmp_path):
     monkeypatch.setattr(_common, "CONFIG_PATH", tmp_path / "absent-config")
     wiki = tmp_path / "wiki"
