@@ -993,8 +993,8 @@ def test_audit_fix_inserts_spaces_into_bare_index_folder(tmp_path):
     bare.mkdir()
     (bare / "index.md").write_text("# bare\n")  # no `## Spaces`
     rc, out, _ = _run(["--wiki", str(wiki), "audit", "--fix"])
-    # We added a child without registering it pre-fix → it shows as drift;
-    # the fix repairs the bare section AND registers the missing entry.
+    # The child was added without registering it → it shows as drift;
+    # --fix repairs the bare section AND registers the missing entry.
     assert rc == 0, out
     bare_text = (bare / "index.md").read_text()
     assert "## Spaces" in bare_text
@@ -1101,10 +1101,10 @@ def test_audit_fix_skips_registering_when_child_section_repair_failed(tmp_path):
 
 def test_audit_fix_register_missing_entry_respects_size_cap(tmp_path, monkeypatch):
     """`audit --fix` is a framework writer — registering a missing entry
-    in the ancestor's `## Spaces` must enforce the per-file cap. Pre-fix,
-    the registration path used `_atomic_register_in_spaces` directly,
-    which skipped `_enforce_size_cap` and could push the ancestor over
-    its cap silently."""
+    in the ancestor's `## Spaces` must enforce the per-file cap. The
+    registration path must go through `_enforce_size_cap`; a direct call
+    to `_atomic_register_in_spaces` would push the ancestor over its cap
+    silently."""
     wiki = _make_wiki(tmp_path)
     # Bump root `index.md` so the next registration would exceed the cap.
     big = "# wiki\n\n## Spaces\n\n" + ("x" * 4990) + "\n"
@@ -2048,11 +2048,9 @@ def test_walk_owned_md_files_skips_escaping_md_symlink(tmp_path):
 def test_space_files_refuses_unregistered_symlink_alias_scope(tmp_path):
     """`space files <symlink-alias-to-registered-space>` must refuse —
     the contract is exhaustive, and a user-made symlink whose target is
-    a registered space is still NOT in `## Spaces`. The pre-fix code
-    compared resolved paths, so the alias resolved to the same path as
-    the registered space and passed reachability; lexical filtering
-    then returned an empty file list. Compare lexical paths instead so
-    the alias scope is refused outright."""
+    a registered space is still NOT in `## Spaces`. Comparing resolved
+    paths would let the alias resolve to the registered space and pass
+    reachability; lexical path comparison refuses the alias outright."""
     wiki = _make_wiki(tmp_path)
     rc, _, _ = _run(["--wiki", str(wiki), "add", "notes"])
     assert rc == 0
@@ -4814,10 +4812,9 @@ def test_promote_rewrites_sibling_link_in_soon_to_be_visible_ancestor(tmp_path):
     # will insert it AND register `projects/` in the wiki root.
     (projects / "index.md").write_text("# projects\n")
     (projects / "foo.md").write_text("# foo\n\nbody\n")
-    # Sibling links to `foo.md`. Pre-fix, this was skipped during the
-    # rewrite-plan loop (the contract walker didn't yield it because
-    # `projects/` had no `## Spaces`); post-fix, it lives under `ancestor`
-    # and so lands in the candidate set.
+    # Sibling links to `foo.md`. The contract walker visits it because
+    # `projects/` gains `## Spaces` via the chain helper, making
+    # `sibling.md` visible under `ancestor` and part of the candidate set.
     (projects / "sibling.md").write_text(
         "# sibling\n\nSee [foo](foo.md) and [[foo]] for details.\n"
     )
