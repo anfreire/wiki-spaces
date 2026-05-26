@@ -3292,10 +3292,10 @@ def cmd_promote(args: argparse.Namespace) -> int:
     # bare — a producer/consumer break the contract walker would skip.
     if ancestor != wiki_root:
         # Preflight every ancestor write the chain helper would make,
-        # BEFORE the section insert below. The outer preflight at
-        # 3201-3235 only projects the IMMEDIATE ancestor's combined
-        # write; an upper-ancestor cap overflow (registering `ancestor/`
-        # in grandparent, or grandparent's own section insert) would
+        # BEFORE the section insert below. The outer PR-L preflight
+        # above only projects the IMMEDIATE ancestor's combined write;
+        # an upper-ancestor cap overflow (registering `ancestor/` in
+        # grandparent, or grandparent's own section insert) would
         # otherwise be caught only after we'd already mutated
         # `ancestor/index.md`. PR-L's "preflight ALL planned writes
         # BEFORE any FS mutation" requires catching that here.

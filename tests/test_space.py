@@ -2406,11 +2406,12 @@ def test_promote_preflights_size_caps_before_rename(tmp_path):
 def test_promote_preflights_upper_chain_size_caps_before_any_fs_write(tmp_path):
     """PR-L: ALL planned writes — including upper-ancestor chain repair —
     must be preflighted BEFORE any FS mutation. The immediate ancestor's
-    combined write was already preflighted at lines 3201-3235; the chain
-    helper that walks UP from `ancestor` to `wiki_root` was not. If
-    grandparent's `index.md` is over cap when we try to register
-    `ancestor/` in it, the failure must abort BEFORE `_ensure_section_at`
-    mutates `ancestor/index.md`. Otherwise we'd half-mutate the chain.
+    combined write was already preflighted by `cmd_promote`'s outer
+    `_enforce_size_cap` block; the chain helper that walks UP from
+    `ancestor` to `wiki_root` was not. If grandparent's `index.md` is
+    over cap when we try to register `ancestor/` in it, the failure must
+    abort BEFORE `_ensure_section_at` mutates `ancestor/index.md`.
+    Otherwise we'd half-mutate the chain.
 
     Setup: wiki/projects/foo.md to promote. `projects/index.md` is bare
     (no `## Spaces`) so the chain repair will need to (a) insert `##
@@ -4312,7 +4313,8 @@ def test_promote_repairs_ancestor_section_before_upward_registration(
     # Trigger a mid-promote failure AFTER chain repair has registered
     # projects/ in wiki/index.md. Patch Path.rename so the source→target
     # move raises — `cmd_promote` uses `source.rename(target)` for the
-    # source move on non-git wikis (line 3267 region).
+    # source move on non-git wikis (the final rename step before
+    # outgoing-link rewrites land).
     real_rename = Path.rename
     def patched_rename(self, target):
         if str(self).endswith("/projects/foo.md"):
