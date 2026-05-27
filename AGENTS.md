@@ -22,7 +22,7 @@ Inside a space, three kinds of inhabitant:
 
 Zero contained spaces is a fine wiki — `## Spaces` is just empty. Deep nesting is a fine wiki. Your shape is your call.
 
-**When something becomes a space.** A file grows into a space via `space promote`; a folder grows into a space by adding `index.md` with `## Spaces` (e.g. via `space add` on the existing folder). Triggers are structural — accreted siblings, hub-like content, distinct sub-topics — not just size overflow. See `wiki-update/SKILL.md` § Promote to space for the full criteria.
+**When something becomes a space.** A file grows into a space via `space promote`; a folder grows into a space by adding `index.md` with `## Spaces` (e.g. via `space add` on the existing folder). Triggers are structural — accreted siblings, hub-like content, distinct sub-topics — not just size overflow. See `ws-update/SKILL.md` § Promote to space for the full criteria.
 
 ## The navigation contract
 
@@ -44,7 +44,7 @@ Hard char caps at write time. The defaults are `index.md` 5,000, `log.md` 100,00
 
 ## Optional conventions
 
-A wiki opts into one or more conventions from [`CONVENTIONS.md`](CONVENTIONS.md): `log.md`, `_meta/taxonomy.md`, `_meta/limits.md`, `.manifest.json`, frontmatter, `_template.md`, `hot.md`, `.obsidian/`, `.git`. Each marker is independent — adopt any subset that fits your wiki. The three reference skills (`wiki-search`, `wiki-update`, `wiki-tend`) read whatever markers are present and degrade where they're not.
+A wiki opts into one or more conventions from [`CONVENTIONS.md`](CONVENTIONS.md): `log.md`, `_meta/taxonomy.md`, `_meta/limits.md`, `.manifest.json`, frontmatter, `_template.md`, `hot.md`, `.obsidian/`, `.git`. Each marker is independent — adopt any subset that fits your wiki. The three reference skills (`ws-search`, `ws-update`, `ws-tend`) read whatever markers are present and degrade where they're not.
 
 `CONVENTIONS.md` describes what each marker enables. Per-file size discipline (`_meta/limits.md`) is on by default with sensible numbers — see that document's "Size limits" section.
 

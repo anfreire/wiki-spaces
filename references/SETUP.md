@@ -6,7 +6,7 @@ You are an AI agent helping a user set up wiki-spaces — a minimal personal wik
 
 A wiki is a folder with `index.md` containing a `## Spaces` heading (the navigation contract). The user maintains one canonical wiki — a folder of theirs, anywhere on disk. Inside, anything goes: files, plain folders, or other spaces (folders that themselves are wikis). What the wiki is *for* is the user's choice — developer notes, research, writing, recipes, personal knowledge, team reference, anything. The tooling adapts to whatever shape the user picks.
 
-Three reference skills (`wiki-search`, `wiki-update`, `wiki-tend`) operate on this canonical wiki. They locate it via `${XDG_CONFIG_HOME:-~/.config}/wiki-spaces/config` (i.e., `$XDG_CONFIG_HOME/wiki-spaces/config` if `XDG_CONFIG_HOME` is set, otherwise `~/.config/wiki-spaces/config`).
+Three reference skills (`ws-search`, `ws-update`, `ws-tend`) operate on this canonical wiki. They locate it via `${XDG_CONFIG_HOME:-~/.config}/wiki-spaces/config` (i.e., `$XDG_CONFIG_HOME/wiki-spaces/config` if `XDG_CONFIG_HOME` is set, otherwise `~/.config/wiki-spaces/config`).
 
 The full spec is in `AGENTS.md` (bundled with the install or accessible via `repo` below); the conventions catalog is `CONVENTIONS.md`.
 
@@ -71,7 +71,7 @@ The commands below show the recommended `uvx` form (no install). If wiki-spaces 
    Offer this choice once, inside the step-2 proposal (*"adopt it as-is, or also organize it into folders?"*) — never a separate round.
 
 3. **Execute — you run all of it, no user commands.** In sequence:
-   1. `uvx wiki-spaces install` (detected harnesses only; add `--all` only if the user wants skills pre-positioned for every supported harness). It installs `wiki-search`/`wiki-update`/`wiki-tend` plus vendored kepano skills, copies `AGENTS.md`/`CONVENTIONS.md`/`references/` to `~/.local/share/wiki-spaces/`, and writes that as `repo` in the config. Verify it printed "Wrote repo path to ...".
+   1. `uvx wiki-spaces install` (detected harnesses only; add `--all` only if the user wants skills pre-positioned for every supported harness). It installs `ws-search`/`ws-update`/`ws-tend` plus vendored kepano skills, copies `AGENTS.md`/`CONVENTIONS.md`/`references/` to `~/.local/share/wiki-spaces/`, and writes that as `repo` in the config. Verify it printed "Wrote repo path to ...".
    2. `uvx wiki-spaces init <wiki-path> [--name <display-name>] [--description "<one-sentence purpose>"] [--with <opt-ins>] [--folders <names>] [--git] [--adopt] [--include-external]`. `<wiki-path>` is the new location for a fresh wiki, or the user's existing folder for an adoption — pass `--adopt` for an adoption so every pre-existing nested space gets registered in its ancestor's `## Spaces` (zero day-1 drift). Pass the user's one-sentence purpose as `--description` so it lands in `index.md`'s "What this space is" verbatim; omit it to skip that section entirely (no placeholder text). `init` creates `index.md` if missing (always with `## Spaces` from t=0), writes `--with` opt-in files, creates each `--folders` directory (with a `.gitkeep` under `--git`), runs `git init -b main` under `--git`, and writes `wiki = <wiki-path>` to the config. Omit `--folders` for a flat wiki or a port-as-is adoption. Verify it printed "registered as canonical wiki in ...".
    3. `uvx wiki-spaces doctor --no-net`. Both `wiki` and `repo` should be `OK`.
    4. `uvx wiki-spaces space audit`. Verifies the wiki is healthy — for fresh scaffolds this returns clean in milliseconds; for adoptions and manual ports (content copied in outside the framework) it surfaces `## Spaces` drift, broken wikilinks, size violations, malformed entries, and duplicate aliases. **If audit reports findings, present them to the user along with audit's own suggested next steps, and confirm a direction before moving on.** For size violations on adopted content, offer `_meta/limits.md` override as a remediation option when the page is intentionally that size (see `CONVENTIONS.md` § `_meta/limits.md`).
@@ -95,16 +95,16 @@ See [`MOUNT.md`](MOUNT.md) for the full playbook and trade-offs. Quick summary:
 - **`repo` key in config but path doesn't exist.** Re-run `uvx wiki-spaces install --all` (or `wiki-spaces install --all`) to refresh the share dir and rewrite `repo`. For dev-from-source users, ensure the clone is back at the recorded path then run `scripts/install.py --all`.
 - **`wiki-spaces install` (default detection) reports "No harnesses selected".** The user has none of the 6 supported harnesses on disk. Either ask whether to pre-position skills via `--all` (creates skill dirs for every supported harness), or — if they only use Cursor / Windsurf / GitHub Copilot / Aider — point them at [`HARNESS_INTEGRATION.md`](HARNESS_INTEGRATION.md) for manual snippets and skip the skills install entirely.
 - **Description doesn't cleanly match a canonical pattern.** Don't force the user into one. Identify the recurring kinds of content they mentioned and translate those into 3-6 folder names directly. Default to no opt-in bundle (offer them, but let the user opt in later as the wiki grows). Default git to "ask."
-- **User wants a flat wiki (no folders).** Omit `--folders` from the `wiki-spaces init` invocation. `wiki-update` will write pages at the wiki root or ask where to place. Fully valid; the wiki only needs its `index.md` with a `## Spaces` heading (an empty `## Spaces` is fine — a flat wiki has no nested spaces to list).
+- **User wants a flat wiki (no folders).** Omit `--folders` from the `wiki-spaces init` invocation. `ws-update` will write pages at the wiki root or ask where to place. Fully valid; the wiki only needs its `index.md` with a `## Spaces` heading (an empty `## Spaces` is fine — a flat wiki has no nested spaces to list).
 - **User gives a description so short it doesn't suggest folders** (e.g., *"general notes"*). Ask one follow-up: "What recurring kinds of content do you expect — even a rough list?" If still vague, propose a flat wiki and offer to grow folders later.
 - **User wants to work from a source checkout (dev).** They `git clone https://github.com/anfreire/wiki-spaces.git ~/src/wiki-spaces`, then use `~/src/wiki-spaces/scripts/install.py`, `…/init_wiki.py`, `…/doctor.py` (same code path as the console script; reads/writes from the checkout instead of `~/.local/share/wiki-spaces/`).
 
 ## After setup
 
 The user can invoke skills via their AI coding harness:
-- "What do I know about X?" → `wiki-search`
-- "Save this conversation as a note" → `wiki-update`
-- "Audit my wiki" → `wiki-tend`
+- "What do I know about X?" → `ws-search`
+- "Save this conversation as a note" → `ws-update`
+- "Audit my wiki" → `ws-tend`
 
 Discovery resolution is **explicit path → config → CWD ancestor**. Skills follow that order on every invocation, so they always know which wiki to operate on — even before the config exists, as long as the agent is running from inside a folder with `index.md` containing a `## Spaces` heading. Once the wiki is resolved, CWD informs *placement* (project-scoped vs global) but doesn't override the resolved target. A user in `~/Documents/Projects/foo/` who asks "save this concept about Python" will have it routed to a global folder (e.g., `<wiki>/concepts/` for a developer notebook), not `<wiki>/projects/foo/`, because the content is global. The agent uses the user's words and content to decide placement — CWD is just a hint there.
 

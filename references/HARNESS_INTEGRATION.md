@@ -8,7 +8,7 @@ Ready-to-copy snippets at the wiki-spaces repo:
 - [`bridges/cursor/wiki-spaces.mdc`](../bridges/cursor/wiki-spaces.mdc)
 - [`bridges/windsurf/wiki-spaces.md`](../bridges/windsurf/wiki-spaces.md)
 
-The snippets all say the same thing: wiki-spaces is available; read `~/.config/wiki-spaces/config` to find the wiki and the wiki-spaces repo; use the wiki-search / wiki-update / wiki-tend skills (or follow their SKILL.md procedures if not installed).
+The snippets all say the same thing: wiki-spaces is available; read `~/.config/wiki-spaces/config` to find the wiki and the wiki-spaces repo; use the ws-search / ws-update / ws-tend skills (or follow their SKILL.md procedures if not installed).
 
 ## Cursor
 
@@ -30,7 +30,7 @@ Windsurf's rule frontmatter uses `trigger: always_on`.
 
 ## GitHub Copilot
 
-GitHub Copilot reads `.github/copilot-instructions.md` (and as of Aug 2025, also `AGENTS.md` natively). No bridge file ships for Copilot — instead, append a short paragraph to one of those files in your project: "wiki-spaces is available — read `~/.config/wiki-spaces/config` for the canonical wiki path; use the `wiki-search` / `wiki-update` / `wiki-tend` skills, or read their SKILL.md procedures from the `repo` path in the config."
+GitHub Copilot reads `.github/copilot-instructions.md` (and as of Aug 2025, also `AGENTS.md` natively). No bridge file ships for Copilot — instead, append a short paragraph to one of those files in your project: "wiki-spaces is available — read `~/.config/wiki-spaces/config` for the canonical wiki path; use the `ws-search` / `ws-update` / `ws-tend` skills, or read their SKILL.md procedures from the `repo` path in the config."
 
 ## Aider
 

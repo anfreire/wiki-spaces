@@ -2,7 +2,7 @@
 
 This is the opt-in catalog of conventions a wiki may adopt. Every section is independent — pick the markers that fit your use case; tools degrade where a marker is absent. The [spec](AGENTS.md) defines `index.md` with a `## Spaces` heading as the required floor; everything in this catalog is layered on top.
 
-**"Tools" in this catalog** means the three reference skills (`wiki-search`, `wiki-update`, `wiki-tend`) — LLM-driven procedures that read these markers and degrade gracefully. The `wiki-spaces` CLI handles `install` / `init` / `doctor` / `space` / `vendor-kepano` only; runtime knowledge operations (search, capture, audit, normalize, colorize) live in the skills.
+**"Tools" in this catalog** means the three reference skills (`ws-search`, `ws-update`, `ws-tend`) — LLM-driven procedures that read these markers and degrade gracefully. The `wiki-spaces` CLI handles `install` / `init` / `doctor` / `space` / `vendor-kepano` only; runtime knowledge operations (search, capture, audit, normalize, colorize) live in the skills.
 
 **Obsidian-flavored markdown is the wire format** — see [`AGENTS.md` / Markdown flavor](AGENTS.md#markdown-flavor). Syntax facts (wikilinks, frontmatter, callouts, embeds, comments, Bases) live in [`vendor/kepano/obsidian-markdown`](vendor/kepano/obsidian-markdown/SKILL.md) and [`vendor/kepano/obsidian-bases`](vendor/kepano/obsidian-bases/SKILL.md). Cite those skills, never restate their contents.
 
@@ -60,7 +60,7 @@ Bootstrap: `wiki-spaces install` writes the `repo` key automatically; `wiki-spac
 
 **Resolution order.** Skills resolve the target wiki in three steps, **each step short-circuits**: (1) an explicit path or named space in the user's request — if invalid, fail (no fallback); (2) the `wiki` value in the config — if invalid (not absolute, missing on disk, missing `index.md`, or for read commands missing `## Spaces`), fail (no fallback). Step (3) **CWD ancestor** runs only when no config `wiki` is set at all: the nearest ancestor of the current working directory that contains `index.md` with `## Spaces`. Step 3 lets a no-install wiki work whenever the agent runs from inside it; skills note once when step 3 was the source and suggest `wiki-spaces init` to register it. A folder with `index.md` but no `## Spaces` is *not* a wiki under the v1 contract — read-only commands refuse to operate on it, while write commands (`space add`, `space remove`, `space mount`, `space promote`, `audit --fix`) auto-insert `## Spaces` as the first mutation step.
 
-When all three miss — no config *and* the CWD is not inside any wiki — every skill drives the setup flow inline before doing its own work. `wiki-update` owns the canonical Initialization procedure (`wiki-update/SKILL.md` § Initialization, which mirrors `references/SETUP.md`); `wiki-search` and `wiki-tend` follow the same flow (reading `<repo>/references/SETUP.md` directly when `repo` is set, the raw GitHub URL otherwise) and resume the user's original request once `wiki-spaces init` has registered the wiki.
+When all three miss — no config *and* the CWD is not inside any wiki — every skill drives the setup flow inline before doing its own work. `ws-update` owns the canonical Initialization procedure (`ws-update/SKILL.md` § Initialization, which mirrors `references/SETUP.md`); `ws-search` and `ws-tend` follow the same flow (reading `<repo>/references/SETUP.md` directly when `repo` is set, the raw GitHub URL otherwise) and resume the user's original request once `wiki-spaces init` has registered the wiki.
 
 **CWD informs placement, not wiki choice.** Once a wiki is resolved by any step above, CWD and conversation context decide only *where within that wiki* a write goes — a project space vs global concepts — never which wiki to use. A configured `wiki` is never overridden by CWD; CWD acts as a discovery source only in step 3, the fallback when neither an explicit path nor a config is available.
 
@@ -165,7 +165,7 @@ Skip the optional `## What this space is` or `## Items` sections and `index.md` 
 
 ## `hot.md`
 
-**If present:** Free-form scratchpad for current active work. Tools may read it for context (e.g., `wiki-search` may surface its mentions) but never rewrite it. Users own its content. Size-wise, `hot.md` matches the `*.md` default (15,000 chars). Scratchpads that need more room override in `_meta/limits.md` (e.g. `hot.md | 50000`).
+**If present:** Free-form scratchpad for current active work. Tools may read it for context (e.g., `ws-search` may surface its mentions) but never rewrite it. Users own its content. Size-wise, `hot.md` matches the `*.md` default (15,000 chars). Scratchpads that need more room override in `_meta/limits.md` (e.g. `hot.md | 50000`).
 
 **If absent:** Tools ignore. No proxy file is created.
 
@@ -188,11 +188,11 @@ Skip the optional `## What this space is` or `## Items` sections and `index.md` 
 }
 ```
 
-`last_commit_synced` is `null` when the source has no git. `wiki-update` reads it to skip unchanged sources and writes it after each sync.
+`last_commit_synced` is `null` when the source has no git. `ws-update` reads it to skip unchanged sources and writes it after each sync.
 
 **If malformed:** Tools warn once, treat the file as absent for this run, and refuse to overwrite it until the user repairs or removes it.
 
-**If absent:** `wiki-update` performs a full scan on every sync. No project tracking.
+**If absent:** `ws-update` performs a full scan on every sync. No project tracking.
 
 ### How to safely update `.manifest.json`
 
@@ -259,7 +259,7 @@ Typed-field coercion (e.g. `pages_in_vault` is an int, `last_commit_synced` may 
 
 ## `_meta/taxonomy.md`
 
-**If present:** Canonical tag vocabulary. Applies to YAML frontmatter `tags:` fields. `wiki-tend` normalizes those to the canonical list, suggests adding genuinely new tags that appear on 2+ pages, and rejects unknown one-off tags with a closest-match suggestion. `wiki-update` consults it before assigning tags. Inline `#tag` syntax outside frontmatter is not normalized.
+**If present:** Canonical tag vocabulary. Applies to YAML frontmatter `tags:` fields. `ws-tend` normalizes those to the canonical list, suggests adding genuinely new tags that appear on 2+ pages, and rejects unknown one-off tags with a closest-match suggestion. `ws-update` consults it before assigning tags. Inline `#tag` syntax outside frontmatter is not normalized.
 
 Document shape:
 
@@ -285,13 +285,13 @@ Constraints: max 5 tags per page, lowercase/hyphenated.
 
 Aliases are mappings the normalizer uses to rewrite non-canonical tags to canonical form.
 
-**If absent:** Tags are free-form. `wiki-tend` skips tag normalization with a notice; `wiki-update` does not enforce a vocabulary.
+**If absent:** Tags are free-form. `ws-tend` skips tag normalization with a notice; `ws-update` does not enforce a vocabulary.
 
 ---
 
 ## `_meta/limits.md`
 
-**Size discipline is default-on, configurable via this file.** Per-file character caps enforced at write time (by every framework writer — `wiki-spaces init`, `space add`, `space mount`, `space promote`, `space log`, the chain helper's ancestor mutations) and audited by `wiki-tend` / `wiki-spaces space audit`. The discipline: hard caps, errors on overflow, no silent truncation — the producer must consolidate, split, or promote before the next write.
+**Size discipline is default-on, configurable via this file.** Per-file character caps enforced at write time (by every framework writer — `wiki-spaces init`, `space add`, `space mount`, `space promote`, `space log`, the chain helper's ancestor mutations) and audited by `ws-tend` / `wiki-spaces space audit`. The discipline: hard caps, errors on overflow, no silent truncation — the producer must consolidate, split, or promote before the next write.
 
 **Defaults (override via this file):**
 
@@ -320,7 +320,7 @@ Example:
 
 **Match semantics** — patterns are matched via `fnmatch`. A pattern containing `/` matches against the wiki-root-relative path (`concepts/foo.md`); a pattern without `/` matches against the basename only (`index.md` matches every `index.md` at any depth).
 
-**Rejection guidance** — when a content page exceeds its cap, the producer (via `wiki-update`) suggests split → promote-then-split-by-hand → summarize, in that order. Splitting is preferred because a 15K content page would just become an over-cap 5K `index.md` after a plain promote.
+**Rejection guidance** — when a content page exceeds its cap, the producer (via `ws-update`) suggests split → promote-then-split-by-hand → summarize, in that order. Splitting is preferred because a 15K content page would just become an over-cap 5K `index.md` after a plain promote.
 
 **If absent:** the built-in defaults apply unchanged.
 
@@ -328,7 +328,7 @@ Example:
 
 ## `_template.md`
 
-**If present in any folder:** New pages created by `wiki-update` in that folder use this file as their boilerplate (frontmatter + body skeleton). The closest ancestor `_template.md` wins.
+**If present in any folder:** New pages created by `ws-update` in that folder use this file as their boilerplate (frontmatter + body skeleton). The closest ancestor `_template.md` wins.
 
 **If absent:** New pages are created from the section "Page template" below if frontmatter is in use, otherwise as bare markdown.
 
@@ -357,9 +357,9 @@ updated: 2026-05-14T00:00:00Z
 
 Timestamps are UTC ISO-8601. `>-` folded scalar avoids YAML quoting issues for `title` and `summary`. Frontmatter syntax is owned by [obsidian-markdown](vendor/kepano/obsidian-markdown/SKILL.md).
 
-**Mixed adoption is allowed.** A wiki may have some content pages with frontmatter and some without; the convention is per-page, not per-wiki. `wiki-tend` audits required-field completeness only on pages that already have frontmatter — it never flags a page as "missing frontmatter." Special files (`index.md`, `log.md`, `hot.md`, `.manifest.json`, `_meta/taxonomy.md`, `_template.md`) are exempt.
+**Mixed adoption is allowed.** A wiki may have some content pages with frontmatter and some without; the convention is per-page, not per-wiki. `ws-tend` audits required-field completeness only on pages that already have frontmatter — it never flags a page as "missing frontmatter." Special files (`index.md`, `log.md`, `hot.md`, `.manifest.json`, `_meta/taxonomy.md`, `_template.md`) are exempt.
 
-**If absent (no page in the wiki has frontmatter):** `wiki-tend` skips frontmatter checks. `wiki-update` writes plain markdown pages.
+**If absent (no page in the wiki has frontmatter):** `ws-tend` skips frontmatter checks. `ws-update` writes plain markdown pages.
 
 ---
 
@@ -403,7 +403,7 @@ Unresolved items.
 
 Place the marker at the end of the claim it qualifies (typically end of sentence or end of list item). Obsidian renders `%% ... %%` as nothing; tools parse it as a trailing tag.
 
-Unmarked claims carry no enforced provenance — the convention treats them as extracted by default, but nothing in the tooling verifies the distinction. `wiki-update` applies markers when capturing; `wiki-tend` does not enforce them.
+Unmarked claims carry no enforced provenance — the convention treats them as extracted by default, but nothing in the tooling verifies the distinction. `ws-update` applies markers when capturing; `ws-tend` does not enforce them.
 
 **If absent:** No provenance is tracked; all claims are unmarked.
 
@@ -435,26 +435,26 @@ A handful of names carry tool-level behavior across every wiki. They're not arbi
 | Name | Tool behavior |
 |---|---|
 | `shared/` | External by default. `space mount` defaults the mount destination to `shared/<basename-of-source>/`. `space add shared/...` requires `--force-external`. Read operations opt into externals via `space audit --include-external` (and the equivalent skill toggle). |
-| `_archives/` | Excluded from `space audit` walks and `wiki-tend` scans. Conventional name for retired / snapshot content the producer kept but does not want surfaced. |
+| `_archives/` | Excluded from `space audit` walks and `ws-tend` scans. Conventional name for retired / snapshot content the producer kept but does not want surfaced. |
 | `_meta/` | Configuration files — `_meta/limits.md` (size caps), `_meta/taxonomy.md` (tag vocabulary). Read by the tooling; not treated as content. |
-| `.obsidian/` | Obsidian vault configuration. `wiki-tend colorize` writes `colorGroups` here when present (see `.obsidian/ integration` below). |
+| `.obsidian/` | Obsidian vault configuration. `ws-tend colorize` writes `colorGroups` here when present (see `.obsidian/ integration` below). |
 | `.git/`, `.<anything>/` | Hidden directories — always skipped by walks. Includes `.git`, `.obsidian`, and any other dot-prefixed name. |
 
-A user-named top-level folder that collides with one of these inherits the tool behavior — `wiki-update` will not route content into `_archives/`, `space audit` will skip it, etc. Pick a different name if you want default treatment.
+A user-named top-level folder that collides with one of these inherits the tool behavior — `ws-update` will not route content into `_archives/`, `space audit` will skip it, etc. Pick a different name if you want default treatment.
 
 Slugs for new pages are lowercase, hyphen-separated, ≤50 chars, descriptive.
 
-**Self-documenting layouts.** A child space (a folder with `index.md` carrying `## Spaces`) can advertise itself with a one-line "what goes here" description in its parent's `## Spaces` entry — `wiki-update` reads those descriptions when classifying new content. Plain folders (no `index.md`) have no such entry and route by folder name alone, so name them concretely (`recipes/` not `stuff/`) and routing still works; a description just makes it more precise. `## Items` is human-only and never consulted for routing.
+**Self-documenting layouts.** A child space (a folder with `index.md` carrying `## Spaces`) can advertise itself with a one-line "what goes here" description in its parent's `## Spaces` entry — `ws-update` reads those descriptions when classifying new content. Plain folders (no `index.md`) have no such entry and route by folder name alone, so name them concretely (`recipes/` not `stuff/`) and routing still works; a description just makes it more precise. `## Items` is human-only and never consulted for routing.
 
-`wiki-update`'s classification follows folder-name semantics first, then descriptions: a "sourdough recipe" matches `recipes/`, a "character bio" matches `characters/`, a "Python typing pattern" matches `concepts/` (or `notes/`, or whatever your wiki uses). When two folders are equally plausible the skill surfaces both options before writing; when none fit it asks, optionally creating a new folder for content that represents a recurring kind. Project-scoped content (identified by the user's intent — CWD is only a hint that disambiguates *which* project, never the trigger for project-vs-global) lands under whichever folder the wiki uses to group per-project content (`projects/`, `clients/`, `work/`, etc.).
+`ws-update`'s classification follows folder-name semantics first, then descriptions: a "sourdough recipe" matches `recipes/`, a "character bio" matches `characters/`, a "Python typing pattern" matches `concepts/` (or `notes/`, or whatever your wiki uses). When two folders are equally plausible the skill surfaces both options before writing; when none fit it asks, optionally creating a new folder for content that represents a recurring kind. Project-scoped content (identified by the user's intent — CWD is only a hint that disambiguates *which* project, never the trigger for project-vs-global) lands under whichever folder the wiki uses to group per-project content (`projects/`, `clients/`, `work/`, etc.).
 
-**If absent (no top-level folders at the wiki root other than `_meta/`, `_archives/`, `.git/`, or hidden directories):** `wiki-update` writes pages flat at the wiki root or asks the user where to place. `wiki-tend`'s cross-category scoring is skipped.
+**If absent (no top-level folders at the wiki root other than `_meta/`, `_archives/`, `.git/`, or hidden directories):** `ws-update` writes pages flat at the wiki root or asks the user where to place. `ws-tend`'s cross-category scoring is skipped.
 
 ---
 
 ## Retrieval primitives
 
-Cost-ordered lookup table for `wiki-search`. Use the cheapest primitive that answers the question; escalate only when it cannot.
+Cost-ordered lookup table for `ws-search`. Use the cheapest primitive that answers the question; escalate only when it cannot.
 
 | Need | Primitive | Cost |
 |---|---|---|
@@ -467,7 +467,7 @@ Cost-ordered lookup table for `wiki-search`. Use the cheapest primitive that ans
 
 ### Recommended search backends
 
-For wikis bigger than a few dozen pages, grep alone misses semantic matches and aliases. When the harness has a markdown-aware search tool available, `wiki-search` prefers it over raw grep:
+For wikis bigger than a few dozen pages, grep alone misses semantic matches and aliases. When the harness has a markdown-aware search tool available, `ws-search` prefers it over raw grep:
 
 | Backend | When to use | Notes |
 |---|---|---|
@@ -475,7 +475,7 @@ For wikis bigger than a few dozen pages, grep alone misses semantic matches and 
 | Harness-native search MCP | Use what's already in the harness (e.g., the harness's built-in file search). | Beats grep when it understands markdown headings + frontmatter. |
 | **Ripgrep** (`rg`) or the harness's grep tool | Universal fallback. Always available. | Fast keyword search; misses semantics and aliases. |
 
-`wiki-search` checks for the recommended backends in order and uses the first one it finds; otherwise it falls back to grep. Tools should never *require* a specific backend — the wiki is plain markdown and any retrieval method that reads files works.
+`ws-search` checks for the recommended backends in order and uses the first one it finds; otherwise it falls back to grep. Tools should never *require* a specific backend — the wiki is plain markdown and any retrieval method that reads files works.
 
 ---
 
@@ -486,7 +486,7 @@ Wikilink and markdown-link syntax: see [obsidian-markdown](vendor/kepano/obsidia
 - Add up to 2 relevant wikilinks per page; never force irrelevant links.
 - Link the first natural mention only. Skip mentions inside code blocks or frontmatter.
 - Use the shortest link that resolves unambiguously.
-- `wiki-tend`'s cross-link pass scores each candidate link: exact name match (+4), partial name match (+1), shared tags ≥2 (+2), same project (+2), cross-category (+2); a link is applied at score ≥3. `wiki_spaces._links` (`score_cross_link` / `should_link`) is a tested implementation of these weights, importable wherever the `wiki_spaces` package is installed.
+- `ws-tend`'s cross-link pass scores each candidate link: exact name match (+4), partial name match (+1), shared tags ≥2 (+2), same project (+2), cross-category (+2); a link is applied at score ≥3. `wiki_spaces._links` (`score_cross_link` / `should_link`) is a tested implementation of these weights, importable wherever the `wiki_spaces` package is installed.
 
 ---
 
@@ -499,7 +499,7 @@ A heuristic for **knowledge-capture use cases** (research notes, technical wikis
 - **Code answers it?** Skip — wiki the reasoning, not what code says.
 - **10-second search answers it?** Skip — wiki what took 30 minutes.
 - **Needed in 3 months?** If you'd have to re-research, wiki it.
-- **Already there?** Run the `wiki-search` candidate pass (filename / path-segment / frontmatter overlap with the content being captured). When a near-match exists, prefer merging into the existing page over creating a new one. `## Items` is non-contractual (tools never write it), so `index.md` is not a reliable index of what's on disk — use the search candidate pass instead.
+- **Already there?** Run the `ws-search` candidate pass (filename / path-segment / frontmatter overlap with the content being captured). When a near-match exists, prefer merging into the existing page over creating a new one. `## Items` is non-contractual (tools never write it), so `index.md` is not a reliable index of what's on disk — use the search candidate pass instead.
 
 **Skip this filter** for content-store use cases where every entry is intentional regardless of derivation cost — recipe collections, personal journals, contact lists, team runbooks, etc. The "would you re-derive this?" test doesn't apply when the wiki *is* the source of truth, not a memory aid.
 
@@ -517,9 +517,9 @@ Detection: a `.git` entry at the wiki root, whether a directory (regular repo) o
 
 ## `.obsidian/` integration
 
-**If present:** The wiki is intended to be opened in Obsidian. `wiki-tend`'s colorize step writes graph color groups into `.obsidian/graph.json` (only the `colorGroups` key; everything else preserved; backup written).
+**If present:** The wiki is intended to be opened in Obsidian. `ws-tend`'s colorize step writes graph color groups into `.obsidian/graph.json` (only the `colorGroups` key; everything else preserved; backup written).
 
-**Hazard — Obsidian overwrites `graph.json` on graph-view interaction.** Opening the color-groups panel in Obsidian's graph view can wipe `colorGroups` entirely (most reliably with `collapse-color-groups: false`). The backup written by `wiki-tend` protects against `wiki-tend`'s own writes, not Obsidian's. Close Obsidian before running colorize, and avoid the graph color panel afterward until the vault is reloaded.
+**Hazard — Obsidian overwrites `graph.json` on graph-view interaction.** Opening the color-groups panel in Obsidian's graph view can wipe `colorGroups` entirely (most reliably with `collapse-color-groups: false`). The backup written by `ws-tend` protects against `ws-tend`'s own writes, not Obsidian's. Close Obsidian before running colorize, and avoid the graph color panel afterward until the vault is reloaded.
 
 Default colorize mode is `by-tag` (top 10 tags by usage, default palette below). `by-category` colors the categorical layout folders. `custom` honors user-provided mappings.
 

@@ -8,4 +8,4 @@ Pinned upstream skills, vendored as sparse copies. Each sub-directory is an auto
 
 - [kepano/](kepano/index.md) — [kepano/obsidian-skills](https://github.com/kepano/obsidian-skills) (sparse copy)
 
-The wiki-search / wiki-update / wiki-tend skills defer to `kepano/obsidian-markdown` for wikilink / frontmatter / callout / embed syntax. `kepano/obsidian-bases` is vendored for future `.base` view tooling; no current procedure uses it. Skills never inline-copy upstream content.
+The ws-search / ws-update / ws-tend skills defer to `kepano/obsidian-markdown` for wikilink / frontmatter / callout / embed syntax. `kepano/obsidian-bases` is vendored for future `.base` view tooling; no current procedure uses it. Skills never inline-copy upstream content.

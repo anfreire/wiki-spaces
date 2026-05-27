@@ -60,7 +60,7 @@ A folder with `index.md` + `## Spaces` is already a complete wiki — the whole 
 
 Users with their own skill-management scripts bypass `install.py` and read the source directories directly. The two canonical roots are:
 
-- `<repo>/skills/*/` — `wiki-search`, `wiki-update`, `wiki-tend`
+- `<repo>/skills/*/` — `ws-search`, `ws-update`, `ws-tend`
 - `<repo>/vendor/kepano/*/` — `obsidian-markdown`, `obsidian-bases`
 
 `<repo>` is the source checkout or the share dir written by `wiki-spaces install` (`~/.local/share/wiki-spaces/` for packaged installs). Copy, symlink, or aggregate however your tooling prefers.
@@ -69,15 +69,15 @@ Users with their own skill-management scripts bypass `install.py` and read the s
 
 Three reference skills your AI agent uses to work with the wiki:
 
-- `wiki-search` — find content
-- `wiki-update` — capture / save / sync, with per-file size discipline (hard caps at write time, see [`CONVENTIONS.md` § `_meta/limits.md`](CONVENTIONS.md))
-- `wiki-tend` — audit, normalize tags, cross-link
+- `ws-search` — find content
+- `ws-update` — capture / save / sync, with per-file size discipline (hard caps at write time, see [`CONVENTIONS.md` § `_meta/limits.md`](CONVENTIONS.md))
+- `ws-tend` — audit, normalize tags, cross-link
 
 Cursor / Windsurf / Copilot / Aider integration is covered under [Install](#install) above and in [`HARNESS_INTEGRATION.md`](references/HARNESS_INTEGRATION.md).
 
 ## Search at scale
 
-`wiki-search` works out of the box with grep / ripgrep, which is fine for personal/team wikis up to a few hundred pages. For larger vaults, install [`qmd`](https://github.com/tobi/qmd) — the markdown-aware MCP backend Andrej Karpathy references in the canonical [LLM-wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). See [`CONVENTIONS.md` § Recommended search backends](CONVENTIONS.md#recommended-search-backends).
+`ws-search` works out of the box with grep / ripgrep, which is fine for personal/team wikis up to a few hundred pages. For larger vaults, install [`qmd`](https://github.com/tobi/qmd) — the markdown-aware MCP backend Andrej Karpathy references in the canonical [LLM-wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). See [`CONVENTIONS.md` § Recommended search backends](CONVENTIONS.md#recommended-search-backends).
 
 ## Learn more
 

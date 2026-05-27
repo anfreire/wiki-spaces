@@ -36,7 +36,7 @@ The `wiki = /home/<user>/Documents/Wiki` entry in `~/.config/wiki-spaces/config`
         └── index.md
 ```
 
-Cross-project knowledge at the root; project-specific knowledge under `projects/<name>/`. `wiki-update` recognizes this shape and routes content accordingly. The opt-in bundle (`log.md`, `_meta/taxonomy.md`, `.manifest.json`) is the recommended add-on for this use case because most of it (project sync state, taxonomy-managed tags, audit log) is dev-leaning.
+Cross-project knowledge at the root; project-specific knowledge under `projects/<name>/`. `ws-update` recognizes this shape and routes content accordingly. The opt-in bundle (`log.md`, `_meta/taxonomy.md`, `.manifest.json`) is the recommended add-on for this use case because most of it (project sync state, taxonomy-managed tags, audit log) is dev-leaning.
 
 ## Research wiki
 
@@ -136,7 +136,7 @@ See [`MOUNT.md`](MOUNT.md) for the three mount mechanisms (submodule, clone, sym
 ## What doesn't change between any shape
 
 - The two-key config (`wiki` + `repo`) at `~/.config/wiki-spaces/config` always has exactly one canonical `wiki` entry.
-- `wiki-search`, `wiki-update`, `wiki-tend` operate on that canonical wiki regardless of its shape.
+- `ws-search`, `ws-update`, `ws-tend` operate on that canonical wiki regardless of its shape.
 - CWD is a placement hint, never a wiki-switch — it chooses *where* in the resolved wiki content lands. (Resolution order is explicit path → config → CWD ancestor; see `CONVENTIONS.md` / Discovery via config.)
 - Spaces are autonomous; conventions don't propagate from parents to children.
 - Opt-in conventions (`log.md`, `_meta/taxonomy.md`, `.manifest.json`, frontmatter, etc.) work the same regardless of folder layout.
