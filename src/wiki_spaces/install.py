@@ -142,16 +142,18 @@ def install_harness(
             had_fatal = True
             continue
         dst = h.skills_dir / skill
-        if not force and not is_owned_install(dst, src):
-            actions.append(
+        if not force and not is_owned_install(dst):
+            print(
                 f"  {h.key}: ! refusing to overwrite unowned {dst} "
-                "(pass --force to replace)"
+                "(pass --force to replace)",
+                file=sys.stderr,
             )
-            had_fatal = True  # partial install — caller should exit non-zero
+            had_fatal = True
             continue
         if dry:
             future_src = write_root / rel
-            actions.append(f"  {h.key}: would link {future_src} -> {dst}")
+            verb = "copy" if copy else "link"
+            actions.append(f"  {h.key}: would {verb} {future_src} -> {dst}")
             continue
         mode = link_or_copy(src, dst, prefer_copy=copy)
         if mode == "copy":
@@ -216,14 +218,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.bridge:
         return _emit_bridge(args.bridge)
 
-    _ensure_vendor_dev(dry_run=args.dry_run)
-
     known_keys = {h.key for h in HARNESSES}
     unknown = [k for k in args.harness if k not in known_keys]
     if unknown:
-        print(f"Unknown --harness key(s): {', '.join(unknown)}")
-        print("Supported keys:", ", ".join(sorted(known_keys)))
+        print(f"Unknown --harness key(s): {', '.join(unknown)}", file=sys.stderr)
+        print("Supported keys:", ", ".join(sorted(known_keys)), file=sys.stderr)
         return 2
+
+    _ensure_vendor_dev(dry_run=args.dry_run)
 
     selected = [h for h in HARNESSES if (not args.harness or h.key in args.harness)]
     if not args.all:
@@ -242,7 +244,7 @@ def main(argv: list[str] | None = None) -> int:
     if selected:
         print(f"  harnesses: {', '.join(h.key for h in selected)}")
     else:
-        print(f"  harnesses: none detected")
+        print("  harnesses: none detected")
     print()
 
     any_failure = False

@@ -14,12 +14,16 @@ Stdlib only. Match semantics documented in `cap_for`.
 
 from __future__ import annotations
 
-import fcntl
 import fnmatch
 import os
 import re
 import sys
 import tempfile
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # type: ignore[assignment]
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -291,8 +295,8 @@ def _atomic_write(path: Path, content: str) -> None:
 _WIN32_NOTICE_EMITTED = False
 
 
-def _maybe_emit_win32_notice() -> None:
-    """Emit a one-time stderr notice on Windows that locking is best-effort.
+def _maybe_emit_no_lock_notice() -> None:
+    """Emit a one-time stderr notice that locking is unavailable.
 
     `multiprocessing.Pool` workers are fresh processes so each may print
     once — documented as expected behavior, not a bug.
@@ -302,8 +306,8 @@ def _maybe_emit_win32_notice() -> None:
         return
     _WIN32_NOTICE_EMITTED = True
     sys.stderr.write(
-        "warning: wiki-spaces locking is best-effort on Windows; "
-        "concurrent writes may interleave. POSIX recommended for atomicity.\n"
+        "warning: wiki-spaces locking unavailable (fcntl not present); "
+        "concurrent writes may interleave.\n"
     )
 
 
@@ -362,10 +366,10 @@ def append_log_with_rotation(
         )
     parent_fd = os.open(str(log_path.parent), os.O_RDONLY)
     try:
-        if sys.platform != "win32":
+        if fcntl is not None:
             fcntl.flock(parent_fd, fcntl.LOCK_EX)
         else:
-            _maybe_emit_win32_notice()
+            _maybe_emit_no_lock_notice()
 
         # `O_CREAT | O_RDWR` is atomic create-or-open *under the parent
         # lock*. Two concurrent first-call sequences serialize: the
@@ -521,7 +525,7 @@ def append_log_with_rotation(
             os.close(fd)
         except (OSError, NameError):
             pass
-        if sys.platform != "win32":
+        if fcntl is not None:
             try:
                 fcntl.flock(parent_fd, fcntl.LOCK_UN)
             except OSError:

@@ -488,7 +488,7 @@ def parse_frontmatter(text: str) -> dict[str, str | list[str]] | None:
             i += 1
             continue
         key, value = m.group(1), m.group(2)
-        if value.startswith(">-") or value == ">-":
+        if value.startswith(">-"):
             parts: list[str] = []
             i += 1
             while i < len(lines) and (lines[i].startswith("  ") or lines[i] == ""):
@@ -758,6 +758,13 @@ def frontmatter_add_alias(text: str, alias: str) -> tuple[str, bool]:
             new_inner = f"{inner}, {alias}" if inner else alias
             lines[i] = f"aliases: [{new_inner}]"
             break
+        if rest and not rest.startswith("["):
+            # Scalar form: convert to block list.
+            lines[i] = "aliases:"
+            scalar = rest.strip("'\"")
+            lines.insert(i + 1, f"  - {scalar}")
+            lines.insert(i + 2, f"  - {alias}")
+            break
         # Block-list: walk forward until the indented list ends.
         insert_at = i + 1
         indent = "  "
@@ -779,5 +786,4 @@ def frontmatter_add_alias(text: str, alias: str) -> tuple[str, bool]:
         lines.append(f"  - {alias}")
 
     new_fm = "\n".join(lines)
-    trailing = "\n" if text.endswith("\n") or body else ""
     return f"---\n{new_fm}\n---\n{body}", True

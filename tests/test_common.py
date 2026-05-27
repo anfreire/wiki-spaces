@@ -128,10 +128,24 @@ def test_nearest_space_root_strict_walks_up_past_missing_section(tmp_path):
     assert _common.nearest_space_root_strict(inner) == outer.resolve()
 
 
+# ---------- link_or_copy ----------
+
+def test_link_or_copy_prefer_copy_replaces_symlink(tmp_path):
+    """prefer_copy=True must replace an existing symlink with a real copy."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "f.txt").write_text("x")
+    dst = tmp_path / "dst"
+    assert _common.link_or_copy(src, dst) == "symlink"
+    assert dst.is_symlink()
+    assert _common.link_or_copy(src, dst, prefer_copy=True) == "copy"
+    assert not dst.is_symlink()
+
+
 # ---------- is_owned_install / write_owned_marker ----------
 
 def test_is_owned_install_missing_dst(tmp_path):
-    assert _common.is_owned_install(tmp_path / "absent", tmp_path / "src") is True
+    assert _common.is_owned_install(tmp_path / "absent") is True
 
 
 def test_is_owned_install_symlink_is_owned(tmp_path):
@@ -139,7 +153,7 @@ def test_is_owned_install_symlink_is_owned(tmp_path):
     src.mkdir()
     dst = tmp_path / "dst"
     os.symlink(src, dst)
-    assert _common.is_owned_install(dst, src) is True
+    assert _common.is_owned_install(dst) is True
 
 
 def test_is_owned_install_marker_present(tmp_path):
@@ -148,16 +162,14 @@ def test_is_owned_install_marker_present(tmp_path):
     dst = tmp_path / "dst"
     dst.mkdir()
     _common.write_owned_marker(dst, src)
-    assert _common.is_owned_install(dst, src) is True
+    assert _common.is_owned_install(dst) is True
 
 
 def test_is_owned_install_unowned_dir(tmp_path):
-    src = tmp_path / "src"
-    src.mkdir()
     dst = tmp_path / "user-skill"
     dst.mkdir()
     (dst / "SKILL.md").write_text("user content")
-    assert _common.is_owned_install(dst, src) is False
+    assert _common.is_owned_install(dst) is False
 
 
 # ---------- HARNESSES matrix ----------

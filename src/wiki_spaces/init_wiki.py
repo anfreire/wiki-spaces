@@ -311,11 +311,10 @@ def main(argv: list[str] | None = None) -> int:
                 # the rest of the scaffold is meaningless and we MUST NOT
                 # write the config pointing at a non-wiki path).
                 print(f"  ! size cap: {e}", file=sys.stderr)
-                skipped.append(rel + " (over cap)")
                 over_cap_writes.append(rel)
                 return
         f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(content)
+        f.write_text(content, encoding="utf-8")
         written.append(rel)
 
     write("index.md", build_index_md(name, description))
@@ -382,7 +381,7 @@ def main(argv: list[str] | None = None) -> int:
     adopt_failed = False
     if args.adopt:
         # Adopt does NOT size-check existing content — that's `space audit`'s
-        # job (SETUP.md step 3.iv runs it immediately after init).
+        # job, run as the post-init step in SETUP.md.
         # Late import: `space` pulls in `fcntl` and other heavy deps that
         # `init_wiki` shouldn't pay for in the no-adopt path.
         from . import space as _space
@@ -466,7 +465,8 @@ def main(argv: list[str] | None = None) -> int:
                 _space._rollback_added_entries(e.added)
                 adopt_failed = True
 
-    if not args.no_config:
+    partial = bool(over_cap_writes) or adopt_failed
+    if not args.no_config and not partial:
         write_config({"wiki": str(root)})
 
     print(f"wiki: {root}")
@@ -478,8 +478,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  ~ {anc}/index.md ## Spaces  += [{label}]")
     if not written and not adopt_registered:
         print("  (nothing written)")
-    if not args.no_config:
+    if not args.no_config and not partial:
         print(f"  → registered as canonical wiki in {CONFIG_PATH}")
+    elif not args.no_config and partial:
+        print(f"  ! wiki NOT registered — fix errors above and re-run")
     # Best-effort batch: one failing adoption doesn't abort the whole run,
     # but the exit code MUST signal partial failure. A success (rc=0) on
     # `init --adopt` with unrepaired drift would lie to callers / CI

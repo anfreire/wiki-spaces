@@ -20,6 +20,7 @@ from pathlib import Path
 from ._common import (
     CONFIG_PATH,
     HARNESSES,
+    Harness,
     KEPANO_DEPS,
     WIKI_SKILLS,
     _has_spaces_section,
@@ -48,7 +49,7 @@ REPO_SENTINELS = (
 
 
 def _validate_wiki(wiki: str) -> str:
-    if not wiki.startswith("/"):
+    if not Path(wiki).is_absolute():
         return "NOT ABSOLUTE"
     p = Path(wiki)
     if not p.exists():
@@ -61,7 +62,7 @@ def _validate_wiki(wiki: str) -> str:
 
 
 def _validate_repo(repo: str) -> str:
-    if not repo.startswith("/"):
+    if not Path(repo).is_absolute():
         return "NOT ABSOLUTE"
     p = Path(repo)
     if not p.exists():
@@ -126,7 +127,7 @@ def check_vendor(net: bool) -> None:
     lines = commit_file.read_text().strip().splitlines()
     sha = lines[0] if lines else "?"
     date = lines[1] if len(lines) > 1 else "?"
-    repo = lines[2] if len(lines) > 2 else "?"
+    remote = lines[2] if len(lines) > 2 else "?"
     print(f"  pinned sha:  {sha[:12]}")
     print(f"  vendored at: {date}")
     for skill in KEPANO_DEPS:
@@ -135,7 +136,7 @@ def check_vendor(net: bool) -> None:
     if net:
         try:
             head = subprocess.run(
-                ["git", "ls-remote", repo, "HEAD"],
+                ["git", "ls-remote", remote, "HEAD"],
                 capture_output=True, text=True, check=True, timeout=5,
             ).stdout.split("\t", 1)[0]
             drift = "current" if head == sha else f"DRIFT (upstream {head[:12]})"
@@ -145,7 +146,7 @@ def check_vendor(net: bool) -> None:
     print()
 
 
-def check_harness(h) -> None:
+def check_harness(h: Harness) -> None:
     present = harness_present(h)
     print(f"{h.key}: {'detected' if present else 'not detected'}")
     root = installed_root()

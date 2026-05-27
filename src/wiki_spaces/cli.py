@@ -2,16 +2,14 @@
 
 Dispatches to a subcommand module's `main()`:
 
-  wiki-spaces install [--all] [--dry-run] [--copy] [--harness <key>]
-  wiki-spaces init <path> [--with ...] [--folders ...] [--git] [--name <n>]
-  wiki-spaces doctor [--no-net]
-  wiki-spaces vendor-kepano [--ref <git-ref>]    # dev only
+  wiki-spaces install
+  wiki-spaces init <path>
+  wiki-spaces doctor
+  wiki-spaces space <add|remove|mount|promote|audit|log>
+  wiki-spaces vendor-kepano    # dev only
 
 Each subcommand owns its own argparse — pass --help to any subcommand for
-its flag list. Modules are also importable directly:
-  python -m wiki_spaces.install
-  python -m wiki_spaces.init_wiki
-  python -m wiki_spaces.doctor
+its flag list. Modules are also importable directly (e.g. python -m wiki_spaces.install).
 """
 
 from __future__ import annotations

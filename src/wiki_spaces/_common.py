@@ -8,7 +8,7 @@ Owns:
 - The wiki-spaces config: ~/.config/wiki-spaces/config (or $XDG_CONFIG_HOME).
   Two keys: `wiki` (canonical wiki path) and `repo` (path to wiki-spaces data).
 - Data-source detection: the path containing AGENTS.md, CONVENTIONS.md,
-  references/, skills/, vendor/. Differs between a dev checkout (the repo
+  references/, skills/. Differs between a dev checkout (the repo
   root) and an installed wheel (<site-packages>/wiki_spaces/data/).
 """
 
@@ -46,7 +46,7 @@ def _dev_repo_root() -> Path | None:
 
 
 def data_root() -> Path:
-    """Return the directory containing AGENTS.md, references/, skills/, vendor/.
+    """Return the directory containing AGENTS.md, CONVENTIONS.md, references/, skills/.
 
     Two cases:
     - Installed wheel: <site-packages>/wiki_spaces/data/
@@ -263,7 +263,8 @@ def link_or_copy(src: Path, dst: Path, *, prefer_copy: bool = False) -> str:
     if dst.exists() or dst.is_symlink():
         try:
             if dst.resolve() == src_resolved:
-                return "noop"
+                if not (prefer_copy and dst.is_symlink()):
+                    return "noop"
         except (OSError, RuntimeError):
             pass
     if dst.is_symlink() or dst.is_file():
@@ -303,9 +304,9 @@ def installed_state(dst: Path, src: Path) -> str:
     """Return a one-word state: symlink-ok, symlink-external, symlink-broken,
     copy-current, copy-stale, missing.
 
-    symlink-external means the skill is present and functional but was
-    installed via a different mechanism (e.g. an aggregator directory)
-    rather than pointing at the wiki-spaces share dir.
+    symlink-external means the symlink resolves to an existing path that
+    is not the expected source — typically because the skill was
+    installed via a different mechanism (e.g. an aggregator directory).
 
     For directories, copy-current/stale compares the latest mtime of any
     file inside (recursively).
@@ -315,7 +316,8 @@ def installed_state(dst: Path, src: Path) -> str:
     if dst.is_symlink():
         target = Path(os.readlink(dst))
         if not target.is_absolute():
-            target = (dst.parent / target).resolve()
+            target = dst.parent / target
+        target = target.resolve()
         if target == src.resolve() and src.exists():
             return "symlink-ok"
         return "symlink-external" if target.exists() else "symlink-broken"
@@ -325,7 +327,7 @@ def installed_state(dst: Path, src: Path) -> str:
 OWNED_MARKER = ".installed-by-wiki-spaces"
 
 
-def is_owned_install(dst: Path, src: Path) -> bool:
+def is_owned_install(dst: Path) -> bool:
     """True when dst is safe for wiki-spaces to overwrite.
 
     Ownership signals:

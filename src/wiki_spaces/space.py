@@ -40,13 +40,17 @@ heuristic in CONVENTIONS.md / Owned vs external) are skipped on traversal.
 from __future__ import annotations
 
 import argparse
-import fcntl
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # type: ignore[assignment]
 from pathlib import Path
 
 from . import _md
@@ -2138,7 +2142,7 @@ def _atomic_mutate_index(
     """
     dir_fd = os.open(str(ancestor), os.O_RDONLY)
     try:
-        if sys.platform != "win32":
+        if fcntl is not None:
             fcntl.flock(dir_fd, fcntl.LOCK_EX)
         fresh_text = ancestor_index.read_text(encoding="utf-8")
         result = mutate_fn(fresh_text)
@@ -2171,7 +2175,7 @@ def _atomic_mutate_index(
             return 1, f"could not write {ancestor_index}: {e}"
         return 0, info
     finally:
-        if sys.platform != "win32":
+        if fcntl is not None:
             try:
                 fcntl.flock(dir_fd, fcntl.LOCK_UN)
             except OSError:
@@ -2456,10 +2460,7 @@ def _preflight_chain_caps(
         )
         description = leaf_description if is_leaf_edge else None
         is_leaf_edge = False
-        try:
-            text = ancestor_index.read_text(encoding="utf-8")
-        except OSError:
-            text = ""
+        text = ancestor_index.read_text(encoding="utf-8")
         if not _md.has_section(text, "Spaces"):
             if text and not text.endswith("\n"):
                 text += "\n"
@@ -2899,7 +2900,7 @@ def cmd_check_size(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
-    if args.path.startswith("/") or ".." in Path(args.path).parts:
+    if Path(args.path).is_absolute() or ".." in Path(args.path).parts:
         print("  ! path must be wiki-root-relative", file=sys.stderr)
         return 2
     target = wiki_root / args.path
@@ -3041,7 +3042,7 @@ def cmd_files(args: argparse.Namespace) -> int:
 
     scope_root: Path | None = None
     if args.space:
-        if args.space.startswith("/") or ".." in Path(args.space).parts:
+        if Path(args.space).is_absolute() or ".." in Path(args.space).parts:
             print("  ! space must be wiki-root-relative", file=sys.stderr)
             return 2
         scope_root = wiki_root / args.space
@@ -3223,7 +3224,7 @@ def cmd_promote(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
-    if target_dir.exists():
+    if target_dir.exists() or target_dir.is_symlink():
         # Symlink target dir: even if it's empty, `source.rename(target)`
         # would follow the link and write into whatever the symlink
         # resolves to — including outside the wiki tree. Refuse before the
@@ -3662,6 +3663,8 @@ def cmd_promote(args: argparse.Namespace) -> int:
         return 2
     finally:
         shutil.rmtree(snapshot_dir, ignore_errors=True)
+
+
 def cmd_log(args: argparse.Namespace) -> int:
     """Append a structured line to <wiki>/log.md atomically.
 

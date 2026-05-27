@@ -694,3 +694,11 @@ def test_add_alias_preserves_other_fields():
     assert fm["summary"] == "A test"
     assert fm["tags"] == ["a", "b"]
     assert fm["aliases"] == ["foo", "bar"]
+
+
+def test_add_alias_converts_scalar_to_block_list():
+    """Scalar `aliases: foo` must convert to block list, not invalid YAML."""
+    text = "---\naliases: foo\n---\nBody\n"
+    new, added = _md.frontmatter_add_alias(text, "bar")
+    assert added
+    assert _md.parse_frontmatter_aliases(new) == ["foo", "bar"]

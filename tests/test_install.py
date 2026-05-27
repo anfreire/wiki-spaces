@@ -209,4 +209,4 @@ def test_install_unowned_dst_exits_nonzero_without_force(tmp_path, monkeypatch):
 
     rc, out, err = _run([])
     assert rc == 1, "refused-unowned destinations must exit nonzero"
-    assert "refusing to overwrite unowned" in out
+    assert "refusing to overwrite unowned" in err
