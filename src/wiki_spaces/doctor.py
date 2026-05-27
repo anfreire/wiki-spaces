@@ -198,6 +198,7 @@ def main(argv: list[str] | None = None) -> int:
     if not config_ok:
         print("doctor: config incomplete or invalid (see above).")
         return 1
+    print("doctor: OK. For content health (sizes, drift, wikilinks), run `wiki-spaces space audit`.")
     return 0
 
 
