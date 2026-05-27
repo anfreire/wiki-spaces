@@ -165,7 +165,7 @@ Skip the optional `## What this space is` or `## Items` sections and `index.md` 
 
 ## `hot.md`
 
-**If present:** Free-form scratchpad for current active work. Tools may read it for context (e.g., `wiki-search` may surface its mentions) but never rewrite it. Users own its content.
+**If present:** Free-form scratchpad for current active work. Tools may read it for context (e.g., `wiki-search` may surface its mentions) but never rewrite it. Users own its content. Size-wise, `hot.md` matches the `*.md` default (15,000 chars). Scratchpads that need more room override in `_meta/limits.md` (e.g. `hot.md | 50000`).
 
 **If absent:** Tools ignore. No proxy file is created.
 
