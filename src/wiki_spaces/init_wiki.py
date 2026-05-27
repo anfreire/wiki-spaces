@@ -381,6 +381,8 @@ def main(argv: list[str] | None = None) -> int:
     adopt_registered: list[tuple[str, str]] = []  # (label, ancestor-relative)
     adopt_failed = False
     if args.adopt:
+        # Adopt does NOT size-check existing content — that's `space audit`'s
+        # job (SETUP.md step 3.iv runs it immediately after init).
         # Late import: `space` pulls in `fcntl` and other heavy deps that
         # `init_wiki` shouldn't pay for in the no-adopt path.
         from . import space as _space
