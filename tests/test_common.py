@@ -193,3 +193,62 @@ def test_version_matches_pyproject():
     with (repo_root / "pyproject.toml").open("rb") as f:
         meta = tomllib.load(f)
     assert wiki_spaces.__version__ == meta["project"]["version"]
+
+
+# ---------- installed_state ----------
+
+def test_installed_state_missing(tmp_path):
+    assert _common.installed_state(tmp_path / "absent", tmp_path / "src") == "missing"
+
+
+def test_installed_state_symlink_ok(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "SKILL.md").write_text("ok")
+    dst = tmp_path / "dst"
+    os.symlink(src, dst)
+    assert _common.installed_state(dst, src) == "symlink-ok"
+
+
+def test_installed_state_symlink_broken(tmp_path):
+    """Dangling symlink — target does not exist."""
+    dst = tmp_path / "dst"
+    os.symlink(tmp_path / "nonexistent", dst)
+    src = tmp_path / "src"
+    src.mkdir()
+    assert _common.installed_state(dst, src) == "symlink-broken"
+
+
+def test_installed_state_symlink_external(tmp_path):
+    """Symlink points at a valid path that is not the expected source —
+    e.g. an aggregator directory with its own copy of the skill."""
+    src = tmp_path / "src"
+    src.mkdir()
+    other = tmp_path / "aggregator"
+    other.mkdir()
+    dst = tmp_path / "dst"
+    os.symlink(other, dst)
+    assert _common.installed_state(dst, src) == "symlink-external"
+
+
+def test_installed_state_copy_current(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "SKILL.md").write_text("ok")
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    (dst / "SKILL.md").write_text("ok")
+    os.utime(dst / "SKILL.md", (9999999999, 9999999999))
+    assert _common.installed_state(dst, src) == "copy-current"
+
+
+def test_installed_state_copy_stale(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "SKILL.md").write_text("ok")
+    os.utime(src / "SKILL.md", (9999999999, 9999999999))
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    (dst / "SKILL.md").write_text("ok")
+    os.utime(dst / "SKILL.md", (1000000000, 1000000000))
+    assert _common.installed_state(dst, src) == "copy-stale"

@@ -3,8 +3,8 @@
 Reads ~/.config/wiki-spaces/config and reports:
 - the configured wiki and repo paths (and whether they're valid)
 - vendor/kepano/ pin and (if network available) drift vs upstream
-- per-harness skill install state (symlink-ok / symlink-broken / copy-current /
-  copy-stale / missing)
+- per-harness skill install state (symlink-ok / symlink-external /
+  symlink-broken / copy-current / copy-stale / missing)
 
 Exit status is 0 only when the config exists and both `wiki` and `repo`
 validate OK; otherwise 1 — so `doctor` can gate setup scripts.

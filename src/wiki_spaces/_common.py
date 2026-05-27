@@ -300,8 +300,12 @@ def _max_mtime(p: Path) -> float:
 
 
 def installed_state(dst: Path, src: Path) -> str:
-    """Return a one-word state: symlink-ok, symlink-broken, copy-current,
-    copy-stale, missing.
+    """Return a one-word state: symlink-ok, symlink-external, symlink-broken,
+    copy-current, copy-stale, missing.
+
+    symlink-external means the skill is present and functional but was
+    installed via a different mechanism (e.g. an aggregator directory)
+    rather than pointing at the wiki-spaces share dir.
 
     For directories, copy-current/stale compares the latest mtime of any
     file inside (recursively).
@@ -312,7 +316,9 @@ def installed_state(dst: Path, src: Path) -> str:
         target = Path(os.readlink(dst))
         if not target.is_absolute():
             target = (dst.parent / target).resolve()
-        return "symlink-ok" if target == src.resolve() and src.exists() else "symlink-broken"
+        if target == src.resolve() and src.exists():
+            return "symlink-ok"
+        return "symlink-external" if target.exists() else "symlink-broken"
     return "copy-current" if _max_mtime(dst) >= _max_mtime(src) else "copy-stale"
 
 
