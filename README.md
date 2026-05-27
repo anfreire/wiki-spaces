@@ -56,6 +56,15 @@ mkdir -p ~/Documents/Wiki && printf '# My Wiki\n\n## Spaces\n\n' > ~/Documents/W
 
 A folder with `index.md` + `## Spaces` is already a complete wiki — the whole spec is one page, [`AGENTS.md`](AGENTS.md). The skills still work on it (they discover the wiki from your current directory); run `wiki-spaces init` later to register it for config-based discovery.
 
+### Skill source paths
+
+Users with their own skill-management scripts bypass `install.py` and read the source directories directly. The two canonical roots are:
+
+- `<repo>/skills/*/` — `wiki-search`, `wiki-update`, `wiki-tend`
+- `<repo>/vendor/kepano/*/` — `obsidian-markdown`, `obsidian-bases`
+
+`<repo>` is the source checkout or the share dir written by `wiki-spaces install` (`~/.local/share/wiki-spaces/` for packaged installs). Copy, symlink, or aggregate however your tooling prefers.
+
 ## What you get
 
 Three reference skills your AI agent uses to work with the wiki:
