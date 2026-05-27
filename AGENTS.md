@@ -22,6 +22,8 @@ Inside a space, three kinds of inhabitant:
 
 Zero contained spaces is a fine wiki — `## Spaces` is just empty. Deep nesting is a fine wiki. Your shape is your call.
 
+**When something becomes a space.** A file grows into a space via `space promote`; a folder grows into a space by adding `index.md` with `## Spaces` (e.g. via `space add` on the existing folder). Triggers are structural — accreted siblings, hub-like content, distinct sub-topics — not just size overflow. See `wiki-update/SKILL.md` § Promote to space for the full criteria.
+
 ## The navigation contract
 
 `## Spaces` is the navigation contract. It is **exhaustive** — every space directly inside this one is listed there, no exceptions. Tools traverse via this list and rely on it being complete.
