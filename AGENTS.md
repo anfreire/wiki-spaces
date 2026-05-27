@@ -40,7 +40,7 @@ Cross-space references go horizontal: `[label](relative/path.md)` or `[[wikilink
 
 ## Size discipline
 
-Hard char caps at write time. The defaults are `index.md` 5,000, `log.md` 100,000 (auto-rotates), every other `*.md` 15,000 — configurable via `_meta/limits.md` (see [`CONVENTIONS.md`](CONVENTIONS.md)). Framework writers (`init`, `space add`, `space mount`, `space promote`, `space log`, the chain helper's ancestor mutations) enforce caps on the projected post-write size; errors on overflow, never silent truncation. A shrinking write (smaller than the existing on-disk body) is the only escape hatch from legacy bloat. Day-30 isn't worse than day-0 — more content invested means more payoff.
+Hard char caps at write time. The defaults are `index.md` 5,000, `log.md` 100,000 (auto-rotates), `hot.md` 100,000, every other `*.md` 15,000 — configurable via `_meta/limits.md` (see [`CONVENTIONS.md`](CONVENTIONS.md)). Framework writers (`init`, `space add`, `space mount`, `space promote`, `space log`, the chain helper's ancestor mutations) enforce caps on the projected post-write size; errors on overflow, never silent truncation. A shrinking write (smaller than the existing on-disk body) is the only escape hatch from legacy bloat. Day-30 isn't worse than day-0 — more content invested means more payoff.
 
 ## Optional conventions
 

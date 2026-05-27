@@ -165,7 +165,7 @@ Skip the optional `## What this space is` or `## Items` sections and `index.md` 
 
 ## `hot.md`
 
-**If present:** Free-form scratchpad for current active work. Tools may read it for context (e.g., `ws-search` may surface its mentions) but never rewrite it. Users own its content. Size-wise, `hot.md` matches the `*.md` default (15,000 chars). Scratchpads that need more room override in `_meta/limits.md` (e.g. `hot.md | 50000`).
+**If present:** Free-form scratchpad for current active work. Tools may read it for context (e.g., `ws-search` may surface its mentions) but never rewrite it. Users own its content. Size-wise, `hot.md` carries a 100,000-char default cap (same as `log.md`) — it's a convention file, not a content page. Override in `_meta/limits.md` if needed.
 
 **If absent:** Tools ignore. No proxy file is created.
 
@@ -299,9 +299,11 @@ Aliases are mappings the normalizer uses to rewrite non-canonical tags to canoni
 |---|---|
 | `index.md` | 5,000 |
 | `log.md` | 100,000 (auto-rotates) |
+| `log.archive-*.md` | 100,000 |
+| `hot.md` | 100,000 |
 | `*.md` | 15,000 |
 
-`index.md` gets a small cap because it's the navigation hub — read often, should stay light. Content pages get a "single readable page" cap that triggers `space promote` (then split by hand) when exceeded. `log.md` is append-only with automatic entry-based rotation to `log.archive-<YYYYMMDD-HHMMSS>.md` when the cap is reached.
+`index.md` gets a small cap because it's the navigation hub — read often, should stay light. Content pages get a "single readable page" cap that triggers `space promote` (then split by hand) when exceeded. `log.md` is append-only with automatic entry-based rotation to `log.archive-<YYYYMMDD-HHMMSS>.md` when the cap is reached. `hot.md` is a user-owned scratchpad — same cap as `log.md` because it's a convention file, not a content page.
 
 **Char counting:** `len(text)` with YAML frontmatter excluded. Frontmatter is metadata, not content. Everything else (headings, wikilinks, code blocks) counts — those are real bytes the consumer reads.
 

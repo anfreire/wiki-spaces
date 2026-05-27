@@ -16,11 +16,12 @@ from wiki_spaces import _limits
 
 def test_defaults_ordering():
     """Most-specific patterns first; broadest last.
-    `log.archive-*.md` shares the log's 100K cap (archives are log
-    overflow, not generic content pages) and is ordered before the
-    broad `*.md` rule so the archive pattern wins for those files."""
+    `log.archive-*.md` and `hot.md` share the log's 100K cap (archives
+    are log overflow, hot.md is a user-owned scratchpad — neither is a
+    generic content page) and are ordered before the broad `*.md` rule
+    so the specific patterns win for those files."""
     patterns = [p for p, _ in _limits.DEFAULTS]
-    assert patterns == ["index.md", "log.md", "log.archive-*.md", "*.md"]
+    assert patterns == ["index.md", "log.md", "log.archive-*.md", "hot.md", "*.md"]
 
 
 def test_log_archive_default_cap_matches_log():
@@ -32,6 +33,14 @@ def test_log_archive_default_cap_matches_log():
         c for p, c in _limits.DEFAULTS if p == "log.archive-*.md"
     )
     assert archive_cap == log_cap
+
+
+def test_hot_md_default_cap_matches_log():
+    """hot.md is a user-owned convention file (scratchpad) — same category
+    as log.md (user-owned, tools never rewrite). Both get 100K by default."""
+    log_cap = next(c for p, c in _limits.DEFAULTS if p == "log.md")
+    hot_cap = next(c for p, c in _limits.DEFAULTS if p == "hot.md")
+    assert hot_cap == log_cap
 
 
 def test_read_limits_returns_defaults_when_no_override(tmp_path):

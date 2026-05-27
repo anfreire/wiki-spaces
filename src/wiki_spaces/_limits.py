@@ -36,6 +36,7 @@ DEFAULTS: list[tuple[str, int]] = [
     # legitimately needs more than 15K worth of older entries would be
     # blocked by the default `*.md` rule.
     ("log.archive-*.md", 100000),
+    ("hot.md", 100000),
     ("*.md", 15000),
 ]
 
