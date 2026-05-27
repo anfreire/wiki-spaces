@@ -163,7 +163,7 @@ def _validate_rel_path(rel: str) -> tuple[bool, str | None]:
       hidden directories per CONVENTIONS / Reserved top-level folder
       names; the producer must not register spaces the consumer ignores.
     - `_archives` and `_meta` segments: reserved by convention
-      (`_archives` is excluded from audit/`wiki-tend` walks, `_meta`
+      (`_archives` is excluded from audit/`ws-tend` walks, `_meta`
       holds config files like `_meta/limits.md`). Registering a space
       under either creates a `## Spaces` entry no consumer reads.
     - Markdown link metacharacters (`[`, `]`, `(`, `)`, `{`, `}`) in
@@ -2939,7 +2939,7 @@ def cmd_list(args: argparse.Namespace) -> int:
     space (the root is excluded — placement classifiers want children
     only). With `--include-boundaries --include-external`: also surfaces
     external boundary folders without `index.md` (foreign submodules,
-    escaping symlinks). The placement classifier in `wiki-update` uses
+    escaping symlinks). The placement classifier in `ws-update` uses
     that combination to enumerate every external path to exclude.
     """
     wiki_root = _resolve_wiki_strict(args.wiki)

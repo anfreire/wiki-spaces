@@ -6,9 +6,9 @@ This project has access to wiki-spaces — a personal canonical wiki located at 
 
 When the user asks to save / capture / search knowledge:
 
-- **Search** ("what do I know about X"): use the `wiki-search` skill if installed, or read `<repo>/skills/wiki-search/SKILL.md` and follow it.
-- **Capture** ("save this", "update wiki"): use the `wiki-update` skill or its SKILL.md procedure.
-- **Maintenance** ("audit wiki", "fix tags"): use the `wiki-tend` skill or its SKILL.md procedure.
+- **Search** ("what do I know about X"): use the `ws-search` skill if installed, or read `<repo>/skills/ws-search/SKILL.md` and follow it.
+- **Capture** ("save this", "update wiki"): use the `ws-update` skill or its SKILL.md procedure.
+- **Maintenance** ("audit wiki", "fix tags"): use the `ws-tend` skill or its SKILL.md procedure.
 
 Reference docs (read on demand from `<repo>/references/`):
 - `SETUP.md` — full setup briefing if the config is missing

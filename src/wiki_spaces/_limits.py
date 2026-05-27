@@ -7,7 +7,7 @@ promote before the next write — predictability is the value.
 This module is pure computation (no I/O in the predicate) so callers retain
 control over the "shrinking write" escape hatch and any per-skill policy
 decisions. The CLI commands `wiki-spaces space log` and (eventually) the size
-checks in `wiki-update` wrap this module.
+checks in `ws-update` wrap this module.
 
 Stdlib only. Match semantics documented in `cap_for`.
 """

@@ -5,7 +5,7 @@ scoring policy in CONVENTIONS.md / Linking rules, so the policy has a
 verifiable definition and not only a prose description.
 
 Intended use: build a `LinkCandidate` for each unlinked mention of one page
-found in another, then call `should_link`. `wiki-tend` applies this policy;
+found in another, then call `should_link`. `ws-tend` applies this policy;
 it can call this module directly wherever the `wiki_spaces` package is
 importable, and otherwise follows the equivalent weights in CONVENTIONS.
 """

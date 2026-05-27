@@ -1705,7 +1705,7 @@ def test_contract_walker_skips_reserved_folder_entries(tmp_path):
     wiki that registered such paths before the producer-side validator
     refused them — the contract walker must skip them per CONVENTIONS /
     Reserved top-level folder names. Otherwise consumers surface
-    content the rest of the toolchain (audit walks, wiki-tend scans)
+    content the rest of the toolchain (audit walks, ws-tend scans)
     deliberately excludes."""
     wiki = _make_wiki(tmp_path)
     # Manually create the (would-be-refused-by-producer) reserved layouts.
@@ -2254,7 +2254,7 @@ def test_space_list_include_boundaries_yields_external_folders_without_index_md(
     tmp_path,
 ):
     """`--include-external --include-boundaries` also surfaces external
-    boundary folders WITHOUT `index.md` — the wiki-update placement
+    boundary folders WITHOUT `index.md` — the ws-update placement
     classifier needs the full exclusion set, not just spaces. Setup: a
     `shared/forge/` (external by path, no `index.md`) and a
     `notes-from-friend/` escaping symlink (external by symlink target,
@@ -3816,7 +3816,7 @@ def test_space_log_atomic_under_contention(tmp_path):
 
 def test_space_manifest_subcommand_removed(tmp_path):
     """PR-I demoted `.manifest.json` writes from a CLI subcommand to a
-    CONVENTIONS.md snippet (use an inline `flock` block from the wiki-update
+    CONVENTIONS.md snippet (use an inline `flock` block from the ws-update
     skill). `space manifest` should no longer exist in the argparse surface."""
     wiki = _make_wiki(tmp_path)
     with pytest.raises(SystemExit):
