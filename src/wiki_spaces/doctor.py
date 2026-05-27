@@ -33,9 +33,9 @@ from ._common import (
 REPO_SENTINELS = (
     "AGENTS.md",
     "CONVENTIONS.md",
-    "skills/wiki-search/SKILL.md",
-    "skills/wiki-update/SKILL.md",
-    "skills/wiki-tend/SKILL.md",
+    "skills/ws-search/SKILL.md",
+    "skills/ws-update/SKILL.md",
+    "skills/ws-tend/SKILL.md",
     "references/SETUP.md",
     "vendor/kepano/obsidian-markdown/SKILL.md",
     "vendor/kepano/obsidian-bases/SKILL.md",

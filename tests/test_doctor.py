@@ -96,7 +96,7 @@ def test_validate_repo_ok_for_complete_install(tmp_path):
 @pytest.mark.parametrize("sentinel", list(doctor.REPO_SENTINELS))
 def test_validate_repo_flags_any_missing_sentinel(tmp_path, sentinel):
     """Each sentinel is individually load-bearing. Missing any one ⇒ invalid
-    repo. Parametrized so a new sentinel (e.g., the wiki-update and wiki-tend
+    repo. Parametrized so a new sentinel (e.g., the ws-update and ws-tend
     skill files we just added) is automatically covered."""
     root = _fake_install(tmp_path)
     (root / sentinel).unlink()
@@ -106,11 +106,11 @@ def test_validate_repo_flags_any_missing_sentinel(tmp_path, sentinel):
 
 
 def test_repo_sentinels_includes_all_three_wiki_skills():
-    """Codex blocker: doctor previously only checked wiki-search/SKILL.md, so
-    a missing wiki-update or wiki-tend would slip through. This pins the fix."""
-    assert "skills/wiki-search/SKILL.md" in doctor.REPO_SENTINELS
-    assert "skills/wiki-update/SKILL.md" in doctor.REPO_SENTINELS
-    assert "skills/wiki-tend/SKILL.md" in doctor.REPO_SENTINELS
+    """Codex blocker: doctor previously only checked ws-search/SKILL.md, so
+    a missing ws-update or ws-tend would slip through. This pins the fix."""
+    assert "skills/ws-search/SKILL.md" in doctor.REPO_SENTINELS
+    assert "skills/ws-update/SKILL.md" in doctor.REPO_SENTINELS
+    assert "skills/ws-tend/SKILL.md" in doctor.REPO_SENTINELS
 
 
 def test_repo_sentinels_includes_both_kepano_skills():

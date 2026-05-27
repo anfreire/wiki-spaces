@@ -13,8 +13,8 @@ The override format and matching semantics are documented in
 | Pattern                                        | Cap (chars) |
 |------------------------------------------------|-------------|
 | CONVENTIONS.md                                 |       50000 |
-| skills/wiki-update/SKILL.md                    |       20000 |
-| skills/wiki-search/SKILL.md                    |       20000 |
-| skills/wiki-tend/SKILL.md                      |       20000 |
+| skills/ws-update/SKILL.md                      |       20000 |
+| skills/ws-search/SKILL.md                      |       20000 |
+| skills/ws-tend/SKILL.md                        |       20000 |
 | vendor/**/*.md                                 |      200000 |
 | references/**/*.md                             |       30000 |

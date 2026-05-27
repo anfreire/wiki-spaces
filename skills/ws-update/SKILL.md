@@ -1,5 +1,5 @@
 ---
-name: wiki-update
+name: ws-update
 description: Create or update content in the user's canonical wiki. Use when the user says "update wiki", "sync project", "save this", "capture this", "store this research", or wants to distill knowledge from a project, conversation, or research session.
 ---
 
@@ -35,7 +35,7 @@ An **invalid** configured `wiki` (path set but missing on disk, not absolute, la
    - **Project sync.** Identify the project from CWD. If `.manifest.json` is present and the project has a prior `last_commit_synced`, run `git log <last_commit>..HEAD --oneline` and only consider changed files. If nothing distillable, report "nothing to update" and stop. Scan for: architecture decisions and rationale, patterns discovered, tool/API wiring, key abstractions, trade-offs, experiment results.
    - **Conversation capture.** Extract durable conclusions, decisions, findings. Ignore logistics. Write conclusions directly; never summarize the chat ("X works by..." not "the user asked about X and we discussed...").
    - **Research capture.** Identify what was researched (tool, concept, technique). Extract findings that took effort and would be expensive to re-derive.
-5. **Apply the noise filter** per CONVENTIONS / Noise filter — *only* for knowledge-capture wikis (research notes, developer notebooks, technical wikis where the goal is "store what was hard to derive"). Skip the filter entirely for content-store wikis (recipes, journals, runbooks, contact lists, curricula) where every entry is intentional regardless of derivation cost. In either case, **deduplicate against existing pages before creating new ones — but do not rely on `index.md` to enumerate them.** `## Items` is non-contractual (tools never write it), so `index.md` is an unreliable index of what's on disk. Run the `wiki-search` candidate pass instead — enumerate consumer-visible pages via `wiki-spaces space files --json` (the contract walker; respects `## Spaces`, hides unregistered drift) and rank by filename / path-segment / frontmatter overlap with the content being captured. When a near-match exists, prefer merging into the existing page (with an `updated:` bump) over creating a new one.
+5. **Apply the noise filter** per CONVENTIONS / Noise filter — *only* for knowledge-capture wikis (research notes, developer notebooks, technical wikis where the goal is "store what was hard to derive"). Skip the filter entirely for content-store wikis (recipes, journals, runbooks, contact lists, curricula) where every entry is intentional regardless of derivation cost. In either case, **deduplicate against existing pages before creating new ones — but do not rely on `index.md` to enumerate them.** `## Items` is non-contractual (tools never write it), so `index.md` is an unreliable index of what's on disk. Run the `ws-search` candidate pass instead — enumerate consumer-visible pages via `wiki-spaces space files --json` (the contract walker; respects `## Spaces`, hides unregistered drift) and rank by filename / path-segment / frontmatter overlap with the content being captured. When a near-match exists, prefer merging into the existing page (with an `updated:` bump) over creating a new one.
 6. **Classify and place.** Compute placement candidates via the three-step classifier:
 
    1. **Registered owned spaces.** Run `wiki-spaces space list --json` to enumerate every owned space the contract knows about, with `label` + `description` per entry. Wiki-root-relative paths with no `/` are top-level candidates.
@@ -99,7 +99,7 @@ A `.md` file that has grown into multiple distinct topics, accreted siblings, or
    - adds `aliases: [<basename>]` to the new `index.md` for forward-compatible wikilink resolution (skip with `--skip-aliases` if another page already claims the alias),
    - ensures the new `index.md` has `## Spaces` from t=0 — matches `space add`,
    - registers the new space's `## Spaces` entry in the nearest ancestor (uses the file's frontmatter `summary` for the description if present).
-4. Read the new `index.md`. If sections read like standalone children, capture them as separate `.md` files under the new space in a follow-up `wiki-update` cycle. The CLI deliberately does not split content — that's authorship, not mechanics.
+4. Read the new `index.md`. If sections read like standalone children, capture them as separate `.md` files under the new space in a follow-up `ws-update` cycle. The CLI deliberately does not split content — that's authorship, not mechanics.
 
 **Atomicity.** The CLI snapshots every affected file to a system tempdir (outside the wiki tree) before mutating disk and restores from the snapshot if anything fails. Works on both git-tracked and untracked wikis. The snapshot dir is always cleaned, success or failure.
 

@@ -185,7 +185,7 @@ def test_install_unowned_dst_exits_nonzero_without_force(tmp_path, monkeypatch):
     fake_skills.mkdir()
     # Pre-create a user-owned (no OWNED_MARKER) directory at the install
     # destination — install must refuse without --force.
-    for skill in ("wiki-search", "wiki-update", "wiki-tend",
+    for skill in ("ws-search", "ws-update", "ws-tend",
                   "obsidian-markdown", "obsidian-bases"):
         d = fake_skills / skill
         d.mkdir()
@@ -195,7 +195,7 @@ def test_install_unowned_dst_exits_nonzero_without_force(tmp_path, monkeypatch):
     (tmp_path / "claude-marker").mkdir()
     # Provide a valid source tree so `source missing` doesn't kick in first.
     read_root = tmp_path / "src"
-    for skill in ("wiki-search", "wiki-update", "wiki-tend"):
+    for skill in ("ws-search", "ws-update", "ws-tend"):
         (read_root / "skills" / skill).mkdir(parents=True)
         (read_root / "skills" / skill / "SKILL.md").write_text("ok")
     for skill in ("obsidian-markdown", "obsidian-bases"):

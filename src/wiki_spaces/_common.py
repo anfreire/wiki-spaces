@@ -22,7 +22,7 @@ HOME = Path.home()
 XDG_CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config")
 CONFIG_PATH = XDG_CONFIG_HOME / "wiki-spaces" / "config"
 
-WIKI_SKILLS = ("wiki-search", "wiki-update", "wiki-tend")
+WIKI_SKILLS = ("ws-search", "ws-update", "ws-tend")
 KEPANO_DEPS = ("obsidian-markdown", "obsidian-bases")
 
 DATA_SENTINELS = ("AGENTS.md", "CONVENTIONS.md", "references", "skills")

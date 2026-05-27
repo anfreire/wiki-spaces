@@ -1,5 +1,5 @@
 ---
-name: wiki-search
+name: ws-search
 description: Search the user's canonical wiki for stored knowledge. Use when the user asks "what do I know about X", "find Y in the wiki", or before doing external research that the wiki may already cover.
 ---
 
@@ -17,7 +17,7 @@ Find content in the user's canonical wiki and answer using only what's stored. C
 
 ## Procedure
 
-1. **Resolve the target wiki** per [`CONVENTIONS.md` / Discovery via config](../../CONVENTIONS.md#discovery-via-config) — explicit path → `wiki` config key → nearest CWD ancestor whose `index.md` contains `## Spaces` → inline setup. When step 3 (CWD) was the source, mention once in the response: "Operating on the wiki at `<path>` (found via CWD; no config registered)." When all three miss, drive the setup flow inline via [`wiki-update/SKILL.md` § Initialization](../wiki-update/SKILL.md#initialization), then resume from step 1 with the user's original query.
+1. **Resolve the target wiki** per [`CONVENTIONS.md` / Discovery via config](../../CONVENTIONS.md#discovery-via-config) — explicit path → `wiki` config key → nearest CWD ancestor whose `index.md` contains `## Spaces` → inline setup. When step 3 (CWD) was the source, mention once in the response: "Operating on the wiki at `<path>` (found via CWD; no config registered)." When all three miss, drive the setup flow inline via [`ws-update/SKILL.md` § Initialization](../ws-update/SKILL.md#initialization), then resume from step 1 with the user's original query.
 2. **Detect adopted conventions at the SCOPE root** (the canonical wiki for default operation; the targeted space if the user named one) by presence: frontmatter schema (scan content pages until one with frontmatter is found, or confirm none), `_meta/taxonomy.md` (for tag matching), `log.md` (for logging). Spaces are autonomous — never inherit detection from a parent.
 3. **Choose the search mode.**
    - **Quick lookup** — triggered by an agent checking before external research, or user says "quick answer", "just check", "do I have anything on X". Stops at step 5.1 (no page bodies read). Prefix the answer: `Quick lookup: summaries only; page bodies not read.`
