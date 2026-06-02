@@ -39,7 +39,7 @@ An **invalid** configured `wiki` (path set but missing on disk, not absolute, la
 6. **Classify and place.** Compute placement candidates via the three-step classifier:
 
    1. **Registered owned spaces.** Run `wiki-spaces space list --json` to enumerate every owned space the contract knows about, with `label` + `description` per entry. Wiki-root-relative paths with no `/` are top-level candidates.
-   2. **External paths to exclude.** Run `wiki-spaces space list --include-external --include-boundaries --json` and collect the `path` of every entry where `external` is true. This includes external boundary folders WITHOUT `index.md` (foreign submodules, escaping symlinks) — the deterministic exclusion list per CONCEPT trust-scope contract.
+   2. **External paths to exclude.** Run `wiki-spaces space list --include-external --include-boundaries --json` and collect the `path` of every entry where `external` is true. This includes external boundary folders WITHOUT `index.md` (foreign submodules, escaping symlinks) — the deterministic exclusion list per AGENTS.md trust-scope contract.
    3. **Plain top-level folders.** `ls -1d <wiki>/*/` (or the harness's directory listing). Exclude reserved names (`_meta/`, `_archives/`, `.git/`, `.obsidian/`, anything starting with `.`) AND every top-level path from step 2's external set.
    4. **Classify each remaining top-level folder.** Appears in step 1 → registered space (placement candidate with description). Otherwise contains `index.md` → drift (SKIP — `space audit` will report it). Otherwise → plain folder (placement candidate, name-only).
 
@@ -53,10 +53,12 @@ An **invalid** configured `wiki` (path set but missing on disk, not absolute, la
    - **Flat wiki (no folders at all)** — write at the wiki root or ask.
 
    Slugs are lowercase, hyphen-separated, ≤50 chars, descriptive. Mounting an external wiki as a space (e.g., `<wiki>/shared/team-foo/`) is a separate flow — see `references/MOUNT.md`.
-7. **Size discipline (pre-write check).** Before writing any page, materialize the FULL projected post-write content as a string (for an Edit, apply the edit in memory first), then ask the CLI for the verdict instead of computing the cap yourself: pipe the projected text into `wiki-spaces space check-size <rel-path> --projected-stdin`. The CLI prints `OK <chars>/<cap>`, `OK-SHRINKING <chars>/<cap>` (the shrinking-write escape hatch — projected size is smaller than the current on-disk size, so a legacy-bloat page can still get smaller), or `OVER <chars>/<cap>` and exits 1 on `OVER`. Use the verdict — DO NOT recompute the math yourself; the CLI shares the helper that framework writers use, so verdicts are guaranteed consistent. On `OVER`, do NOT silently truncate; surface the projected size and the cap to the producer and pick a remediation in this order:
+7. **Size discipline (pre-write check).** Before writing any page, materialize the FULL projected post-write content as a string (for an Edit, apply the edit in memory first), then ask the CLI for the verdict instead of computing the cap yourself: pipe the projected text into `wiki-spaces space check-size <scope-rel-path> --wiki <scope-root>`. The CLI reads the projected content from the pipe (or pass `--projected-file <path>`); piping the content is all that's needed. Always pass `--wiki <scope-root>` (the wiki for default operation; the targeted space if the user named one — the same scope root detected in steps 2 and 9) with a scope-root-relative path, so the CLI's cap helper reads THAT space's `_meta/limits.md`. Without it the resolver prefers the configured/CWD wiki and checks the cap at the wrong scope, silently bypassing a nested space's own per-space caps — the same scope-root rule the Logging section and ws-tend's audit step already follow. It prints `OK <chars>/<cap> (cap: …)`, `OK-SHRINKING <chars>/<cap> (cap: …)` (the shrinking-write escape hatch — projected size is smaller than the current on-disk size, so a legacy-bloat page can still get smaller), or `OVER <chars>/<cap> (cap: …)` and exits 1 on `OVER`. The cap source is part of the verdict so you can see why the cap is what it is (built-in default vs. user override in `_meta/limits.md`). Use the verdict — DO NOT recompute the math yourself; the CLI shares the helper that framework writers use, so verdicts are guaranteed consistent. On `OVER`, do NOT silently truncate; surface the projected size and the cap to the producer and pick a remediation in this order:
    1. **Split** — if the page has H2 boundaries that read as distinct topics, split sections out as new siblings (or children of a new space; see step 2). Move the relevant H2 sections verbatim; the original page becomes a hub with in-body wikilinks to the new pages.
    2. **Promote, then split by hand** — when the page is genuinely a hub of multiple distinct topics, run `wiki-spaces space promote <path>` to turn it into `<path>/index.md`, then move the H2 sections into sibling content files under the new space yourself. The CLI handles the mechanical move and link rewrites; splitting content is authorship judgment.
    3. **Summarize** — only when neither split nor promote applies (the page IS already dense). Identify entries to merge or remove; the rejection forces consolidation now, not "later." This is the size discipline that prevents day-30 bloat.
+
+   Proactively (not just on rejection): `wiki-spaces space audit --json` surfaces `promote_candidates` — `split_ready` (a page ≥80% of its cap with ≥2 H2 sections) and `hub` (a space with many accreted siblings). Act on these to split *before* the next write hits the hard cap.
 
    For `index.md` rejection specifically: never use `space promote` (refused by the CLI on `index.md`). Instead, push detail down into a relevant child space's `index.md` or a new content page, or collapse verbose `## Items` entries to wikilink-only references.
 
@@ -66,44 +68,20 @@ An **invalid** configured `wiki` (path set but missing on disk, not absolute, la
    - **Write cap.** If more than ~10 pages would change, summarize the plan and ask before writing.
 9. **Update tracking.** Per CONVENTIONS / `index.md`, `## Spaces` is the exhaustive navigation contract:
    - **`## Spaces` (exhaustive, required).** If you created a new space (a folder with `index.md` containing `## Spaces`), prefer the CLI: `wiki-spaces space add <relative-path>` creates the folder, writes a minimal `index.md` (with `## Spaces` from t=0), and updates the nearest ancestor's `## Spaces` automatically — auto-inserting the section into any ancestor whose `index.md` lacks it. Use `wiki-spaces space remove <relative-path>` to delete in symmetric fashion. No prior setup required: `space add`, `space remove`, `space mount`, and `space promote` all maintain the navigation contract for you. If the CLI is unavailable entirely, do it manually — but walk the **whole chain**, not just the nearest ancestor, or you'll leave drift. Starting at the new space and stepping up one folder at a time: skip plain folders (no `index.md`); at every ancestor with `index.md` insert `## Spaces` if missing AND register the child you came from in it. Stop after registering at the wiki root. Registering only the nearest ancestor while an intermediate ancestor stays unregistered upward breaks the exhaustive-`## Spaces` contract — strict consumers would surface the intermediate as drift. When you remove a contained space whose entry is listed, remove that entry; the chain helper doesn't unwind upward because the parent stays a space.
-   - **`.manifest.json` (opt-in; user must scaffold first).** When the file is present, update it via the inline `flock` snippet in [`CONVENTIONS.md` § How to safely update `.manifest.json`](../../CONVENTIONS.md#how-to-safely-update-manifestjson). The skill reads, validates, locks, writes-via-tempfile, and unlocks — same shape regardless of how many fields you set. Typed-field coercion (`pages_in_vault` → int, `last_commit_synced` → `null` literal when the source has no git) is the writer's responsibility; pass already-typed values to the helper. Refuse on absent: if `.manifest.json` does not exist, the user has not opted in — do NOT auto-create it. Refuse on schema-invalid: a malformed file is treated as absent for this run.
-10. **Confirm.**
+   - **`.manifest.json` (opt-in; user must scaffold first).** When the file is present, update it via `wiki-spaces manifest set <entry-id> key=value …` — the CLI handles `fcntl.flock`, atomic-tempfile-replace, and JSON-coerces typed values (`pages_in_vault=12` → int, `last_commit_synced=null` → None) so you don't embed the lock dance per call. Refuse on absent: if `.manifest.json` does not exist, the user has not opted in — pass `--create` only when the user has explicitly opted in this session (otherwise let the call refuse). Refuse on schema-invalid: the CLI surfaces malformed JSON rather than overwriting it. Read via `manifest get <entry-id>` (returns one entry as JSON) or `manifest list` (every entry ID, sorted) before writing if you need to merge against the existing value.
+10. **Confirm + health check.** Report what changed in the format below, then run a quick `wiki-spaces space audit` to surface any drift, broken wikilinks, malformed frontmatter, size-approaching pages, or duplicate aliases the write created or revealed. Most updates are clean; an audit pass at close turns up the few that aren't (e.g. a wikilink that no longer resolves because a page was renamed) before they bite a downstream search. **Bounded self-correction:** if that audit reports only safe structural drift (a missing `## Spaces`, an unregistered on-disk child), run exactly one `space audit --fix` then re-audit and report the delta — once, no recursion. `--fix` never repairs malformed entries/frontmatter (author intent); leave those reported.
 
 ```
 Updated wiki:
 - Created: <paths>
 - Updated: <paths>
 - Mode: <project_sync|conversation|research>
+- Audit: <findings or "clean">
 ```
 
 ## Promote to space
 
-A `.md` file that has grown into multiple distinct topics, accreted siblings, or now represents a recurring kind is a candidate for promotion to its own space.
-
-**When to consider promotion.** Any of:
-
-- Page exceeds ~300 lines of body content.
-- Page has 3+ H2 sections covering distinct sub-topics.
-- Sibling pages have accreted around the topic (e.g. `strategy.md`, `strategy-backtest.md`, `strategy-screening.md`) that would read more naturally as children of a `strategy/` space.
-- New content's intent suggests the existing page has become a hub.
-
-**Procedure.**
-
-1. Identify the file. Confirm it's not already an `index.md` and not in an external space.
-2. Run `wiki-spaces space promote <path>` (wiki-root-relative). Preview with `--dry-run` first if the wiki has many cross-references.
-3. The CLI:
-   - moves the file to `<basename>/index.md`,
-   - rewrites markdown links across the owned tree (path-aware: only links resolving to the promoted file are touched; hrefs recomputed relative to each linking file's directory so deep cross-links stay correct),
-   - rewrites wikilinks pointing to the promoted file (all forms — bare, display, anchored, pathful — with display preserved),
-   - adjusts the promoted file's outgoing relative links for its new depth (one extra `../`),
-   - adds `aliases: [<basename>]` to the new `index.md` for forward-compatible wikilink resolution (skip with `--skip-aliases` if another page already claims the alias),
-   - ensures the new `index.md` has `## Spaces` from t=0 — matches `space add`,
-   - registers the new space's `## Spaces` entry in the nearest ancestor (uses the file's frontmatter `summary` for the description if present).
-4. Read the new `index.md`. If sections read like standalone children, capture them as separate `.md` files under the new space in a follow-up `ws-update` cycle. The CLI deliberately does not split content — that's authorship, not mechanics.
-
-**Atomicity.** The CLI snapshots every affected file to a system tempdir (outside the wiki tree) before mutating disk and restores from the snapshot if anything fails. Works on both git-tracked and untracked wikis. The snapshot dir is always cleaned, success or failure.
-
-**Refuses if.** Target dir exists with content; path is external (or descends from an external scope); another owned page already claims the alias `<basename>` case-insensitively (use `--skip-aliases` to bypass). When the parent's `index.md` lacks `## Spaces`, promote auto-inserts the heading inside the locked ancestor mutation — no refusal, no prior setup needed.
+A `.md` file that has grown into multiple distinct topics, accreted siblings, or now represents a recurring kind is a candidate for promotion to its own space. Triggers: the page exceeds ~300 lines of body, carries 3+ H2 sections covering distinct sub-topics, sibling pages have accreted around the topic, or new content's intent makes the page a hub. Run `wiki-spaces space promote <path>` (wiki-root-relative; `--dry-run` to preview) for the mechanical move — it relocates the file to `<basename>/index.md`, rewrites the links pointing at it, seeds `## Spaces`, and registers the new space in the nearest ancestor. See [`references/PROMOTE.md`](../../references/PROMOTE.md) for the full criteria, step-by-step procedure, atomicity guarantees, and refusal conditions.
 
 ## Logging
 
@@ -113,4 +91,4 @@ Append a structured entry via the CLI when `log.md` exists at the **scope root**
 wiki-spaces space log UPDATE --field mode=<mode> --field project=<name|-> --field pages_updated=X --field pages_created=Y
 ```
 
-The CLI prepends the ISO-8601 UTC timestamp; you supply only the operation name and the key=value pairs. Use `--raw "<full line>"` for custom shapes. `space log` wraps `_limits.append_log_with_rotation`, holding a `fcntl.flock` for the whole check-rotate-append sequence — concurrent skill invocations never lose lines, and rotation to `log.archive-<YYYYMMDD-HHMMSS>.md` happens automatically when the file would exceed its cap (default 100,000 chars). Logging is opt-in: when `log.md` is absent, the call refuses; pass `--create` only when the user explicitly opted into logging this session (or run `init <wiki> --with log.md` once). Add `--wiki <path>` when the scope is a named sub-space.
+The CLI prepends the ISO-8601 UTC timestamp; you supply only the operation name and the key=value pairs. Use `--raw "<full line>"` for custom shapes. Logging is opt-in: when `log.md` is absent, the call refuses; pass `--create` only when the user explicitly opted into logging this session (or run `init <wiki> --with log.md` once). Add `--wiki <path>` when the scope is a named sub-space. The CLI handles atomic locked append and automatic rotation — see [`CONVENTIONS.md` / `log.md`](../../CONVENTIONS.md#logmd).

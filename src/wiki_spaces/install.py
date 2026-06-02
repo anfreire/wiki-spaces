@@ -35,7 +35,9 @@ from ._common import (
     HARNESSES,
     KEPANO_DEPS,
     WIKI_SKILLS,
+    ConfigUnreadableError,
     Harness,
+    LinkResult,
     data_root,
     harness_present,
     is_owned_install,
@@ -156,9 +158,9 @@ def install_harness(
             actions.append(f"  {h.key}: would {verb} {future_src} -> {dst}")
             continue
         mode = link_or_copy(src, dst, prefer_copy=copy)
-        if mode == "copy":
+        if mode == LinkResult.COPY:
             write_owned_marker(dst, src)
-        actions.append(f"  {h.key}: {mode} {dst}")
+        actions.append(f"  {h.key}: {mode.value} {dst}")
     return actions, had_fatal
 
 
@@ -178,11 +180,14 @@ def _emit_bridge(key: str) -> int:
     # is unset, the snippet would land in a broken state — warn so the
     # user runs the full install before relying on the snippet. Warning
     # goes to stderr; stdout stays clean for the shell-redirect pipe.
-    from ._common import read_config
+    from ._common import read_config, CONFIG_PATH
     cfg = read_config()
     if not cfg.get("repo"):
         print(
-            "warning: `repo` key unset in ~/.config/wiki-spaces/config; "
+            # Name the path the tool ACTUALLY reads (XDG-aware), not a
+            # hardcoded `~/.config/...` — they differ under $XDG_CONFIG_HOME
+            # (producer=consumer: the message must match the resolved file).
+            f"warning: `repo` key unset in {CONFIG_PATH}; "
             "the bridge snippet references that path. Run "
             "`wiki-spaces install` (without --bridge) at least once to "
             "set it before relying on this snippet.",
@@ -231,10 +236,10 @@ def main(argv: list[str] | None = None) -> int:
     if not args.all:
         selected = [h for h in selected if harness_present(h)]
 
-    # PR-N (§41): write the `repo` config key even when no harnesses were
+    # Write the `repo` config key even when no harnesses were
     # detected. Bridge-only users (Cursor, Windsurf, GitHub Copilot, Aider)
     # need `repo` so their rule snippets resolve `<repo>/skills/...` and
-    # `<repo>/references/...`. The pre-PR-N path returned early on empty
+    # `<repo>/references/...`. An earlier version returned early on empty
     # selection, leaving `repo` unset and forcing `doctor` to fail.
     read_root, write_root = _resolve_install_root(dry_run=args.dry_run)
 
@@ -258,13 +263,17 @@ def main(argv: list[str] | None = None) -> int:
             any_failure = any_failure or had_fatal
     else:
         print("  No harnesses with a skills directory present.")
-        print("  Bridge-only harnesses (Cursor, Windsurf, Copilot, Aider) integrate")
-        print("  via `wiki-spaces install --bridge <key>`. See")
-        print("  references/HARNESS_INTEGRATION.md for the per-harness snippets.")
+        print("  Cursor and Windsurf integrate via `wiki-spaces install")
+        print("  --bridge cursor|windsurf`; GitHub Copilot and Aider via a manual")
+        print("  snippet. See references/HARNESS_INTEGRATION.md for both.")
         print()
 
     if not args.dry_run:
-        write_config({"repo": str(write_root)})
+        try:
+            write_config({"repo": str(write_root)})
+        except ConfigUnreadableError as e:
+            print(f"  ! {e}", file=sys.stderr)
+            return 1
         print()
         print(f"Wrote repo path to {CONFIG_PATH}")
         print("Next: scaffold a wiki with `wiki-spaces init`, or set wiki = <path> in the config.")

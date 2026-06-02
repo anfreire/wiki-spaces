@@ -27,7 +27,7 @@ If the config is missing or `wiki` is unset, the user has not set up yet — dri
 
 ## Preflight (before anything)
 
-This briefing drives the **full installation** (skills + scaffold). For a no-install start, run `mkdir -p ~/Documents/Wiki && printf '# My Wiki\n\n## Spaces\n\n' > ~/Documents/Wiki/index.md` — that's a complete wiki. The skills resolve the target wiki via **explicit path → config → CWD ancestor**, so a no-install wiki still works as long as the agent invokes the skills with the wiki path or from inside it.
+This briefing drives the **full installation** (skills + scaffold). For a no-install start, run `mkdir -p ~/Documents/Wiki && printf '# My Wiki\n\n## Spaces\n\n' > ~/Documents/Wiki/index.md` — that's a complete wiki. The skills resolve the target wiki via **explicit path → config → CWD ancestor**, so a no-install wiki still works as long as the agent invokes the skills with the wiki path or from inside it — though the skills lean on the `wiki-spaces` CLI (cap checks, audit, `space add/remove/promote/mount`) and fall back to manual procedures when it is absent, so installing it makes them most effective.
 
 For the full installation, verify the user's machine has one of:
 - **Recommended:** [`uv`](https://docs.astral.sh/uv/) on PATH (`curl -LsSf https://astral.sh/uv/install.sh | sh` or `brew install uv`). Used for `uvx wiki-spaces …` (no install) or `uv tool install wiki-spaces` (permanent). uv provisions Python automatically.

@@ -27,26 +27,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-from ._common import CONFIG_PATH, write_config
+from ._common import (
+    CONFIG_PATH,
+    ConfigUnreadableError,
+    atomic_write,
+    has_control_chars,
+    new_index_md,
+    write_config,
+)
 
 OPTIONAL = {"log.md", "hot.md", "_template.md", "_meta/taxonomy.md", ".manifest.json"}
 
-
-def build_index_md(name: str, description: str | None = None) -> str:
-    """Compose the initial index.md.
-
-    Always emits title + `## Spaces` (the navigation contract — present from
-    t=0 on every CLI-created wiki, so `space add foo/bar` works immediately).
-    When `description` is provided, also emits `## What this space is` with
-    the description. Omitting `description` skips that section entirely
-    rather than writing a placeholder string the user would later have to
-    overwrite.
-    """
-    parts = [f"# {name}", ""]
-    if description and description.strip():
-        parts += ["## What this space is", "", description.strip(), ""]
-    parts += ["## Spaces", ""]
-    return "\n".join(parts)
 
 LOG_MD = "# Log\n"
 HOT_MD = "# Hot\n\n_Currently active work._\n"
@@ -58,7 +49,7 @@ tags: []
 aliases: []
 sources: []
 summary: >-
-  ≤200 chars
+  {{ summary }}
 created: {{ now }}
 updated: {{ now }}
 ---
@@ -139,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--no-config",
         action="store_true",
-        help="do not write wiki=<path> to ~/.config/wiki-spaces/config (default: write)",
+        help="do not write wiki=<path> to ${XDG_CONFIG_HOME:-~/.config}/wiki-spaces/config (default: write)",
     )
     args = parser.parse_args(argv)
 
@@ -159,8 +150,9 @@ def main(argv: list[str] | None = None) -> int:
     # pruning operates on lexical child names — a symlink at
     # `<parent>/_archives` → `/real-wiki` is still pruned by parent
     # walkers as `_archives`, regardless of where the symlink resolves.
+    from . import _model
     lexical_basename = args.path.expanduser().name
-    if lexical_basename in ("_archives", "_meta", "shared"):
+    if lexical_basename in (*_model.RESERVED_NAMES, "shared"):
         print(
             f"  ! invalid wiki root: {lexical_basename!r} is a reserved "
             "name per CONVENTIONS / Reserved top-level folder names. "
@@ -172,6 +164,28 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     root = args.path.resolve()
     name = args.name or root.name
+    # `name` and `--description` land directly in the scaffold's `index.md`. A
+    # line-break char would inject a second `## Spaces` heading ahead of the
+    # canonical one and corrupt the contract a consumer reads first (HANDBOOK:
+    # distrust boundary inputs). `name` is validated AFTER the `root.name`
+    # fallback so the directory basename is guarded too — a directory named
+    # `x\u2028## Spaces` is as much a boundary input as `--name` is.
+    if has_control_chars(name):
+        src = "--name" if args.name is not None else f"the directory basename {root.name!r}"
+        print(
+            "  ! wiki name may not contain newline / control characters "
+            f"({src} would corrupt the scaffold's `## Spaces` contract); pass "
+            "--name with a clean value or rename the directory.",
+            file=sys.stderr,
+        )
+        return 2
+    if args.description is not None and has_control_chars(args.description):
+        print(
+            "  ! --description may not contain newline / control characters "
+            "(they would corrupt the scaffold's `## Spaces` contract).",
+            file=sys.stderr,
+        )
+        return 2
     description = args.description.strip() if args.description else None
 
     folders: list[str] = []
@@ -194,10 +208,7 @@ def main(argv: list[str] | None = None) -> int:
             # per CONVENTIONS / Reserved top-level folder names; creating
             # them at init time would silently produce content no skill
             # can reach.
-            if part in ("", ".", "..") or part.startswith("."):
-                bad_part = True
-                break
-            if part in ("_archives", "_meta"):
+            if part in ("", ".", "..") or _model.is_reserved_segment(part):
                 bad_part = True
                 break
         if bad_part:
@@ -225,7 +236,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    root.mkdir(parents=True, exist_ok=True)
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        print(f"  ! could not create {root}: {e}", file=sys.stderr)
+        return 1
 
     # Refuse to register a pre-existing folder whose `index.md` lacks
     # `## Spaces` unless the user opts in via `--adopt` (inserts the
@@ -245,7 +260,7 @@ def main(argv: list[str] | None = None) -> int:
         from . import _md
         try:
             existing_text = existing_index.read_text(encoding="utf-8")
-        except OSError as e:
+        except (OSError, UnicodeDecodeError) as e:
             print(
                 f"  ! could not read {existing_index}: {e}",
                 file=sys.stderr,
@@ -287,13 +302,14 @@ def main(argv: list[str] | None = None) -> int:
     written: list[str] = []
     skipped: list[str] = []
     over_cap_writes: list[str] = []
+    write_errors: list[str] = []
 
     def write(rel: str, content: str) -> None:
         f = root / rel
         if f.exists() and not args.force:
             skipped.append(rel)
             return
-        # PR-L: framework writes route through `_enforce_size_cap`. `init`
+        # Framework writes route through `space.enforce_size_cap`. `init`
         # never silently truncates a too-long description — refuse so the
         # user can shorten it. Late import to keep the cold-start path light.
         # All `.md` writes route through here, including `log.md` (the
@@ -303,7 +319,7 @@ def main(argv: list[str] | None = None) -> int:
         if rel.endswith(".md"):
             from . import space as _space
             try:
-                _space._enforce_size_cap(f, content, root)
+                _space.enforce_size_cap(f, content, root)
             except _space.SizeCapExceeded as e:
                 # Surface and skip this single write. Track the over-cap
                 # path so we can fail the whole `init` invocation if the
@@ -313,15 +329,37 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  ! size cap: {e}", file=sys.stderr)
                 over_cap_writes.append(rel)
                 return
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(content, encoding="utf-8")
+        from . import _model
+        if _model.symlink_escapes_wiki(f, root):
+            print(
+                f"  ! refusing to write {rel}: it is a symlink whose target "
+                "resolves outside the wiki tree. `atomic_write` would follow it "
+                "and clobber content beyond the trust boundary. Replace the "
+                "symlink with a regular file.",
+                file=sys.stderr,
+            )
+            write_errors.append(rel)
+            return
+        try:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write(f, content)
+        except OSError as e:
+            print(f"  ! could not write {rel}: {e}", file=sys.stderr)
+            write_errors.append(rel)
+            return
         written.append(rel)
 
-    write("index.md", build_index_md(name, description))
+    write("index.md", new_index_md(name, description))
     # If the wiki's `index.md` itself was refused by the size-cap helper,
     # there is no wiki — every later step (folders, adopt, config write)
     # assumes the index exists. Stop with a non-zero exit so the user
     # shortens the description and re-runs.
+    if "index.md" in write_errors:
+        print(
+            "  ! init aborted: could not write `index.md` (see error above).",
+            file=sys.stderr,
+        )
+        return 1
     if "index.md" in over_cap_writes:
         print(
             "  ! init aborted: `index.md` would exceed the per-file cap. "
@@ -348,14 +386,26 @@ def main(argv: list[str] | None = None) -> int:
         if target.is_dir():
             skipped.append(folder + "/")
             continue
-        target.mkdir(parents=True)
+        try:
+            target.mkdir(parents=True)
+        except OSError as e:
+            # An unwritable root (e.g. init into an existing read-only dir, where
+            # the root `mkdir(exist_ok=True)` succeeded) fails here. Refuse-and-
+            # report like the root-creation path, never a raw traceback.
+            write_errors.append(folder + "/")
+            print(f"  ! could not create {folder}/: {e}", file=sys.stderr)
+            continue
         written.append(folder + "/")
         if args.git:
             # Empty dirs are invisible to git; drop a .gitkeep so the scaffold
             # survives clone/checkout. Removed by the user once the folder has
             # real content.
             keep = target / ".gitkeep"
-            keep.touch()
+            try:
+                keep.touch()
+            except OSError as e:
+                write_errors.append(folder + "/.gitkeep")
+                print(f"  ! could not create {folder}/.gitkeep: {e}", file=sys.stderr)
 
     git_failed = False
     if args.git and not (root / ".git").exists():
@@ -373,101 +423,30 @@ def main(argv: list[str] | None = None) -> int:
     elif args.git:
         skipped.append(".git/")
 
-    # `--adopt`: scan for existing nested spaces and register them in their
-    # nearest ancestor's `## Spaces`. Externals are reported on stderr and
-    # skipped (unless --include-external). The chain helper inserts
-    # `## Spaces` into any bare-`index.md` ancestor along the walk up.
-    adopt_registered: list[tuple[str, str]] = []  # (label, ancestor-relative)
+    # `--adopt`: insert `## Spaces` into the root and every nested bare
+    # `index.md`, and register each nested space in its ancestor's `## Spaces`
+    # so audit reports zero drift on day 1. `space.adopt_tree` owns the
+    # orchestration (it lives next to the chain helpers it drives); `init`
+    # only renders the result. Late import: `space` pulls in `fcntl` and other
+    # deps the no-adopt path shouldn't pay for.
+    adopt_registered: list[tuple[str, str]] = []  # (label, ancestor-label)
     adopt_failed = False
     if args.adopt:
-        # Adopt does NOT size-check existing content — that's `space audit`'s
-        # job, run as the post-init step in SETUP.md.
-        # Late import: `space` pulls in `fcntl` and other heavy deps that
-        # `init_wiki` shouldn't pay for in the no-adopt path.
         from . import space as _space
 
-        # Always repair the root first — even on a zero-nested-spaces wiki
-        # the root must carry `## Spaces` after `init --adopt`.
-        try:
-            _space._ensure_section_at(root, root)
-        except RuntimeError as e:
-            print(
-                f"  ! could not insert `## Spaces` into {root}/index.md: {e}",
-                file=sys.stderr,
-            )
+        result = _space.adopt_tree(root, include_external=args.include_external)
+        if result.root_failed:
             return 1
+        adopt_registered = result.registered
+        adopt_failed = result.failed
 
-        # v6 plan: pass `include_external` to the walker so `--include-external`
-        # actually descends into external subtrees, not just yields the
-        # boundaries.
-        for path, classification, reason in _space._walk_classified(
-            root, include_external=args.include_external
-        ):
-            if path == root:
-                continue
-            if classification == "external" and not args.include_external:
-                rel_path = path.relative_to(root).as_posix()
-                print(
-                    f"  . skipping {rel_path}/ — classified external "
-                    f"({reason}). Rename to use as owned, or pass "
-                    f"--include-external to override.",
-                    file=sys.stderr,
-                )
-                continue
-            # When include_external is on, `_walk_classified` may surface
-            # external boundary folders that don't actually have `index.md`
-            # (foreign submodules, escaping symlinks). Skip those with a
-            # per-skip notice rather than trying to register a non-space.
-            if not (path / "index.md").is_file():
-                rel_path = path.relative_to(root).as_posix()
-                print(
-                    f"  . skipping {rel_path}/ — no index.md",
-                    file=sys.stderr,
-                )
-                continue
-
-            # Repair the LEAF's own `index.md` first. The chain helper
-            # only walks UP from leaf, so a bare nested `foo/index.md`
-            # with no children stays bare without this step.
-            try:
-                _space._ensure_section_at(path, root)
-            except RuntimeError as e:
-                print(
-                    f"  ! adopt failed inserting `## Spaces` into "
-                    f"{path}/index.md: {e}",
-                    file=sys.stderr,
-                )
-                adopt_failed = True
-                continue
-
-            # Register `path` upward via the chain helper. Bare-index
-            # ancestors get `## Spaces` inserted as part of the chain walk.
-            # The chain helper's notices are deferred — `init`'s bottom
-            # summary print groups adoption activity with the rest of the
-            # written-files block so the user sees one tidy report.
-            try:
-                _notices, added = _space._ensure_spaces_chain_and_register(
-                    root, path
-                )
-                for ancestor, label, _href in added:
-                    anc_rel = ancestor.relative_to(root)
-                    anc_label = (
-                        "<wiki>"
-                        if str(anc_rel) == "."
-                        else f"<wiki>/{anc_rel}"
-                    )
-                    adopt_registered.append((label, anc_label))
-            except _space.EnsureChainError as e:
-                print(
-                    f"  ! adopt failed for {path}: {e}",
-                    file=sys.stderr,
-                )
-                _space._rollback_added_entries(e.added)
-                adopt_failed = True
-
-    partial = bool(over_cap_writes) or adopt_failed
+    partial = bool(over_cap_writes) or bool(write_errors) or adopt_failed
+    config_error: str | None = None
     if not args.no_config and not partial:
-        write_config({"wiki": str(root)})
+        try:
+            write_config({"wiki": str(root)})
+        except ConfigUnreadableError as e:
+            config_error = str(e)
 
     print(f"wiki: {root}")
     for w in written:
@@ -478,10 +457,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  ~ {anc}/index.md ## Spaces  += [{label}]")
     if not written and not adopt_registered:
         print("  (nothing written)")
-    if not args.no_config and not partial:
+    if not args.no_config and not partial and config_error is None:
         print(f"  → registered as canonical wiki in {CONFIG_PATH}")
     elif not args.no_config and partial:
-        print(f"  ! wiki NOT registered — fix errors above and re-run")
+        print("  ! wiki NOT registered — fix errors above and re-run")
+    if config_error is not None:
+        print(f"  ! wiki NOT registered: {config_error}", file=sys.stderr)
     # Best-effort batch: one failing adoption doesn't abort the whole run,
     # but the exit code MUST signal partial failure. A success (rc=0) on
     # `init --adopt` with unrepaired drift would lie to callers / CI
@@ -495,6 +476,16 @@ def main(argv: list[str] | None = None) -> int:
     # The v1 contract is "errors on overflow, never silent truncation"
     # — silent rc=0 with a missing file would be a partial-success lie.
     if over_cap_writes:
+        return 1
+    # A failed folder / scaffold write (recorded above) must flip the exit code
+    # too — a silent rc=0 with a missing requested folder would be a
+    # partial-success lie to callers / CI gating on the return value.
+    if write_errors:
+        return 1
+    # An unreadable existing config refused the wiki registration: the files
+    # are on disk but discovery is not wired up, so signal partial failure
+    # rather than a misleading rc=0 (HANDBOOK: handle failures at boundaries).
+    if config_error is not None:
         return 1
     return 1 if git_failed else 0
 

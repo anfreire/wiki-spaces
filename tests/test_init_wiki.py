@@ -2,26 +2,19 @@
 
 from __future__ import annotations
 
-import io
-from contextlib import redirect_stdout, redirect_stderr
-from pathlib import Path
-
-import pytest
+import functools
 
 from wiki_spaces import _common, init_wiki
 
+from tests.conftest import run_cli
 
-def _run(args: list[str]) -> tuple[int, str, str]:
-    out, err = io.StringIO(), io.StringIO()
-    with redirect_stdout(out), redirect_stderr(err):
-        rc = init_wiki.main(args)
-    return rc, out.getvalue(), err.getvalue()
+_run = functools.partial(run_cli, entry=init_wiki.main)
 
 
-# ---------- build_index_md ----------
+# ---------- new_index_md ----------
 
-def test_build_index_md():
-    text = init_wiki.build_index_md("MyWiki", "A description")
+def test_new_index_md():
+    text = _common.new_index_md("MyWiki", "A description")
     assert text.startswith("# MyWiki")
     assert "## What this space is" in text
     assert "A description" in text
@@ -29,28 +22,28 @@ def test_build_index_md():
     assert "## Spaces" in text
 
 
-def test_build_index_md_spaces_section_is_empty():
+def test_new_index_md_spaces_section_is_empty():
     """Empty `## Spaces` is spec-valid (the contract is 'exhaustive list,'
     not 'non-empty list'). A new wiki has no contained spaces yet."""
-    text = init_wiki.build_index_md("MyWiki", "A description")
+    text = _common.new_index_md("MyWiki", "A description")
     from wiki_spaces import _md
     assert _md.has_section(text, "Spaces")
     assert _md.parse_section_entries(text, "Spaces") == []
 
 
-def test_build_index_md_omits_description_section_when_none():
+def test_new_index_md_omits_description_section_when_none():
     """When `description` is None or empty, `## What this space is` is omitted
     entirely — no placeholder text. `## Spaces` is always present."""
-    text = init_wiki.build_index_md("MyWiki")
+    text = _common.new_index_md("MyWiki")
     assert text.startswith("# MyWiki")
     assert "## What this space is" not in text
     assert "## Spaces" in text
 
 
-def test_build_index_md_always_emits_spaces_section():
+def test_new_index_md_always_emits_spaces_section():
     """Every CLI-created wiki has `## Spaces` from t=0 — the navigation
     contract is part of what `init` produces, not an optional add-on."""
-    text = init_wiki.build_index_md("MyWiki", "A description")
+    text = _common.new_index_md("MyWiki", "A description")
     assert "## Spaces" in text
 
 
@@ -77,6 +70,29 @@ def test_init_folders_created_but_not_listed_in_index(monkeypatch, tmp_path):
     wiki = tmp_path / "wiki"
     assert (wiki / "concepts").is_dir() and (wiki / "projects").is_dir()
     assert "## Items" not in (wiki / "index.md").read_text()
+
+
+def test_init_folders_reports_mkdir_failure_without_traceback(monkeypatch, tmp_path):
+    """A filesystem failure creating a requested `--folders` dir (e.g. an
+    existing read-only root) must surface as a clean stderr error + non-zero
+    exit, not an uncaught traceback. Root creation is already wrapped; folder
+    creation and `.gitkeep` must be too (HANDBOOK: handle failures at
+    boundaries — filesystem)."""
+    from pathlib import Path
+    monkeypatch.setattr(_common, "CONFIG_PATH", tmp_path / "absent-config")
+    real_mkdir = Path.mkdir
+
+    def fake_mkdir(self, *a, **k):
+        if self.name == "foo":
+            raise PermissionError("simulated read-only parent")
+        return real_mkdir(self, *a, **k)
+
+    monkeypatch.setattr(Path, "mkdir", fake_mkdir)
+    rc, out, err = _run([str(tmp_path / "wiki"), "--folders", "foo", "--no-config"])
+    assert "Traceback" not in (out + err)
+    assert rc == 1
+    assert "could not create" in err
+    assert not (tmp_path / "wiki" / "foo").exists()
 
 
 # ---------- folder validation ----------
@@ -249,3 +265,118 @@ def test_init_deduplicates_normalized_folders(monkeypatch, tmp_path):
     rc, _, _ = _run([str(tmp_path / "wiki"), "--folders", "concepts", "concepts/", "--no-config"])
     assert rc == 0
     assert (tmp_path / "wiki" / "concepts").is_dir()
+
+
+# ---------- framework-write trust-boundary: escaping file symlinks ----------
+
+
+def test_init_force_refuses_escaping_index_symlink(tmp_path):
+    """`init` scaffolds `index.md` via `atomic_write`, which FOLLOWS a symlink to
+    its realpath. If a pre-existing `index.md` is a symlink escaping the wiki tree,
+    `--force` would clobber an EXTERNAL file (HANDBOOK: writes stay inside the
+    trust boundary). Refuse, record the write error, and leave the target
+    unchanged."""
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    outside = tmp_path / "outside_index.txt"
+    outside.write_text("EXTERNAL INDEX\n", encoding="utf-8")
+    (wiki / "index.md").symlink_to(outside)
+    rc, _out, err = _run([str(wiki), "--force", "--no-config"])
+    assert rc != 0
+    assert "symlink" in err.lower()
+    assert outside.read_text() == "EXTERNAL INDEX\n"
+
+
+def test_init_rejects_control_chars_in_description_blocking_spaces_injection(monkeypatch, tmp_path):
+    """`--description` is argv (a boundary input): a value carrying a newline +
+    `## Spaces` would inject a SECOND `## Spaces` heading into the scaffold,
+    ahead of the canonical one, corrupting the navigation contract a consumer
+    reads first (HANDBOOK: distrust boundary inputs; producer=consumer). Refuse
+    it; write nothing."""
+    wiki = tmp_path / "wiki"
+    rc, _out, err = _run([
+        str(wiki), "--no-config",
+        "--description", "real\n\n## Spaces\n\n- [evil](evil/index.md)\n",
+    ])
+    assert rc == 2
+    assert "control" in err.lower() or "newline" in err.lower()
+    assert not (wiki / "index.md").exists()
+
+
+def test_init_rejects_control_chars_in_name(monkeypatch, tmp_path):
+    """`--name` becomes the scaffold's `# title`; a newline could inject a
+    heading. Refuse control chars."""
+    wiki = tmp_path / "wiki"
+    rc, _out, err = _run([str(wiki), "--no-config", "--name", "x\n## Spaces"])
+    assert rc == 2
+    assert not (wiki / "index.md").exists()
+
+
+def test_init_rejects_nel_separator_in_description_blocking_spaces_injection(monkeypatch, tmp_path):
+    """`\\x85` (NEL) is NOT below 0x20, so the original control-char guard let it
+    through — yet `str.splitlines()` (the consumer in `_md.has_section`) splits
+    on it. A `--description` carrying `\\x85## Spaces\\x85- [evil](...)` therefore
+    injected a SECOND `## Spaces` ahead of the canonical one, and the consumer
+    read the INJECTED entry first (HANDBOOK: distrust boundary inputs;
+    producer=consumer). Refuse it; write nothing."""
+    wiki = tmp_path / "wiki"
+    rc, _out, err = _run([
+        str(wiki), "--no-config",
+        "--description", "real\x85\x85## Spaces\x85\x85- [evil](evil/index.md)",
+    ])
+    assert rc == 2
+    assert "control" in err.lower() or "newline" in err.lower()
+    assert not (wiki / "index.md").exists()
+
+
+def test_init_rejects_nel_separator_in_name(monkeypatch, tmp_path):
+    """The `\\x85` (NEL) twin of the `--name` newline guard: it splits a line
+    for `str.splitlines()` but slips past an `ord(c) < 0x20` check."""
+    wiki = tmp_path / "wiki"
+    rc, _out, err = _run([
+        str(wiki), "--no-config", "--name", "x\x85## Spaces\x85- [evil](evil/index.md)",
+    ])
+    assert rc == 2
+    assert not (wiki / "index.md").exists()
+
+
+def test_init_rejects_control_char_directory_basename(monkeypatch, tmp_path):
+    """When `--name` is omitted, the wiki name falls back to the directory
+    basename (`root.name`) — itself a boundary input. A directory named
+    `proj\\u2028## Spaces` makes that fallback inject a SECOND `## Spaces`
+    heading ahead of the canonical one, so the consumer (`str.splitlines()`)
+    reads the injected section first and the real contract is shadowed
+    (HANDBOOK: distrust boundary inputs; producer=consumer). Refuse; write
+    nothing."""
+    bad = tmp_path / "proj\u2028## Spaces\u2028stray"
+    bad.mkdir()
+    rc, _out, err = _run([str(bad), "--no-config"])
+    assert rc == 2
+    assert "control" in err.lower() or "newline" in err.lower()
+    assert not (bad / "index.md").exists()
+
+
+def test_adopt_does_not_register_control_char_named_nested_space(monkeypatch, tmp_path):
+    """`init --adopt` registers every nested space it discovers, deriving each
+    `## Spaces` entry from the on-disk directory name. A nested directory whose
+    name carries a line-break char would produce an entry `str.splitlines()`
+    splits, injecting stray `## Spaces` headings into the adopted root and
+    shadowing the canonical contract (producer=consumer: a writer must never
+    emit an unparseable entry). Such a directory is not a representable space,
+    so discovery skips it: the root keeps exactly one `## Spaces` heading and a
+    clean sibling space still registers (no collateral orphaning)."""
+    from wiki_spaces import _md
+    root = tmp_path / "notes"
+    root.mkdir()
+    (root / "index.md").write_text("# Notes\n\nmy notes\n", encoding="utf-8")
+    (root / "clean").mkdir()
+    (root / "clean" / "index.md").write_text("# Clean\n\n## Spaces\n\n", encoding="utf-8")
+    bad = root / "topic\u2028## Spaces\u2028x"
+    bad.mkdir()
+    (bad / "index.md").write_text("# Topic\n\n## Spaces\n\n", encoding="utf-8")
+    rc, _out, _err = _run([str(root), "--adopt", "--no-config"])
+    root_text = (root / "index.md").read_text(encoding="utf-8")
+    assert sum(1 for ln in root_text.splitlines() if ln.strip() == "## Spaces") == 1
+    hrefs = [e.href for e in _md.parse_section_entries(root_text, "Spaces")]
+    assert "clean/index.md" in hrefs
+    assert all(h is None or "\u2028" not in h for h in hrefs)

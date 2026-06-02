@@ -1,0 +1,18 @@
+[
+  {
+    "external": false,
+    "path": "index.md"
+  },
+  {
+    "external": false,
+    "path": "notes/index.md"
+  },
+  {
+    "external": false,
+    "path": "notes/python-typing.md"
+  },
+  {
+    "external": false,
+    "path": "notes/ref.md"
+  }
+]

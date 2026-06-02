@@ -20,7 +20,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ._common import KEPANO_DEPS, data_root, is_packaged
+from ._common import KEPANO_DEPS, atomic_write, data_root, is_packaged
 
 KEPANO_REPO = "https://github.com/kepano/obsidian-skills.git"
 
@@ -44,20 +44,34 @@ def main(argv: list[str] | None = None) -> int:
     with tempfile.TemporaryDirectory(prefix="wiki-spaces-vendor-") as td:
         clone_dir = Path(td) / "obsidian-skills"
         print(f"Cloning {KEPANO_REPO} (depth 1)...")
-        subprocess.run(
-            ["git", "clone", "--depth", "1", "--quiet", KEPANO_REPO, str(clone_dir)],
-            check=True,
-        )
-        if args.ref != "HEAD":
-            subprocess.run(["git", "-C", str(clone_dir), "fetch", "--depth", "1", "origin", args.ref], check=True)
-            subprocess.run(["git", "-C", str(clone_dir), "checkout", args.ref], check=True)
+        try:
+            subprocess.run(
+                ["git", "clone", "--depth", "1", "--quiet", KEPANO_REPO, str(clone_dir)],
+                check=True,
+            )
+            if args.ref != "HEAD":
+                subprocess.run(["git", "-C", str(clone_dir), "fetch", "--depth", "1", "origin", args.ref], check=True)
+                subprocess.run(["git", "-C", str(clone_dir), "checkout", args.ref], check=True)
 
-        sha = subprocess.run(
-            ["git", "-C", str(clone_dir), "rev-parse", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
+            sha = subprocess.run(
+                ["git", "-C", str(clone_dir), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        except FileNotFoundError:
+            print(
+                f"  ! git not found on PATH; vendor-kepano needs git to clone {KEPANO_REPO}.",
+                file=sys.stderr,
+            )
+            return 1
+        except subprocess.CalledProcessError as e:
+            print(
+                f"  ! git failed ({' '.join(e.cmd)} → exit {e.returncode}); "
+                "vendor-kepano aborted, vendor/kepano/COMMIT unchanged.",
+                file=sys.stderr,
+            )
+            return 1
 
         commit_file = vendor_dir / "COMMIT"
         existing = commit_file.read_text().splitlines() if commit_file.exists() else []
@@ -101,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    commit_file.write_text(f"{sha}\n{iso}\n{KEPANO_REPO}\n")
+    atomic_write(commit_file, f"{sha}\n{iso}\n{KEPANO_REPO}\n")
     print(f"\nwrote vendor/kepano/COMMIT  sha={sha[:12]}  date={iso}")
     return 0
 

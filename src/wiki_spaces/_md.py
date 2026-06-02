@@ -1,25 +1,27 @@
 """Markdown helpers for wiki-spaces tools.
 
 Pure functions on markdown text. No I/O — callers handle file reads/writes.
-Stdlib only.
 
 Scope:
 - `## Spaces` section parse/edit (add_entry, remove_entry,
   parse_section_entries, has_section).
-- Minimal frontmatter parse/serialize for the documented schema (scalars,
-  inline arrays, folded `>-` scalars).
+- Frontmatter parse/serialize via PyYAML (full safe_load semantics).
 - Wikilink discovery and target resolution.
 
-These are the operations the reference skills perform repeatedly. Anything
-beyond the documented schema (multi-line block scalars, anchors, custom
-tags) falls back to the LLM.
+These are the operations the reference skills perform repeatedly.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
+from typing import Any
+from urllib.parse import unquote
+
+import yaml
 
 
 # ---------- Index sections (## Spaces) ----------
@@ -47,25 +49,48 @@ class IndexEntry:
 
 
 def has_section(text: str, heading: str) -> bool:
-    """True when text has a `## <heading>` line."""
+    """True when `text` has a real (non-fenced) `## <heading>` line."""
+    return find_section_bounds(text.splitlines(), heading) is not None
+
+
+def find_section_bounds(lines: list[str], heading: str) -> tuple[int, int, int] | None:
+    """Locate `## <heading>` in `lines`: `(heading_line, body_start, body_end)`
+    with `body_end` exclusive (next `## ` heading or EOF), or None when absent.
+    A `## <heading>` shown inside a fenced code block is skipped — it is an
+    example, not the navigation contract.
+
+    The single `## <heading>` boundary scanner — `add_entry`/`remove_entry`,
+    `parse_section_entries`, and `_model.parse_section_block` all consume it so
+    producer edits and consumer reads never drift on what a section spans.
+    """
     target = f"## {heading}"
-    return any(line.rstrip() == target for line in text.splitlines())
+    fenced = _fenced_line_mask(lines)
+    heading_line: int | None = None
+    for i, raw in enumerate(lines):
+        if not fenced[i] and raw.rstrip() == target:
+            heading_line = i
+            break
+    if heading_line is None:
+        return None
+    body_start = heading_line + 1
+    body_end = len(lines)
+    for i in range(body_start, len(lines)):
+        if not fenced[i] and lines[i].startswith("## "):
+            body_end = i
+            break
+    return heading_line, body_start, body_end
 
 
 def parse_section_entries(text: str, heading: str) -> list[IndexEntry]:
     """Return bullet entries under `## <heading>`. [] when heading absent."""
     out: list[IndexEntry] = []
-    target = f"## {heading}"
-    in_section = False
-    for raw in text.splitlines():
+    lines = text.splitlines()
+    bounds = find_section_bounds(lines, heading)
+    if bounds is None:
+        return out
+    _, body_start, body_end = bounds
+    for raw in lines[body_start:body_end]:
         line = raw.rstrip()
-        if line == target:
-            in_section = True
-            continue
-        if not in_section:
-            continue
-        if line.startswith("## "):
-            break
         m = ENTRY_RE.match(line)
         if m:
             out.append(IndexEntry(
@@ -94,28 +119,6 @@ def render_entry(label: str, href: str, description: str | None = None) -> str:
     return base
 
 
-def _section_range(lines: list[str], heading: str) -> tuple[int, int] | None:
-    """Return (start, end) line indices of `## <heading>` block, end exclusive.
-
-    start is the line right after the heading; end is the line of the next
-    heading or len(lines). None when heading absent.
-    """
-    target = f"## {heading}"
-    start = None
-    for i, raw in enumerate(lines):
-        if raw.rstrip() == target:
-            start = i + 1
-            break
-    if start is None:
-        return None
-    end = len(lines)
-    for i in range(start, len(lines)):
-        if lines[i].startswith("## "):
-            end = i
-            break
-    return start, end
-
-
 def add_entry(
     text: str,
     heading: str,
@@ -131,8 +134,8 @@ def add_entry(
     """
     lines = text.splitlines(keepends=False)
     entry = render_entry(label, href, description)
-    range_ = _section_range(lines, heading)
-    if range_ is None:
+    bounds = find_section_bounds(lines, heading)
+    if bounds is None:
         prefix = "" if not lines or lines[-1] == "" else "\n"
         suffix = "\n"
         appended = f"{prefix}## {heading}\n\n{entry}{suffix}"
@@ -141,7 +144,7 @@ def add_entry(
             out += "\n"
         return out + appended
 
-    start, end = range_
+    _, start, end = bounds
     # Skip leading blank line(s) inside the section.
     body_start = start
     while body_start < end and lines[body_start].strip() == "":
@@ -166,10 +169,10 @@ def add_entry(
 def remove_entry(text: str, heading: str, href: str) -> str:
     """Remove the bullet whose href matches. No-op when section or entry absent."""
     lines = text.splitlines(keepends=False)
-    range_ = _section_range(lines, heading)
-    if range_ is None:
+    bounds = find_section_bounds(lines, heading)
+    if bounds is None:
         return text
-    start, end = range_
+    _, start, end = bounds
     new_lines: list[str] = []
     removed = False
     for i, line in enumerate(lines):
@@ -192,23 +195,6 @@ def remove_entry(text: str, heading: str, href: str) -> str:
 WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 
 
-def find_wikilinks(text: str) -> list[str]:
-    """Return wikilink targets in text, with `|alias` and `#heading` stripped.
-
-    Order preserved, duplicates kept.
-    """
-    out: list[str] = []
-    for m in WIKILINK_RE.finditer(text):
-        target = m.group(1)
-        # Strip `|alias` and `#heading` per Obsidian semantics.
-        target = target.split("|", 1)[0]
-        target = target.split("#", 1)[0]
-        target = target.strip()
-        if target:
-            out.append(target)
-    return out
-
-
 _WIKILINK_REF_RE = re.compile(r"(!?)\[\[([^\]]+)\]\]")
 
 
@@ -218,8 +204,7 @@ def find_wikilink_refs(text: str) -> list[tuple[str, bool]]:
     `is_embed` is True for `![[...]]` — an Obsidian embed, which routinely
     targets a non-page asset (image, PDF, audio) — and False for a plain
     `[[...]]` link. Targets have `|alias` and `#heading` stripped; order
-    preserved, duplicates kept. `find_wikilinks` is the target-only view of
-    the same scan.
+    preserved, duplicates kept.
     """
     out: list[tuple[str, bool]] = []
     for m in _WIKILINK_REF_RE.finditer(text):
@@ -232,6 +217,31 @@ def find_wikilink_refs(text: str) -> list[tuple[str, bool]]:
 
 _FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 _INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
+
+
+def _fenced_line_mask(lines: list[str]) -> list[bool]:
+    """Per-line mask: True for every line inside a fenced code block, including
+    the opening and closing fence lines.
+
+    The one fence-state scanner — shared by `strip_code_spans` and
+    `find_section_bounds` so a `## heading` (or `[[wikilink]]`) shown inside a
+    code example is never read as real content. A fence opens/closes on a line
+    of 3+ backticks or tildes; the closer must use the same character and be at
+    least as long as the opener.
+    """
+    mask = [False] * len(lines)
+    fence: str | None = None
+    for i, line in enumerate(lines):
+        m = _FENCE_RE.match(line)
+        if fence is None:
+            if m:
+                fence = m.group(1)
+                mask[i] = True
+        else:
+            mask[i] = True
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
+                fence = None
+    return mask
 
 
 def strip_code_spans(text: str) -> str:
@@ -248,22 +258,16 @@ def strip_code_spans(text: str) -> str:
     NOTE: line count is preserved, but the TOTAL CHARACTER COUNT is not —
     a "def foo():\n" code line collapses to "\n". Use
     `mask_code_spans_offset_preserving` for callers that index by char
-    offset (e.g., span-based link rewriting in `space.py`).
+    offset (e.g., span-based link rewriting in `space/promote.py`).
     """
+    lines = text.splitlines()
+    fenced = _fenced_line_mask(lines)
     out: list[str] = []
-    fence: str | None = None  # the opening fence run, e.g. "```" or "~~~~"
-    for line in text.splitlines():
-        m = _FENCE_RE.match(line)
-        if fence is None:
-            if m:
-                fence = m.group(1)
-                out.append("")
-                continue
-            out.append(_INLINE_CODE_RE.sub(lambda mm: " " * len(mm.group(0)), line))
-        else:
+    for i, line in enumerate(lines):
+        if fenced[i]:
             out.append("")
-            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
-                fence = None
+        else:
+            out.append(_INLINE_CODE_RE.sub(lambda mm: " " * len(mm.group(0)), line))
     return "\n".join(out)
 
 
@@ -319,16 +323,6 @@ def mask_code_spans_offset_preserving(text: str) -> str:
     return "".join(out)
 
 
-def _path_distance(a: Path, b: Path) -> int:
-    """Directory steps between two absolute paths (0 when equal)."""
-    common = 0
-    for x, y in zip(a.parts, b.parts):
-        if x != y:
-            break
-        common += 1
-    return (len(a.parts) - common) + (len(b.parts) - common)
-
-
 def resolve_wikilink(
     target: str,
     base: Path,
@@ -338,71 +332,62 @@ def resolve_wikilink(
 ) -> Path | None:
     """Resolve a wikilink target against a set of candidate page paths.
 
-    `target` is the wikilink contents (no `[[ ]]`, no alias, no heading).
-    `base` is the directory of the page doing the linking.
-    `candidates` is the set of all known page paths in the wiki (absolute).
-    `wiki_root` is the wiki root directory; required for wiki-root pathful
-    resolution (when None, the resolver falls back to base-only behavior for
-    backward compatibility, but callers should always pass it).
+    Candidates-set adapter over `_model.resolve_wikilink` for callers that
+    only have a `candidates` set and don't care about alias resolution
+    (e.g. the promote link-rewriter — aliases are content metadata, not
+    rewrite targets). Builds an alias-free `PageIndex` on the fly and
+    returns just the resolved target path (or `None`).
 
-    Resolution order (when `target` contains `/`):
-    1. Wiki-root pathful — try `(wiki_root / target).resolve()` against
-       candidates, with both `.md` and no-`.md` normalization. This matches
-       what `cmd_promote` emits ("projects/foo/index") and is stable across
-       page renames. Wiki-root-first is intentional: a base-relative shadow
-       like `notes/concepts/foo.md` should NOT capture a `[[concepts/foo]]`
-       link the producer emitted with wiki-root intent.
-    2. Base-relative pathful — fallback when wiki-root missed. Try
-       `(base / target).resolve()`, same `.md` normalization.
+    Callers that need alias resolution, frontmatter-error reporting, or
+    the full attempt trace should use `_model.resolve_wikilink` directly
+    with a properly-built `PageIndex` from `_model.build_page_index`.
 
-    When `target` has no `/`:
-    3. Bare filename — match by `Path.name` across candidates; tie-break by
-       closest-to-base path distance, then sorted path (deterministic;
-       independent of `candidates` iteration order).
-
-    Returns the resolved absolute path, or None when no match.
+    `wiki_root=None` is accepted for callers without a wiki root and
+    disables the wiki-root pathful strategy (only base-relative + bare
+    filename run); the promote rewriter always passes `wiki_root`.
     """
-    # Build the two normalization variants once: with-`.md` and as-given.
-    # `target` may or may not include `.md`.
-    name_with_md = target if target.endswith(".md") else f"{target}.md"
-    name_as_given = target
+    from . import _model
 
-    if "/" in target:
-        # Pathful: try wiki-root first, then base-relative.
-        if wiki_root is not None:
-            for n in (name_with_md, name_as_given):
-                rel = (wiki_root / n).resolve()
-                if rel in candidates:
-                    return rel
-        for n in (name_with_md, name_as_given):
-            rel = (base / n).resolve()
-            if rel in candidates:
-                return rel
-        return None
-
-    # Bare filename match anywhere — deterministic: closest to `base`, then
-    # sorted path as the final tie-break.
-    matches = [c for c in candidates if c.name == name_with_md]
-    if not matches:
-        return None
-    base_resolved = base.resolve()
-    return min(
-        matches,
-        key=lambda c: (_path_distance(base_resolved, c.parent), str(c)),
+    if wiki_root is None:
+        # Pre-_model behavior: no wiki-root pathful strategy. Build an
+        # alias-free index and use base as the implicit "root" only for
+        # the bare-filename / base-relative case.
+        wiki_root = base
+    index = _model.PageIndex(
+        pages=set(candidates),
+        by_basename=_index_by_basename(candidates),
+        by_alias={},
+        duplicate_aliases={},
+        frontmatter_errors={},
     )
+    res = _model.resolve_wikilink(target, base, index, wiki_root=wiki_root)
+    return res.target
+
+
+def _index_by_basename(paths: set[Path] | Iterable[Path]) -> dict[str, list[Path]]:
+    """Tiny helper: bucket paths by their basename for the back-compat
+    wrapper. Mirrors the field in `_model.PageIndex`."""
+    out: dict[str, list[Path]] = {}
+    for p in paths:
+        out.setdefault(p.name, []).append(p)
+    return out
 
 
 # ---------- Frontmatter (minimal) ----------
 
-FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.DOTALL)
+FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?(.*)$", re.DOTALL)
 
 
 def split_frontmatter(text: str) -> tuple[str | None, str]:
     """Return (frontmatter_text, body). frontmatter_text is None when absent.
 
-    Pure split — no YAML parsing. Use parse_frontmatter for that.
+    Pure split — no YAML parsing. Use parse_frontmatter for that. Fences are
+    matched with `\\r?\\n` so a CRLF-terminated file (Windows / `autocrlf`
+    checkout of the Obsidian wire format) is recognized like its LF twin —
+    an LF-only match would silently treat it as having no frontmatter,
+    dropping aliases and counting the metadata against the size cap.
     """
-    if not text.startswith("---\n"):
+    if not text.startswith(("---\n", "---\r\n")):
         return None, text
     m = FRONTMATTER_RE.match(text)
     if not m:
@@ -414,158 +399,82 @@ def strip_frontmatter(text: str) -> str:
     """Return `text` with the YAML frontmatter block (if any) removed.
 
     Convenience wrapper over `split_frontmatter` — returns just the body.
-    Used by `_limits` for char counting: frontmatter is metadata, not
-    content, and is excluded from size caps.
+    Used for size-cap char counting (`_model.check_size` and the `_log`
+    rotation path): frontmatter is metadata, not content, and is excluded
+    from size caps.
     """
     _, body = split_frontmatter(text)
     return body
 
 
-def _split_inline_array(inner: str) -> list[str]:
-    """Split the body of a YAML inline array `[…]` on top-level commas only.
+class FrontmatterStatus(Enum):
+    ABSENT = "absent"
+    OK = "ok"
+    MALFORMED = "malformed"              # yaml.YAMLError
+    NON_MAPPING = "non_mapping"          # parsed but top level is not a dict
 
-    A `'` or `"` is only treated as a quote opener at the start of an item
-    (after a comma, ignoring leading whitespace) — apostrophes inside
-    unquoted scalars like `[Bob's notes, baz]` stay literal. Items are
-    trimmed; empty items are dropped.
+
+@dataclass(frozen=True)
+class FrontmatterResult:
+    """Frontmatter parse with provenance.
+
+    Distinguishes ABSENT from MALFORMED (broken YAML) so the audit can surface
+    a malformed block as its own finding instead of treating it as no
+    frontmatter. `parse_frontmatter` is the `.data`-only view of this same
+    parse — one parser, two shapes.
     """
-    items: list[str] = []
-    buf: list[str] = []
-    quote: str | None = None
-    # `at_item_start` is True until we see a non-whitespace char in the
-    # current item — only then can a quote char act as an opener.
-    at_item_start = True
-    for ch in inner:
-        if quote is not None:
-            if ch == quote:
-                quote = None
-            else:
-                buf.append(ch)
-            continue
-        if at_item_start and ch in ("'", '"'):
-            quote = ch
-            at_item_start = False
-            continue
-        if ch == ",":
-            items.append("".join(buf).strip())
-            buf = []
-            at_item_start = True
-            continue
-        if not ch.isspace():
-            at_item_start = False
-        buf.append(ch)
-    items.append("".join(buf).strip())
-    return [it for it in items if it]
+    status: FrontmatterStatus
+    data: dict[str, Any] | None
+    error_line: int | None
+    error_message: str | None
 
 
-def parse_frontmatter(text: str) -> dict[str, str | list[str]] | None:
-    """Parse the documented schema subset. Returns None when no frontmatter.
+def parse_frontmatter_result(text: str) -> FrontmatterResult:
+    """Parse YAML frontmatter and report the outcome with provenance.
 
-    Supported field forms:
-    - `key: value` (string scalar)
-    - `key: >-\\n  multi-line value` (folded scalar, becomes single string)
-    - `key: [item1, item2]` (inline string array)
-    - `key:\\n  - item1\\n  - item2` (YAML block-list — the form kepano's
-      `obsidian-markdown` skill emits for `tags:` and `aliases:`)
+    Distinguishes ABSENT (no `---` block), OK (parsed to a dict), MALFORMED
+    (`yaml.YAMLError`), and NON_MAPPING (parsed to something that isn't a dict
+    — e.g. a top-level list). Error line/column are surfaced from PyYAML's
+    `mark` when available. The single frontmatter parser; `parse_frontmatter`
+    is its `.data` view.
 
-    Anything else (nested mappings, anchors, multi-line plain scalars) is
-    not parsed — those fields will be missing from the returned dict.
-    Callers that need full YAML should not use this helper.
+    Supports the full YAML 1.1 safe subset. Empty frontmatter (`---\\n\\n---`)
+    is OK with `{}`. A bare `---\\n---` (no newline before the closing fence)
+    is NOT a frontmatter block (`FRONTMATTER_RE` needs the newline) and is
+    ABSENT.
     """
     fm_text, _ = split_frontmatter(text)
     if fm_text is None:
-        return None
-    out: dict[str, str | list[str]] = {}
-    lines = fm_text.splitlines()
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        if not line or line.startswith("#"):
-            i += 1
-            continue
-        m = re.match(r"^([A-Za-z_][\w-]*)\s*:\s*(.*)$", line)
-        if not m:
-            i += 1
-            continue
-        key, value = m.group(1), m.group(2)
-        if value.startswith(">-"):
-            parts: list[str] = []
-            i += 1
-            while i < len(lines) and (lines[i].startswith("  ") or lines[i] == ""):
-                stripped = lines[i].strip()
-                if stripped:
-                    parts.append(stripped)
-                i += 1
-            out[key] = " ".join(parts)
-            continue
-        if value.startswith("[") and value.endswith("]"):
-            inner = value[1:-1].strip()
-            if not inner:
-                out[key] = []
-            else:
-                out[key] = _split_inline_array(inner)
-            i += 1
-            continue
-        if not value.strip():
-            items, consumed = _consume_block_list(lines, i + 1)
-            if items is not None:
-                out[key] = items
-                i += 1 + consumed
-                continue
-            out[key] = ""
-            i += 1
-            continue
-        out[key] = value.strip().strip("'\"")
-        i += 1
-    return out
+        return FrontmatterResult(FrontmatterStatus.ABSENT, None, None, None)
+    try:
+        parsed = yaml.safe_load(fm_text)
+    except yaml.YAMLError as e:
+        line = None
+        mark = getattr(e, "problem_mark", None) or getattr(e, "context_mark", None)
+        if mark is not None and getattr(mark, "line", None) is not None:
+            line = mark.line  # 0-based, relative to frontmatter content
+        return FrontmatterResult(FrontmatterStatus.MALFORMED, None, line, str(e))
+    if parsed is None:
+        return FrontmatterResult(FrontmatterStatus.OK, {}, None, None)
+    if not isinstance(parsed, dict):
+        return FrontmatterResult(
+            FrontmatterStatus.NON_MAPPING,
+            None,
+            None,
+            f"top-level YAML is {type(parsed).__name__}, expected mapping",
+        )
+    return FrontmatterResult(FrontmatterStatus.OK, parsed, None, None)
 
 
-_BLOCK_LIST_ITEM_RE = re.compile(r"^(\s+)-\s*(.*)$")
+def parse_frontmatter(text: str) -> dict[str, Any] | None:
+    """The `.data` view of `parse_frontmatter_result`: the parsed mapping, or
+    `None` when frontmatter is absent, malformed, or not a mapping.
 
-
-def _consume_block_list(lines: list[str], start: int) -> tuple[list[str] | None, int]:
-    """Collect a YAML block-list starting at `lines[start]`.
-
-    Returns (items, consumed). When no `  - item` line is present at start,
-    returns (None, 0) so the caller can fall back to scalar handling.
+    A `.data`-extracting wrapper over the single rich parser — no second YAML
+    parse. Callers that need to distinguish absent from malformed use
+    `parse_frontmatter_result`.
     """
-    items: list[str] = []
-    j = start
-    while j < len(lines):
-        candidate = lines[j]
-        if not candidate.strip():
-            j += 1
-            continue
-        m = _BLOCK_LIST_ITEM_RE.match(candidate)
-        if not m:
-            break
-        items.append(m.group(2).strip().strip("'\""))
-        j += 1
-    if not items:
-        return None, 0
-    return items, j - start
-
-
-def update_frontmatter_field(text: str, key: str, value: str) -> str:
-    """Set/replace a single scalar `key: value` in existing frontmatter.
-
-    No-op when frontmatter absent. Preserves all other lines and order.
-    """
-    fm_text, body = split_frontmatter(text)
-    if fm_text is None:
-        return text
-    lines = fm_text.splitlines()
-    pattern = re.compile(rf"^{re.escape(key)}\s*:")
-    replaced = False
-    for i, line in enumerate(lines):
-        if pattern.match(line):
-            lines[i] = f"{key}: {value}"
-            replaced = True
-            break
-    if not replaced:
-        lines.append(f"{key}: {value}")
-    new_fm = "\n".join(lines)
-    return f"---\n{new_fm}\n---\n{body}"
+    return parse_frontmatter_result(text).data
 
 
 # ---------- Markdown links (path-aware rewrite for `space promote`) ----------
@@ -627,13 +536,20 @@ def resolve_markdown_link(href: str, containing_file: Path, wiki_root: Path) -> 
 
     Returns the absolute path the link refers to, or None when the link is
     external (URL, mailto:, anchor-only, absolute path) or escapes the wiki.
+
+    The href is percent-decoded (`unquote`) before resolution: Obsidian
+    emits a markdown link to a spaced filename as `my%20note.md`, the only
+    valid spaced-destination form (a raw space ends the CommonMark
+    destination), so `%20` must decode to a space to match the on-disk
+    `my note.md`. `encode_markdown_href` is the producer-side inverse, so a
+    rewritten link round-trips back through this resolver (producer=consumer).
     """
     if _is_external_href(href):
         return None
     base = containing_file.parent
     try:
-        target = (base / href).resolve()
-    except OSError:
+        target = (base / unquote(href)).resolve()
+    except (OSError, RuntimeError):
         return None
     try:
         target.relative_to(wiki_root.resolve())
@@ -651,6 +567,20 @@ def compute_relative_link(target: Path, from_file: Path) -> str:
     import os.path as _osp
     rel = _osp.relpath(str(target), str(from_file.parent))
     return rel.replace("\\", "/")
+
+
+def encode_markdown_href(href: str) -> str:
+    """Percent-encode a relative markdown href for emission into `[label](href)`.
+
+    The producer-side inverse of the `unquote` in `resolve_markdown_link`: a
+    space is the only character that breaks CommonMark destination parsing (a
+    raw space ends the destination), so a rewritten href pointing at a spaced
+    path (`my note/index.md`) must emit `%20` to stay a valid Obsidian markdown
+    link that the resolver reads back to the same target. Encoding is limited to
+    the space so a space-free href is returned byte-for-byte unchanged — no
+    blast radius on the existing rewrites.
+    """
+    return href.replace(" ", "%20")
 
 
 # ---------- Wikilinks: full structural parser ----------
@@ -716,17 +646,47 @@ def parse_frontmatter_aliases(text: str) -> list[str]:
         return []
     if isinstance(aliases, str):
         return [aliases] if aliases else []
-    return list(aliases)
+    if not isinstance(aliases, list):
+        return []
+    return [a for a in aliases if isinstance(a, str) and a]
 
 
 _ALIASES_LINE_RE = re.compile(r"^aliases\s*:\s*(.*)$")
+# Used by `frontmatter_add_alias` to locate the end of an `aliases:` block
+# list so a new alias can be appended at the existing indent. Matches both
+# indented (`  - foo`) and flush-left (`- foo`) item lines.
+_BLOCK_LIST_ITEM_RE = re.compile(r"^(\s*)-\s*(.*)$")
+
+# A value safe to emit as a YAML *plain* scalar in both block (`- x`) and flow
+# (`[..., x]`) context: starts alphanumeric, then only alphanumerics, spaces,
+# and `_ . -`. Anything else (notably the YAML indicators `: ` ` #` `,` `[]{}`)
+# must be quoted so the consumer reads back the same value.
+_SAFE_PLAIN_ALIAS_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.\-]*$")
+
+
+def _yaml_quote_alias(alias: str) -> str:
+    """Render `alias` as a YAML scalar that round-trips through the consumer.
+
+    `frontmatter_add_alias` writes the `aliases:` list as raw text; the consumer
+    (`parse_frontmatter_aliases` → PyYAML) reads it back. A value carrying a YAML
+    indicator therefore breaks producer=consumer unless it is quoted: a stem like
+    `meeting: notes` emitted bare as `- meeting: notes` parses as a *mapping*
+    (the alias is dropped), and `a, b` appended to an inline `[...]` list splits
+    into two entries. Plain-safe values pass through unchanged (preserving the
+    existing block/inline formatting and its tests); everything else becomes a
+    double-quoted scalar with `\\` and `"` escaped — valid in both block and flow
+    context, so one rendering serves every insertion branch below.
+    """
+    if _SAFE_PLAIN_ALIAS_RE.match(alias):
+        return alias
+    return '"' + alias.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def frontmatter_add_alias(text: str, alias: str) -> tuple[str, bool]:
     """Add `alias` to the frontmatter `aliases:` list. Returns (new_text, added).
 
     Case-insensitive no-op via `casefold()` — matches Obsidian's autocomplete
-    and the wiki-level collision preflight in `space.py`.
+    and the wiki-level collision preflight in `space/promote.py`.
 
     Style preservation (best-effort, stdlib-only):
     - No frontmatter        → create block-style frontmatter at the top.
@@ -742,9 +702,10 @@ def frontmatter_add_alias(text: str, alias: str) -> tuple[str, bool]:
     if any(a.casefold() == alias.casefold() for a in existing):
         return text, False
 
+    rendered = _yaml_quote_alias(alias)
     fm_text, body = split_frontmatter(text)
     if fm_text is None:
-        new_fm = f"---\naliases:\n  - {alias}\n---\n"
+        new_fm = f"---\naliases:\n  - {rendered}\n---\n"
         return new_fm + text, True
 
     lines = fm_text.splitlines()
@@ -755,15 +716,17 @@ def frontmatter_add_alias(text: str, alias: str) -> tuple[str, bool]:
         rest = m.group(1).strip()
         if rest.startswith("[") and rest.endswith("]"):
             inner = rest[1:-1].strip()
-            new_inner = f"{inner}, {alias}" if inner else alias
+            new_inner = f"{inner}, {rendered}" if inner else rendered
             lines[i] = f"aliases: [{new_inner}]"
             break
         if rest and not rest.startswith("["):
-            # Scalar form: convert to block list.
+            # Scalar form: convert to block list. Re-render the existing scalar
+            # too — a quoted `"a: b"` strips to `a: b`, which would itself break
+            # as a bare `- a: b` (mapping) without re-quoting.
             lines[i] = "aliases:"
             scalar = rest.strip("'\"")
-            lines.insert(i + 1, f"  - {scalar}")
-            lines.insert(i + 2, f"  - {alias}")
+            lines.insert(i + 1, f"  - {_yaml_quote_alias(scalar)}")
+            lines.insert(i + 2, f"  - {rendered}")
             break
         # Block-list: walk forward until the indented list ends.
         insert_at = i + 1
@@ -779,11 +742,11 @@ def frontmatter_add_alias(text: str, alias: str) -> tuple[str, bool]:
                 insert_at += 1
                 continue
             break
-        lines.insert(insert_at, f"{indent}- {alias}")
+        lines.insert(insert_at, f"{indent}- {rendered}")
         break
     else:
         lines.append("aliases:")
-        lines.append(f"  - {alias}")
+        lines.append(f"  - {rendered}")
 
     new_fm = "\n".join(lines)
     return f"---\n{new_fm}\n---\n{body}", True

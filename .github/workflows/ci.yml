@@ -22,5 +22,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Lint with ruff
+        run: uv run --group test ruff check .
+
       - name: Run tests
         run: uv run --group test pytest -v

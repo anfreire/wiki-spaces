@@ -5,7 +5,8 @@ Dispatches to a subcommand module's `main()`:
   wiki-spaces install
   wiki-spaces init <path>
   wiki-spaces doctor
-  wiki-spaces space <add|remove|mount|promote|audit|log>
+  wiki-spaces space <subcommand>      # run `space --help` for the subcommand list
+  wiki-spaces manifest <set|get|list>
   wiki-spaces vendor-kepano    # dev only
 
 Each subcommand owns its own argparse — pass --help to any subcommand for
@@ -24,6 +25,7 @@ COMMANDS: dict[str, str] = {
     "init": "wiki_spaces.init_wiki",
     "doctor": "wiki_spaces.doctor",
     "space": "wiki_spaces.space",
+    "manifest": "wiki_spaces.manifest",
     "vendor-kepano": "wiki_spaces.vendor_kepano",
 }
 
@@ -36,7 +38,8 @@ def _help_text() -> str:
         "  install         install skills into detected harnesses; set repo path\n"
         "  init            scaffold a new wiki and register it as canonical\n"
         "  doctor          audit config + harness installs + vendored kepano\n"
-        "  space           add/remove/mount/promote/audit spaces; maintains ## Spaces contract\n"
+        "  space           manage spaces & the ## Spaces contract; see `space --help`\n"
+        "  manifest        read/write `.manifest.json` entries (set/get/list)\n"
     )
     if not _common.is_packaged():
         base += "  vendor-kepano   re-vendor kepano upstream (dev only)\n"

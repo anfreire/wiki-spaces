@@ -1,0 +1,94 @@
+[
+  {
+    "external": false,
+    "path": "index.md"
+  },
+  {
+    "external": false,
+    "path": "concepts/bar.md"
+  },
+  {
+    "external": false,
+    "path": "concepts/foo.md"
+  },
+  {
+    "external": false,
+    "path": "concepts/index.md"
+  },
+  {
+    "external": false,
+    "path": "concepts/plain/asset.md"
+  },
+  {
+    "external": false,
+    "path": "projects/index.md"
+  },
+  {
+    "external": false,
+    "path": "notebook/about-spaces.md"
+  },
+  {
+    "external": false,
+    "path": "notebook/approaching.md"
+  },
+  {
+    "external": false,
+    "path": "notebook/brokenlink.md"
+  },
+  {
+    "external": false,
+    "path": "notebook/daily.md"
+  },
+  {
+    "external": false,
+    "path": "notebook/index.md"
+  },
+  {
+    "external": false,
+    "path": "notebook/nonmap.md"
+  },
+  {
+    "external": false,
+    "path": "notebook/snippets.md"
+  },
+  {
+    "external": false,
+    "path": "aliasdup/a.md"
+  },
+  {
+    "external": false,
+    "path": "aliasdup/b.md"
+  },
+  {
+    "external": false,
+    "path": "aliasdup/index.md"
+  },
+  {
+    "external": false,
+    "path": "malformed-host/index.md"
+  },
+  {
+    "external": false,
+    "path": "flat/index.md"
+  },
+  {
+    "external": false,
+    "path": "malformed-host/good/index.md"
+  },
+  {
+    "external": false,
+    "path": "projects/acme/index.md"
+  },
+  {
+    "external": false,
+    "path": "projects/acme/notes.md"
+  },
+  {
+    "external": false,
+    "path": "concepts/sub/index.md"
+  },
+  {
+    "external": false,
+    "path": "concepts/sub/note.md"
+  }
+]

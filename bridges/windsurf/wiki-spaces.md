@@ -2,7 +2,7 @@
 trigger: always_on
 ---
 
-This project has access to wiki-spaces — a personal canonical wiki located at the path defined in `~/.config/wiki-spaces/config` (key: `wiki`). Wiki-spaces tooling, references, and ops scripts live at the path in the same config (key: `repo`).
+This project has access to wiki-spaces — a personal canonical wiki located at the path defined in `${XDG_CONFIG_HOME:-~/.config}/wiki-spaces/config` (key: `wiki`). Wiki-spaces tooling, references, and ops scripts live at the path in the same config (key: `repo`).
 
 When the user asks to save / capture / search knowledge:
 

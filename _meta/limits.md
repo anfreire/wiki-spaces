@@ -5,7 +5,7 @@ The wiki-spaces source repo is itself a wiki — `index.md` at the root plus
 documentation (CONVENTIONS, the three reference skills, references/),
 which naturally exceeds the default user-content cap. Bump the caps for
 those paths so `space audit` on this repo passes; user wikis inherit the
-defaults from `_limits.DEFAULTS` unless they override.
+built-in defaults unless they override.
 
 The override format and matching semantics are documented in
 [`CONVENTIONS.md` § `_meta/limits.md`](../CONVENTIONS.md#metalimitsmd).

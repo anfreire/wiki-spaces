@@ -18,6 +18,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Lint with ruff
+        run: uv run --group test ruff check .
+
       - name: Run tests
         run: uv run --group test pytest -v
 
@@ -71,6 +74,19 @@ jobs:
           pkg=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
           if [ "$tag" != "$pkg" ]; then
             echo "tag $tag does not match pyproject version $pkg"
+            exit 1
+          fi
+
+      - name: Changelog has an entry for this tag
+        if: github.ref_type == 'tag'
+        run: |
+          # Gate the publish on a documented release. `## [<version>]` must
+          # exist in CHANGELOG.md or the pipeline fails before PyPI publish.
+          # Escape the dots so `1.2.0` doesn't loosely match `1x2x0`.
+          tag="${GITHUB_REF_NAME#v}"
+          pat="^## \[${tag//./\\.}\]"
+          if ! grep -qE "$pat" CHANGELOG.md; then
+            echo "CHANGELOG.md has no '## [$tag]' section for tag $GITHUB_REF_NAME"
             exit 1
           fi
 
@@ -134,3 +150,37 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: Create GitHub Release
+    needs: publish
+    runs-on: ubuntu-latest
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Extract this tag's changelog section
+        run: |
+          # Lines from `## [<version>]` up to (not including) the next
+          # `## [` header become the release notes.
+          tag="${GITHUB_REF_NAME#v}"
+          awk -v ver="$tag" '
+            index($0, "## [" ver "]") == 1 {grab=1; next}
+            grab && /^## \[/ {exit}
+            grab {print}
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "no changelog body extracted for $tag"
+            exit 1
+          fi
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            --verify-tag

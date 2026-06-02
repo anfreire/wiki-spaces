@@ -16,11 +16,21 @@ import pytest
 from wiki_spaces import doctor
 
 
-def _run_main(monkeypatch, cfg, *, wiki_state="OK", repo_state="OK"):
-    """Run doctor.main with config + validators stubbed; vendor/harness no-op'd."""
+def _run_main(monkeypatch, cfg, *, wiki_state=None, repo_state=None):
+    """Run doctor.main with config + validators stubbed; vendor/harness no-op'd.
+
+    `wiki_state`/`repo_state` are `ValidationState` members (default OK);
+    the stubs wrap them in `ValidationResult` so `check_config` reads them
+    via the enum API it now uses."""
+    wiki_state = wiki_state or doctor.ValidationState.OK
+    repo_state = repo_state or doctor.ValidationState.OK
     monkeypatch.setattr(doctor, "read_config", lambda: cfg)
-    monkeypatch.setattr(doctor, "_validate_wiki", lambda w: wiki_state)
-    monkeypatch.setattr(doctor, "_validate_repo", lambda r: repo_state)
+    monkeypatch.setattr(
+        doctor, "_validate_wiki", lambda w: doctor.ValidationResult(wiki_state)
+    )
+    monkeypatch.setattr(
+        doctor, "_validate_repo", lambda r: doctor.ValidationResult(repo_state)
+    )
     monkeypatch.setattr(doctor, "check_vendor", lambda net: None)
     monkeypatch.setattr(doctor, "check_harness", lambda h: None)
     out = io.StringIO()
@@ -37,14 +47,16 @@ def test_exits_nonzero_when_config_missing(monkeypatch):
 
 def test_exits_nonzero_when_wiki_invalid(monkeypatch):
     rc, _ = _run_main(
-        monkeypatch, {"wiki": "/x", "repo": "/y"}, wiki_state="MISSING ON DISK"
+        monkeypatch, {"wiki": "/x", "repo": "/y"},
+        wiki_state=doctor.ValidationState.MISSING_ON_DISK,
     )
     assert rc == 1
 
 
 def test_exits_nonzero_when_repo_invalid(monkeypatch):
     rc, _ = _run_main(
-        monkeypatch, {"wiki": "/x", "repo": "/y"}, repo_state="NOT ABSOLUTE"
+        monkeypatch, {"wiki": "/x", "repo": "/y"},
+        repo_state=doctor.ValidationState.NOT_ABSOLUTE,
     )
     assert rc == 1
 
@@ -66,14 +78,50 @@ def test_exits_zero_when_config_valid(monkeypatch):
 
 def test_check_config_returns_bool(monkeypatch):
     """check_config reports validity as its return value, not just stdout."""
+    ok = doctor.ValidationResult(doctor.ValidationState.OK)
     monkeypatch.setattr(doctor, "read_config", lambda: {"wiki": "/x", "repo": "/y"})
-    monkeypatch.setattr(doctor, "_validate_wiki", lambda w: "OK")
-    monkeypatch.setattr(doctor, "_validate_repo", lambda r: "OK")
+    monkeypatch.setattr(doctor, "_validate_wiki", lambda w: ok)
+    monkeypatch.setattr(doctor, "_validate_repo", lambda r: ok)
     with redirect_stdout(io.StringIO()):
         assert doctor.check_config() is True
-    monkeypatch.setattr(doctor, "_validate_repo", lambda r: "MISSING ON DISK")
+    monkeypatch.setattr(
+        doctor, "_validate_repo",
+        lambda r: doctor.ValidationResult(doctor.ValidationState.MISSING_ON_DISK),
+    )
     with redirect_stdout(io.StringIO()):
         assert doctor.check_config() is False
+
+
+def test_check_config_reports_unreadable_distinctly_from_missing(monkeypatch):
+    """An existing-but-unreadable config must be diagnosed as unreadable, not
+    collapsed into "missing". `read_config` returns {} for both, but doctor's
+    job is accurate diagnosis at this boundary — and the resolver was already
+    hardened with `config_exists_unreadable`, so doctor must use it too."""
+    monkeypatch.setattr(doctor, "read_config", lambda: {})
+    monkeypatch.setattr(doctor, "config_exists_unreadable", lambda: True)
+    out = io.StringIO()
+    with redirect_stdout(out):
+        assert doctor.check_config() is False
+    text = out.getvalue()
+    assert "could not be read" in text
+    # Not the missing-branch guidance — that would mis-diagnose an unreadable
+    # config as absent and send the user to re-install rather than fix perms.
+    assert "wiki-spaces install" not in text
+
+
+def test_check_config_survives_non_utf8_config_file(monkeypatch, tmp_path):
+    """A real non-UTF-8 config file must not crash `doctor`: `read_config` falls
+    back to {} and `config_exists_unreadable` flags it, so check_config reports
+    "could not be read" instead of a raw `UnicodeDecodeError` (HANDBOOK: handle
+    failures at boundaries — parse)."""
+    from wiki_spaces import _common
+    cfg = tmp_path / "config"
+    cfg.write_bytes(b"wiki = /x \xff\xfe\nrepo = /y\n")
+    monkeypatch.setattr(_common, "CONFIG_PATH", cfg)
+    out = io.StringIO()
+    with redirect_stdout(out):
+        assert doctor.check_config() is False
+    assert "could not be read" in out.getvalue()
 
 
 def _fake_install(tmp_path: Path) -> Path:
@@ -90,7 +138,7 @@ def _fake_install(tmp_path: Path) -> Path:
 def test_validate_repo_ok_for_complete_install(tmp_path):
     """All sentinels present ⇒ valid."""
     root = _fake_install(tmp_path)
-    assert doctor._validate_repo(str(root)) == "OK"
+    assert doctor._validate_repo(str(root)).state is doctor.ValidationState.OK
 
 
 @pytest.mark.parametrize("sentinel", list(doctor.REPO_SENTINELS))
@@ -99,9 +147,29 @@ def test_validate_repo_flags_any_missing_sentinel(tmp_path, sentinel):
     repo. Parametrized so new sentinels are automatically covered."""
     root = _fake_install(tmp_path)
     (root / sentinel).unlink()
-    state = doctor._validate_repo(str(root))
-    assert "NOT A WIKI-SPACES INSTALL" in state
-    assert sentinel in state
+    result = doctor._validate_repo(str(root))
+    assert result.state is doctor.ValidationState.NOT_AN_INSTALL
+    assert sentinel in (result.detail or "")
+
+
+def test_validators_return_typed_state_not_strings(tmp_path):
+    """The validators return a typed `ValidationState`, never a rendered
+    string — callers compare on the enum (`.ok` / `.state`) and the human
+    text is produced only at the print site via `.render()`."""
+    (tmp_path / "index.md").write_text("# wiki\n\n## Spaces\n\n")
+    assert doctor._validate_wiki(str(tmp_path)).state is doctor.ValidationState.OK
+    assert (
+        doctor._validate_wiki("rel/path").state
+        is doctor.ValidationState.NOT_ABSOLUTE
+    )
+    assert (
+        doctor._validate_wiki(str(tmp_path / "absent")).state
+        is doctor.ValidationState.MISSING_ON_DISK
+    )
+    # render() folds detail into the human line; ok mirrors the OK state.
+    missing = doctor._validate_repo(str(tmp_path / "bare"))
+    assert not missing.ok
+    assert missing.render() == "MISSING ON DISK"
 
 
 def test_repo_sentinels_includes_all_three_wiki_skills():
@@ -123,16 +191,17 @@ def test_repo_sentinels_includes_both_kepano_skills():
 
 def test_doctor_validate_wiki_rejects_bare_index_folder(tmp_path):
     """Direct call to _validate_wiki: bare `index.md` (no `## Spaces`)
-    returns a non-OK state. v1 contract: a wiki needs `## Spaces`."""
+    returns the typed NO_SPACES_SECTION state. v1 contract: a wiki needs
+    `## Spaces`."""
     (tmp_path / "index.md").write_text("# bare\n")  # no `## Spaces`
-    state = doctor._validate_wiki(str(tmp_path))
-    assert state != "OK"
-    assert "Spaces" in state
+    result = doctor._validate_wiki(str(tmp_path))
+    assert result.state is doctor.ValidationState.NO_SPACES_SECTION
+    assert not result.ok
 
 
 def test_doctor_validate_wiki_ok_with_spaces_section(tmp_path):
     (tmp_path / "index.md").write_text("# wiki\n\n## Spaces\n\n")
-    assert doctor._validate_wiki(str(tmp_path)) == "OK"
+    assert doctor._validate_wiki(str(tmp_path)).state is doctor.ValidationState.OK
 
 
 def test_doctor_wiki_flag_accepts_valid_path(tmp_path, capsys):
@@ -171,9 +240,9 @@ def test_doctor_missing_commit_flags_repo_invalid(tmp_path):
         target = root / sentinel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("ok", encoding="utf-8")
-    state = doctor._validate_repo(str(root))
-    assert "NOT A WIKI-SPACES INSTALL" in state
-    assert "vendor/kepano/COMMIT" in state
+    result = doctor._validate_repo(str(root))
+    assert result.state is doctor.ValidationState.NOT_AN_INSTALL
+    assert "vendor/kepano/COMMIT" in (result.detail or "")
 
 
 # ---------- PR-F: CLI help surface ----------
@@ -203,3 +272,17 @@ def test_cli_help_no_longer_mentions_update():
     # Match the column "update" line specifically; "updated" / "updating"
     # prose elsewhere would be fine.
     assert "  update " not in help_text
+
+
+def test_check_vendor_handles_non_utf8_commit_without_crashing(tmp_path, monkeypatch, capsys):
+    """`doctor` is a boundary diagnostic: an unreadable / non-UTF-8 vendored
+    `COMMIT` file must produce a clear finding, not a raw traceback (HANDBOOK:
+    handle failures at boundaries). Mirrors how the rest of the tool treats a
+    non-UTF-8 config / index.md."""
+    vendor = tmp_path / "vendor" / "kepano"
+    vendor.mkdir(parents=True)
+    (vendor / "COMMIT").write_bytes(b"\xff\xfe not utf-8\n")
+    monkeypatch.setattr(doctor, "data_root", lambda: tmp_path)
+    doctor.check_vendor(net=False)  # must not raise
+    out = capsys.readouterr().out
+    assert "COMMIT" in out

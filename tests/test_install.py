@@ -3,8 +3,9 @@ missing skill sources."""
 
 from __future__ import annotations
 
+import functools
 import io
-from contextlib import redirect_stdout, redirect_stderr
+from contextlib import redirect_stderr
 from pathlib import Path
 
 import pytest
@@ -12,12 +13,9 @@ import pytest
 from wiki_spaces import install
 from wiki_spaces._common import Harness
 
+from tests.conftest import run_cli
 
-def _run(args: list[str]) -> tuple[int, str, str]:
-    out, err = io.StringIO(), io.StringIO()
-    with redirect_stdout(out), redirect_stderr(err):
-        rc = install.main(args)
-    return rc, out.getvalue(), err.getvalue()
+_run = functools.partial(run_cli, entry=install.main)
 
 
 def test_bridge_cursor_emits_exact_file_content():
@@ -173,6 +171,34 @@ def test_bridge_no_warning_when_repo_set(monkeypatch, tmp_path):
     rc, out, err = _run(["--bridge", "cursor"])
     assert rc == 0
     assert "warning" not in err.lower()
+
+
+def test_bridge_warning_names_resolved_config_path(monkeypatch, tmp_path):
+    """C7: the `repo`-unset warning must name the path the tool ACTUALLY reads
+    (the XDG-aware `CONFIG_PATH`), not a hardcoded `~/.config/...` that differs
+    under $XDG_CONFIG_HOME — message vs resolved file (producer=consumer)."""
+    from wiki_spaces import _common
+    # A resolved config path that is NOT under ~/.config (as $XDG_CONFIG_HOME
+    # would produce).
+    cfg_path = tmp_path / "xdg" / "wiki-spaces" / "config"
+    monkeypatch.setattr(_common, "CONFIG_PATH", cfg_path)
+    rc, _, err = _run(["--bridge", "cursor"])
+    assert rc == 0
+    assert str(cfg_path) in err
+    assert "~/.config/wiki-spaces/config" not in err
+
+
+def test_bridge_files_document_xdg_aware_config_path():
+    """C7: the static bridge snippets can't resolve CONFIG_PATH at emit time,
+    so they document the XDG-aware location (`${XDG_CONFIG_HOME:-~/.config}`)
+    rather than a bare `~/.config/...` that's wrong under $XDG_CONFIG_HOME."""
+    from wiki_spaces._common import data_root
+    for key in install.BRIDGES:
+        text = (data_root() / "bridges" / install.BRIDGES[key]).read_text(
+            encoding="utf-8"
+        )
+        assert "${XDG_CONFIG_HOME:-~/.config}/wiki-spaces/config" in text
+        assert "`~/.config/wiki-spaces/config`" not in text
 
 
 def test_install_unowned_dst_exits_nonzero_without_force(tmp_path, monkeypatch):

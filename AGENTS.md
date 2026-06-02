@@ -22,7 +22,7 @@ Inside a space, three kinds of inhabitant:
 
 Zero contained spaces is a fine wiki — `## Spaces` is just empty. Deep nesting is a fine wiki. Your shape is your call.
 
-**When something becomes a space.** A file grows into a space via `space promote`; a folder grows into a space by adding `index.md` with `## Spaces` (e.g. via `space add` on the existing folder). Triggers are structural — accreted siblings, hub-like content, distinct sub-topics — not just size overflow. See `ws-update/SKILL.md` § Promote to space for the full criteria.
+**When something becomes a space.** A file grows into a space via `space promote`; a folder grows into a space by adding `index.md` with `## Spaces` (e.g. via `space add` on the existing folder). Triggers are structural — accreted siblings, hub-like content, distinct sub-topics — not just size overflow. See [`references/PROMOTE.md`](references/PROMOTE.md) for the full criteria.
 
 ## The navigation contract
 
@@ -40,7 +40,7 @@ Cross-space references go horizontal: `[label](relative/path.md)` or `[[wikilink
 
 ## Size discipline
 
-Hard char caps at write time. The defaults are `index.md` 5,000, `log.md` 100,000 (auto-rotates), `hot.md` 100,000, every other `*.md` 15,000 — configurable via `_meta/limits.md` (see [`CONVENTIONS.md`](CONVENTIONS.md)). Framework writers (`init`, `space add`, `space mount`, `space promote`, `space log`, the chain helper's ancestor mutations) enforce caps on the projected post-write size; errors on overflow, never silent truncation. A shrinking write (smaller than the existing on-disk body) is the only escape hatch from legacy bloat. Day-30 isn't worse than day-0 — more content invested means more payoff.
+Hard char caps at write time, configurable via `_meta/limits.md` — see [`CONVENTIONS.md`](CONVENTIONS.md) for the default cap table (the `index.md` hub gets a tight cap, content pages a larger one, append-only and scratch files the largest). Framework writers (`init`, `space add`, `space remove`, `space mount`, `space promote`, `space log`, `space audit --fix`, the chain helper's ancestor mutations) enforce caps on the projected post-write size; errors on overflow, never silent truncation. (`space remove` is a writer only for its one growing write — inserting a missing `## Spaces` into the ancestor before de-registering a child; its entry removal itself is a shrinking write.) A shrinking write (smaller than the existing on-disk body) is the only escape hatch from legacy bloat. Day-30 isn't worse than day-0 — more content invested means more payoff.
 
 ## Optional conventions
 

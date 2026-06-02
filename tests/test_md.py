@@ -68,6 +68,21 @@ def test_parse_section_stops_at_next_heading():
     assert items[0].href == "b.md"
 
 
+def test_has_section_ignores_fenced_heading():
+    text = "# Wiki\n\n```\n## Spaces\n```\n"
+    assert _md.has_section(text, "Spaces") is False
+
+
+def test_find_section_bounds_skips_fenced_heading():
+    text = (
+        "# Wiki\n\n"
+        "```md\n## Spaces\n- [fake](fake/index.md)\n```\n\n"
+        "## Spaces\n\n- [real](real/index.md)\n"
+    )
+    entries = _md.parse_section_entries(text, "Spaces")
+    assert [e.href for e in entries] == ["real/index.md"]
+
+
 # ---------- add_entry / remove_entry ----------
 
 def test_add_entry_to_existing_section():
@@ -121,16 +136,7 @@ def test_remove_entry_section_absent_is_noop():
     assert out == text
 
 
-# ---------- find_wikilinks / resolve_wikilink ----------
-
-def test_find_wikilinks_strips_alias_and_heading():
-    text = "See [[foo|alias]], [[bar#heading]], [[baz]] and inline [[qux|q]]."
-    assert _md.find_wikilinks(text) == ["foo", "bar", "baz", "qux"]
-
-
-def test_find_wikilinks_empty():
-    assert _md.find_wikilinks("plain text, no links") == []
-
+# ---------- resolve_wikilink ----------
 
 def test_resolve_wikilink_by_filename(tmp_path):
     page = tmp_path / "concepts" / "foo.md"
@@ -271,15 +277,6 @@ def test_resolve_wikilink_pathful_md_suffix_both_forms(tmp_path):
     ) == target.resolve()
 
 
-def test_path_distance():
-    from pathlib import Path
-
-    a = Path("/w/projects/a")
-    assert _md._path_distance(a, a) == 0
-    assert _md._path_distance(a, Path("/w/projects/a/notes")) == 1
-    assert _md._path_distance(a, Path("/w/projects/b")) == 2
-
-
 # ---------- frontmatter ----------
 
 FM_SAMPLE = """---
@@ -326,6 +323,15 @@ def test_parse_frontmatter_absent():
     assert _md.parse_frontmatter("no frontmatter here") is None
 
 
+def test_parse_frontmatter_empty_block_requires_blank_line():
+    """N2: pin the documented empty-frontmatter behavior. `FRONTMATTER_RE`
+    needs a newline between the content and the closing fence, so empty
+    frontmatter is `---\\n\\n---` (a blank content line) → {}, while a bare
+    `---\\n---` (no blank line) is not recognized as frontmatter → None."""
+    assert _md.parse_frontmatter("---\n\n---\nbody\n") == {}
+    assert _md.parse_frontmatter("---\n---\nbody\n") is None
+
+
 def test_parse_frontmatter_block_list():
     fm = (
         "---\n"
@@ -363,12 +369,73 @@ def test_parse_frontmatter_block_list_followed_by_scalar():
     assert parsed["category"] == "concept"
 
 
-def test_parse_frontmatter_empty_key_stays_empty_string():
+def test_parse_frontmatter_empty_key_is_none():
+    """An empty `aliases:` value is YAML null. parse_frontmatter_aliases
+    normalizes None → [] for callers, so the audit's alias index works
+    either way; this test pins the underlying safe_load semantic."""
     fm = "---\naliases:\ntags: [x]\n---\nbody\n"
     parsed = _md.parse_frontmatter(fm)
     assert parsed is not None
-    assert parsed["aliases"] == ""
+    assert parsed["aliases"] is None
     assert parsed["tags"] == ["x"]
+
+
+def test_split_frontmatter_crlf_fences():
+    """CRLF-terminated frontmatter fences must be recognized like LF ones.
+
+    Obsidian is the declared wire format and CRLF arises on Windows /
+    `git core.autocrlf=true` checkouts. An LF-only fence match silently
+    treats a CRLF file as having NO frontmatter — dropping aliases, hiding
+    malformed YAML from audit, and counting the metadata against the size
+    cap (which CONVENTIONS says is excluded). The split must strip the
+    block regardless of the line terminator.
+    """
+    crlf = "---\r\ntitle: a\r\naliases: [foo]\r\n---\r\nbody text\r\n"
+    fm, body = _md.split_frontmatter(crlf)
+    assert fm is not None
+    assert "title: a" in fm
+    assert "title" not in body
+    assert body.startswith("body text")
+
+
+def test_parse_frontmatter_crlf_recovers_aliases():
+    """CRLF frontmatter parses to the same mapping as its LF twin — so a
+    Windows-authored page does not silently lose its `aliases`."""
+    crlf = "---\r\ntitle: a\r\naliases: [foo, bar]\r\n---\r\nbody\r\n"
+    parsed = _md.parse_frontmatter(crlf)
+    assert parsed is not None
+    assert parsed["aliases"] == ["foo", "bar"]
+    assert parsed["title"] == "a"
+
+
+def test_strip_frontmatter_crlf_excludes_metadata():
+    """`strip_frontmatter` (the size-cap char counter) must exclude a CRLF
+    frontmatter block, matching its LF behavior — otherwise the cap count
+    for a CRLF page is inflated by the metadata it is documented to exclude.
+    """
+    lf = "---\ntitle: x\n---\nBODY\n"
+    crlf = "---\r\ntitle: x\r\n---\r\nBODY\r\n"
+    assert _md.strip_frontmatter(lf).strip() == "BODY"
+    assert _md.strip_frontmatter(crlf).strip() == "BODY"
+
+
+def test_parse_frontmatter_block_list_flush_left():
+    """Regression: flush-left block list (no leading indent on each item)
+    is valid YAML. The pre-PyYAML home-grown parser silently parsed this
+    as an empty string, causing the alias index to drop every page whose
+    frontmatter used the form, and wikilinks pointing at those aliases
+    to report as broken. safe_load handles both indented and flush-left."""
+    fm = (
+        "---\n"
+        "aliases:\n"
+        "- foo\n"
+        "- bar\n"
+        "---\n"
+        "body\n"
+    )
+    parsed = _md.parse_frontmatter(fm)
+    assert parsed is not None
+    assert parsed["aliases"] == ["foo", "bar"]
 
 
 def test_parse_frontmatter_block_list_preserves_quoted_commas():
@@ -421,21 +488,6 @@ def test_parse_frontmatter_inline_array_mixed_quoted_and_apostrophe():
     parsed = _md.parse_frontmatter(fm)
     assert parsed is not None
     assert parsed["aliases"] == ["foo, bar", "Bob's notes", "baz"]
-
-
-def test_update_frontmatter_replaces_existing_key():
-    out = _md.update_frontmatter_field(FM_SAMPLE, "summary", "new summary")
-    assert _md.parse_frontmatter(out)["summary"] == "new summary"
-
-
-def test_update_frontmatter_appends_missing_key():
-    out = _md.update_frontmatter_field(FM_SAMPLE, "category", "concept")
-    assert _md.parse_frontmatter(out)["category"] == "concept"
-
-
-def test_update_frontmatter_noop_when_absent():
-    text = "# No frontmatter\n"
-    assert _md.update_frontmatter_field(text, "summary", "x") == text
 
 
 # ---------- strip_code_spans ----------
@@ -548,6 +600,34 @@ def test_resolve_markdown_link_walks_up(tmp_path):
         wiki,
     )
     assert target == (wiki / "global.md").resolve()
+
+
+def test_resolve_markdown_link_percent_decodes_space(tmp_path):
+    """An Obsidian markdown link to a file whose name contains a space is
+    percent-encoded (`my%20note.md`), the only valid spaced-destination form
+    Obsidian emits. The resolver must decode `%20` so the link resolves to the
+    on-disk `my note.md`; without decoding it builds a non-existent
+    `my%20note.md` path and the consumer (promote's link rewriter) reports it as
+    unrelated, leaving the link stale after a move (producer=consumer break)."""
+    wiki = tmp_path / "wiki"
+    (wiki / "projects").mkdir(parents=True)
+    (wiki / "projects" / "my note.md").write_text("# note")
+    target = _md.resolve_markdown_link(
+        "my%20note.md", wiki / "projects" / "other.md", wiki
+    )
+    assert target == (wiki / "projects" / "my note.md").resolve()
+
+
+def test_encode_markdown_href_encodes_spaces_only(tmp_path):
+    """The producer-side inverse of the resolver's percent-decode: a relative
+    markdown href carrying spaces is emitted with `%20` so the rewritten link is
+    valid Obsidian markdown AND round-trips back through
+    `resolve_markdown_link`. Space is the only char that breaks CommonMark
+    destination parsing, so encoding is limited to it — a space-free href is
+    returned byte-for-byte unchanged (no blast radius on existing rewrites)."""
+    assert _md.encode_markdown_href("my note/index.md") == "my%20note/index.md"
+    assert _md.encode_markdown_href("../a b/c.md") == "../a%20b/c.md"
+    assert _md.encode_markdown_href("plain/index.md") == "plain/index.md"
 
 
 def test_compute_relative_link_same_dir(tmp_path):
@@ -702,3 +782,71 @@ def test_add_alias_converts_scalar_to_block_list():
     new, added = _md.frontmatter_add_alias(text, "bar")
     assert added
     assert _md.parse_frontmatter_aliases(new) == ["foo", "bar"]
+
+
+def test_add_alias_colon_value_roundtrips():
+    """An alias carrying a YAML `: ` indicator (e.g. derived from a filename
+    stem `meeting: notes`) must be emitted as a quoted scalar — a bare
+    `- meeting: notes` is parsed by the consumer (PyYAML) as a MAPPING, not a
+    string, so `parse_frontmatter_aliases` drops it. The producer reported
+    adding the alias; the consumer must read back the same value (HANDBOOK
+    producer=consumer).
+    """
+    new, added = _md.frontmatter_add_alias("# body\n", "meeting: notes")
+    assert added is True
+    assert _md.parse_frontmatter_aliases(new) == ["meeting: notes"]
+
+
+def test_add_alias_comma_value_in_inline_list_roundtrips():
+    """A comma-bearing alias appended to an inline `[...]` list must not split
+    into two entries — `[x, a, b]` would read back as three aliases, none of
+    them the `a, b` the producer added."""
+    new, added = _md.frontmatter_add_alias("---\naliases: [x]\n---\nbody\n", "a, b")
+    assert added is True
+    assert _md.parse_frontmatter_aliases(new) == ["x", "a, b"]
+
+
+def test_add_alias_comma_value_in_block_list_roundtrips():
+    new, added = _md.frontmatter_add_alias(
+        "---\naliases:\n  - foo\n---\nbody\n", "a, b"
+    )
+    assert added is True
+    assert _md.parse_frontmatter_aliases(new) == ["foo", "a, b"]
+
+
+def test_add_alias_hash_value_roundtrips():
+    """A `#`-bearing alias must round-trip — a bare `- a #b` truncates at the
+    YAML comment, yielding the wrong value."""
+    new, added = _md.frontmatter_add_alias("# body\n", "a #b")
+    assert added is True
+    assert _md.parse_frontmatter_aliases(new) == ["a #b"]
+
+
+def test_add_alias_quoted_scalar_with_colon_roundtrips():
+    """Converting an existing QUOTED scalar that itself carries a `: ` to a
+    block list must re-quote it — otherwise `- a: b` becomes a mapping and the
+    pre-existing alias is silently lost while adding a new one."""
+    new, added = _md.frontmatter_add_alias(
+        '---\naliases: "a: b"\n---\nBody\n', "bar"
+    )
+    assert added is True
+    assert _md.parse_frontmatter_aliases(new) == ["a: b", "bar"]
+
+
+# ---------- parse_frontmatter is a true wrapper over the rich parser ----------
+
+
+def test_parse_frontmatter_delegates_to_result_no_forked_parse():
+    """`parse_frontmatter` must be the `.data` view of the SINGLE rich parser,
+    not a forked second YAML parse (HANDBOOK: unify, don't fork; the same value
+    from two sources). For every input class the dict view must equal the rich
+    result's `.data`, proving one parser feeds both."""
+    cases = [
+        "no frontmatter here",                       # ABSENT  -> None
+        "---\n\n---\nbody\n",                         # OK empty -> {}
+        "---\ntitle: Hi\ntags: [a, b]\n---\nbody\n",  # OK dict  -> dict
+        "---\ntags: [oops\n---\nbody\n",              # MALFORMED -> None
+        "---\n- a\n- b\n---\nbody\n",                 # NON_MAPPING -> None
+    ]
+    for text in cases:
+        assert _md.parse_frontmatter(text) == _md.parse_frontmatter_result(text).data

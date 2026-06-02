@@ -34,7 +34,7 @@ uvx wiki-spaces init ~/notes --adopt     # OR adopt an existing folder of notes
 uvx wiki-spaces doctor --no-net          # verify
 ```
 
-`install` auto-detects and links the skills into whichever of **Claude Code, Codex, Gemini CLI, Antigravity, Hermes, and Kiro** are present (`--all` pre-positions for every one). Cursor, Windsurf, GitHub Copilot, and Aider have no global skills directory — they integrate via a rule-file snippet (`wiki-spaces install --bridge <key>`; see [`HARNESS_INTEGRATION.md`](references/HARNESS_INTEGRATION.md)). For a permanent install, `pip install wiki-spaces` or `uv tool install wiki-spaces`, then drop the `uvx` prefix.
+`install` auto-detects and links the skills into whichever of **Claude Code, Codex, Gemini CLI, Antigravity, Hermes, and Kiro** are present (`--all` pre-positions for every one). Cursor and Windsurf have no global skills directory — they integrate via a generated rule-file snippet (`wiki-spaces install --bridge cursor|windsurf`). GitHub Copilot and Aider integrate via a manual rule snippet — see [`HARNESS_INTEGRATION.md`](references/HARNESS_INTEGRATION.md) for both. For a permanent install, `pip install wiki-spaces` or `uv tool install wiki-spaces`, then drop the `uvx` prefix.
 
 `init` always emits `## Spaces` in the new wiki's `index.md` from t=0 so the `space` subcommands work immediately. `--adopt` walks the existing folder, registers every nested folder containing `index.md` in its ancestor's `## Spaces`, and inserts `## Spaces` into any pre-existing index that lacks the heading (the v1 navigation contract — a wiki is a folder with `index.md` AND `## Spaces`). After adoption every folder carries both, so audit reports zero drift on day 1. External subtrees (`shared/`, foreign submodules, escaping symlinks) are skipped with a per-skip notice; pass `--include-external` to override.
 
@@ -54,7 +54,7 @@ uvx wiki-spaces space mount <url> --mode submodule              # mount an exter
 mkdir -p ~/Documents/Wiki && printf '# My Wiki\n\n## Spaces\n\n' > ~/Documents/Wiki/index.md
 ```
 
-A folder with `index.md` + `## Spaces` is already a complete wiki — the whole spec is one page, [`AGENTS.md`](AGENTS.md). The skills still work on it (they discover the wiki from your current directory); run `wiki-spaces init` later to register it for config-based discovery.
+A folder with `index.md` + `## Spaces` is already a complete wiki — the whole spec is one page, [`AGENTS.md`](AGENTS.md). The skills still work on it (they discover the wiki from your current directory), though they lean on the `wiki-spaces` CLI for cap checks, audit, and structural edits and fall back to manual procedures without it — installing it makes them most effective. Run `wiki-spaces init` later to register the wiki for config-based discovery.
 
 ### Skill source paths
 

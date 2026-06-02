@@ -2,7 +2,7 @@
 
 This is the opt-in catalog of conventions a wiki may adopt. Every section is independent — pick the markers that fit your use case; tools degrade where a marker is absent. The [spec](AGENTS.md) defines `index.md` with a `## Spaces` heading as the required floor; everything in this catalog is layered on top.
 
-**"Tools" in this catalog** means the three reference skills (`ws-search`, `ws-update`, `ws-tend`) — LLM-driven procedures that read these markers and degrade gracefully. The `wiki-spaces` CLI handles `install` / `init` / `doctor` / `space` / `vendor-kepano` only; runtime knowledge operations (search, capture, audit, normalize, colorize) live in the skills.
+**"Tools" in this catalog** means the three reference skills (`ws-search`, `ws-update`, `ws-tend`) — LLM-driven procedures that read these markers and degrade gracefully. The `wiki-spaces` CLI handles `install` / `init` / `doctor` / `space` / `manifest` / `vendor-kepano` only; runtime knowledge operations (search, capture, audit, normalize, colorize) live in the skills.
 
 **Obsidian-flavored markdown is the wire format** — see [`AGENTS.md` / Markdown flavor](AGENTS.md#markdown-flavor). Syntax facts (wikilinks, frontmatter, callouts, embeds, comments, Bases) live in [`vendor/kepano/obsidian-markdown`](vendor/kepano/obsidian-markdown/SKILL.md) and [`vendor/kepano/obsidian-bases`](vendor/kepano/obsidian-bases/SKILL.md). Cite those skills, never restate their contents.
 
@@ -159,6 +159,8 @@ Skip the optional `## What this space is` or `## Items` sections and `index.md` 
 
 `TIMESTAMP` is UTC ISO-8601. `OPERATION` is uppercase verb (`SEARCH`, `UPDATE`, `TEND`). Keys are operation-specific.
 
+The `wiki-spaces space log <OP> [--field k=v …]` CLI is the safe writer the skills use: it prepends the timestamp, holds an `fcntl.flock` on the parent directory for the whole check-rotate-append sequence (so concurrent writers never lose a line), and auto-rotates the file to `log.archive-<YYYYMMDD-HHMMSS>.md` when the append would exceed the `log.md` cap (default 100,000 chars; see [`_meta/limits.md`](#metalimitsmd)). Logging is opt-in: `--create` scaffolds `log.md` on first use; without it an absent file makes the writer refuse rather than auto-create.
+
 **If absent:** Tools skip logging. No log file is created automatically; create it (or run `wiki-spaces init <path> --with log.md`) to opt in.
 
 ---
@@ -196,64 +198,26 @@ Skip the optional `## What this space is` or `## Items` sections and `index.md` 
 
 ### How to safely update `.manifest.json`
 
-`.manifest.json` is an opt-in convention — the framework reads it but does not auto-create it. Writers must update it themselves, atomically and under `flock`, with these properties:
+`.manifest.json` is an opt-in convention. Prefer the CLI writer so producers and consumers share the same locking, schema, and JSON-portability rules:
+
+```sh
+wiki-spaces manifest set <entry-id> key=value ...
+```
+
+Without `--create`, `manifest set` refuses when the file is absent. Pass `--create` only when the user explicitly opts into the convention in this session. `manifest get <entry-id>` and `manifest list` read the same schema the writer enforces.
+
+Custom writers should mirror the CLI with these properties:
 
 1. **Refuse on absent.** Logging is opt-in; so is the manifest. If the file isn't there, the user hasn't opted in — surface the absence rather than scaffolding.
 2. **Refuse on schema-invalid.** Don't silently overwrite a malformed file; warn and treat as absent for this run.
-3. **Lock the parent directory** with `fcntl.flock` so concurrent writers serialize. Locking the file itself doesn't serialize past an `os.replace` — the lock is inode-based, and `os.replace` swaps the inode out from under any holder. The parent directory's inode is stable.
-4. **Read fresh inside the lock.** Other writers may have committed since the caller's last read.
-5. **Write via `tempfile.NamedTemporaryFile` + `os.replace`** for crash safety.
+3. **Reject non-finite JSON.** Python accepts `NaN`/`Infinity` and numeric overflows like `1e999` by default; reject them recursively on read and write, and use `json.dumps(..., allow_nan=False)` as the final backstop.
+4. **Lock the parent directory** with `fcntl.flock` so concurrent writers serialize. Locking the file itself doesn't serialize past an `os.replace` — the lock is inode-based, and `os.replace` swaps the inode out from under any holder. The parent directory's inode is stable.
+5. **Read fresh inside the lock.** Other writers may have committed since the caller's last read.
+6. **Write via `tempfile.mkstemp` + `os.replace`, fsyncing both the temp file and parent directory.** Fsyncing only the temp file persists its bytes; the directory fsync makes the rename durable.
 
-Reference Python snippet (POSIX; Windows is best-effort):
+The canonical implementation of all six lives in `src/wiki_spaces/manifest.py` — `_read_manifest` + `_validate_manifest` (refuse-on-absent, schema, and non-finite checks, including the per-entry "must be a mapping" rule) and `_atomic_write_under_flock` (parent-directory lock + `tempfile.mkstemp` + `os.replace` + dual fsync). A custom writer should reproduce that behavior; read it there rather than copying a snippet here that would drift.
 
-```python
-import fcntl, json, os, tempfile
-from pathlib import Path
-
-def manifest_set(wiki_root: Path, project: str, key: str, value):
-    manifest = wiki_root / ".manifest.json"
-    if not manifest.is_file():
-        raise FileNotFoundError(f"{manifest} not present; opt in first")
-
-    # Lock the PARENT DIRECTORY's inode, not the file's. The file inode
-    # changes under `os.replace`, so a second writer would acquire a
-    # stale lock against a unlinked inode and race; the directory inode
-    # is stable across the swap and serializes correctly. Mirrors
-    # `_atomic_mutate_index` in src/wiki_spaces/space.py.
-    dir_fd = os.open(str(manifest.parent), os.O_RDONLY)
-    try:
-        fcntl.flock(dir_fd, fcntl.LOCK_EX)
-        # Read fresh inside the lock to pick up any concurrent commits.
-        try:
-            raw = manifest.read_bytes()
-        except FileNotFoundError as e:
-            raise FileNotFoundError(f"{manifest} not present; opt in first") from e
-        try:
-            doc = json.loads(raw or b"{}")
-        except json.JSONDecodeError as e:
-            raise ValueError(f"{manifest} not valid JSON: {e}")
-        if not isinstance(doc, dict) or "projects" not in doc:
-            raise ValueError(f"{manifest} missing top-level `projects` map")
-
-        doc["projects"].setdefault(project, {})[key] = value
-        new_text = json.dumps(doc, indent=2) + "\n"
-        tmp_fd, tmp_path = tempfile.mkstemp(
-            prefix=f".{manifest.name}.tmp-", dir=str(manifest.parent)
-        )
-        try:
-            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-                f.write(new_text)
-            os.replace(tmp_path, manifest)
-        except Exception:
-            try: os.unlink(tmp_path)
-            except OSError: pass
-            raise
-    finally:
-        try: fcntl.flock(dir_fd, fcntl.LOCK_UN)
-        finally: os.close(dir_fd)
-```
-
-Typed-field coercion (e.g. `pages_in_vault` is an int, `last_commit_synced` may be `null`) is the writer's responsibility — pass already-typed values to the helper above. Skills should use this pattern rather than writing `.manifest.json` directly.
+Typed-field coercion (e.g. `pages_in_vault` is an int, `last_commit_synced` may be `null`) is the writer's responsibility when bypassing the CLI. Skills should use `wiki-spaces manifest set/get/list` rather than writing `.manifest.json` directly.
 
 ---
 
@@ -291,7 +255,7 @@ Aliases are mappings the normalizer uses to rewrite non-canonical tags to canoni
 
 ## `_meta/limits.md`
 
-**Size discipline is default-on, configurable via this file.** Per-file character caps enforced at write time (by every framework writer — `wiki-spaces init`, `space add`, `space mount`, `space promote`, `space log`, the chain helper's ancestor mutations) and audited by `ws-tend` / `wiki-spaces space audit`. The discipline: hard caps, errors on overflow, no silent truncation — the producer must consolidate, split, or promote before the next write.
+**Size discipline is default-on, configurable via this file.** Per-file character caps enforced at write time (by every framework writer — `wiki-spaces init`, `space add`, `space remove`, `space mount`, `space promote`, `space log`, `space audit --fix`, the chain helper's ancestor mutations) and audited by `ws-tend` / `wiki-spaces space audit`. The discipline: hard caps, errors on overflow, no silent truncation — the producer must consolidate, split, or promote before the next write.
 
 **Defaults (override via this file):**
 
@@ -320,11 +284,22 @@ Example:
 | projects/**/*.md |       20000 |
 ```
 
-**Match semantics** — patterns are matched via `fnmatch`. A pattern containing `/` matches against the wiki-root-relative path (`concepts/foo.md`); a pattern without `/` matches against the basename only (`index.md` matches every `index.md` at any depth).
+**Match semantics** — a pattern containing `/` matches the wiki-root-relative posix path as a glob with `**` path-segment support (`concepts/*.md` matches one level under `concepts/`; `projects/**/*.md` matches every depth below `projects/`); a pattern without `/` matches the basename only, case-sensitively via `fnmatchcase` (`index.md` matches every `index.md` at any depth). First match wins; user overrides precede the built-in defaults.
 
 **Rejection guidance** — when a content page exceeds its cap, the producer (via `ws-update`) suggests split → promote-then-split-by-hand → summarize, in that order. Splitting is preferred because a 15K content page would just become an over-cap 5K `index.md` after a plain promote.
 
 **If absent:** the built-in defaults apply unchanged.
+
+---
+
+## Self-maintenance signals
+
+`wiki-spaces space audit` surfaces two **informational** signals so the structure can reorganize *before* a hard cap rejection forces it. They are reflection prompts the LLM acts on with judgment — they never flip the audit exit code, so the release gate stays stable.
+
+- **`promote_candidates`** — structural triggers that a file has grown into a space (per AGENTS.md / "When something becomes a space"): `kind: hub` (a space's directory holds ≥ 6 direct content pages — accreted siblings under a hub-like `index.md`) and `kind: split_ready` (a content page at ≥ 80% of its cap *and* carrying ≥ 2 H2 sections — size pressure plus clean split boundaries). Size-gated on purpose: a large-but-under-cap reference doc (cap bumped here) is not flagged. `ws-update`'s size-discipline step consults these; `ws-tend` reports them.
+- **`prune_candidates`** — `kind: hot_distill`: an opt-in `hot.md` scratch buffer at ≥ 80% of its cap, a prompt to distill the hot buffer into cold structured pages (drain, don't subdivide). Clock-dependent `updated:`-staleness is *not* a generic signal here — it varies with wall-clock and can't be reported deterministically; `ws-tend`'s manifest-gated >30d check covers that against a recorded `last_synced`.
+
+**Bounded self-correction.** At close-out, `ws-update` / `ws-tend` may run exactly **one** `wiki-spaces space audit --fix` pass — the safe structural repairs only (insert a missing `## Spaces`, register on-disk children) — then **re-audit** and report the delta. No recursion. Malformed `## Spaces` entries and malformed frontmatter are author intent the framework can't reconstruct: `--fix` never rewrites them, so they stay reported (the post-fix audit still exits non-zero until a human repairs them).
 
 ---
 
@@ -488,7 +463,7 @@ Wikilink and markdown-link syntax: see [obsidian-markdown](vendor/kepano/obsidia
 - Add up to 2 relevant wikilinks per page; never force irrelevant links.
 - Link the first natural mention only. Skip mentions inside code blocks or frontmatter.
 - Use the shortest link that resolves unambiguously.
-- `ws-tend`'s cross-link pass scores each candidate link: exact name match (+4), partial name match (+1), shared tags ≥2 (+2), same project (+2), cross-category (+2); a link is applied at score ≥3. `wiki_spaces._links` (`score_cross_link` / `should_link`) is a tested implementation of these weights, importable wherever the `wiki_spaces` package is installed.
+- `ws-tend`'s cross-link pass scores each candidate link: exact name match (+4), partial name match (+1), shared tags ≥2 (+2), same project (+2), cross-category (+2); a link is applied at score ≥3.
 
 ---
 

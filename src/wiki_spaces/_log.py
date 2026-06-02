@@ -1,225 +1,26 @@
-"""Size discipline primitives for wiki-spaces.
+"""Log append + rotation for wiki-spaces.
 
-Hard char caps at write time on the projected post-write size. Errors on
-overflow, never silent truncation. The producer must consolidate, split, or
-promote before the next write — predictability is the value.
+`append_log_with_rotation` is the one write path that lives here: it appends a
+`log.md` entry under a parent-directory lock, rotating the oldest half into a
+timestamped archive when the projected size would breach the cap. Errors on
+overflow, never silent truncation — an over-cap append is the producer's cue
+to trim, not a license to cut.
 
-This module is pure computation (no I/O in the predicate) so callers retain
-control over the "shrinking write" escape hatch and any per-skill policy
-decisions. The CLI commands `wiki-spaces space log` and (eventually) the size
-checks in `ws-update` wrap this module.
-
-Stdlib only. Match semantics documented in `cap_for`.
+Stdlib only. The limit table and its matcher are owned by `_model`
+(`load_limit_table` / `cap_for_path`); `cmd_log` resolves the cap there and
+hands the table in. Durable writes route through `_common.atomic_write`.
 """
 
 from __future__ import annotations
 
-import fnmatch
 import os
 import re
 import sys
-import tempfile
-
-try:
-    import fcntl
-except ImportError:
-    fcntl = None  # type: ignore[assignment]
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import _md
-
-
-# Ordered list of `(glob_pattern, cap_chars)` — first-match wins.
-# Order matters: most-specific patterns first, broadest last.
-DEFAULTS: list[tuple[str, int]] = [
-    ("index.md", 5000),
-    ("log.md", 100000),
-    # Archives are log overflow — they share the log's discipline, not
-    # the generic 15K content-page cap. Without this, a rotation that
-    # legitimately needs more than 15K worth of older entries would be
-    # blocked by the default `*.md` rule.
-    ("log.archive-*.md", 100000),
-    ("hot.md", 100000),
-    ("*.md", 15000),
-]
-
-
-# ---------- Limit table parsing ----------
-
-
-def _parse_limits_table(text: str) -> list[tuple[str, int]]:
-    """Parse a markdown-table limits file. Returns user pairs in file order.
-
-    Format (extra columns / whitespace tolerated; header rows skipped):
-
-        | Pattern         | Cap (chars) |
-        |-----------------|-------------|
-        | concepts/*.md   |        8000 |
-
-    Lines that don't parse as `| pattern | cap |` are silently skipped — the
-    file is human-edited; minor formatting drift shouldn't break the parser.
-    """
-    out: list[tuple[str, int]] = []
-    seen: set[str] = set()
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line.startswith("|"):
-            continue
-        cells = [c.strip() for c in line.strip("|").split("|")]
-        if len(cells) < 2:
-            continue
-        pattern, cap_str = cells[0], cells[1]
-        # Skip the header row and any separator row (`---`).
-        if not pattern or pattern.lower() in {"pattern"}:
-            continue
-        if set(pattern) <= set("-: "):
-            continue
-        try:
-            cap = int(cap_str.replace(",", "").replace("_", "").strip())
-        except ValueError:
-            continue
-        if cap <= 0:
-            continue
-        if pattern in seen:
-            continue
-        seen.add(pattern)
-        out.append((pattern, cap))
-    return out
-
-
-def read_limits(wiki_root: Path) -> list[tuple[str, int]]:
-    """Return the effective limit table for `wiki_root`.
-
-    Reads `<wiki_root>/_meta/limits.md` if present. User-defined patterns
-    appear FIRST in their declared order; `DEFAULTS` patterns are appended
-    afterwards (filtered to remove any pattern the user already declared).
-    First-match precedence means a user's `concepts/*.md` rule wins over the
-    broader `*.md` default — narrow user rules can't be silently shadowed.
-    """
-    limits_path = wiki_root / "_meta" / "limits.md"
-    if not limits_path.is_file():
-        return list(DEFAULTS)
-    try:
-        text = limits_path.read_text(encoding="utf-8")
-    except OSError:
-        return list(DEFAULTS)
-    user_pairs = _parse_limits_table(text)
-    user_patterns = {p for p, _ in user_pairs}
-    return user_pairs + [(p, c) for p, c in DEFAULTS if p not in user_patterns]
-
-
-# ---------- Cap lookup ----------
-
-
-def _path_glob_match(rel: str, pattern: str) -> bool:
-    """Path-segment-bounded glob match.
-
-    Both `rel` and `pattern` are posix-style strings. Splits on `/` and walks
-    segments alongside:
-    - `**` matches zero or more whole segments.
-    - Any other segment matches one path segment, with `*`, `?`, and `[…]`
-      handled via `fnmatch.fnmatchcase` (so `*` does not cross `/`).
-
-    This gives `concepts/*.md` non-recursive semantics (does NOT match
-    `concepts/sub/foo.md`) and `concepts/**/*.md` recursive semantics
-    (matches at any depth, including zero extra segments). Works on every
-    supported Python; doesn't depend on `PurePath.full_match` (3.13+).
-    """
-    return _match_path_segs(rel.split("/"), pattern.split("/"))
-
-
-def _match_path_segs(rel: list[str], pat: list[str]) -> bool:
-    if not pat:
-        return not rel
-    head = pat[0]
-    if head == "**":
-        # Consume zero or more rel segments before continuing.
-        if _match_path_segs(rel, pat[1:]):
-            return True
-        if not rel:
-            return False
-        return _match_path_segs(rel[1:], pat)
-    if not rel:
-        return False
-    if not fnmatch.fnmatchcase(rel[0], head):
-        return False
-    return _match_path_segs(rel[1:], pat[1:])
-
-
-def cap_for(path: Path, wiki_root: Path, limits: list[tuple[str, int]]) -> int:
-    """Walk `limits` in order; return the first cap whose glob matches `path`.
-
-    Match semantics:
-    - A pattern containing `/` matches against `path.relative_to(wiki_root).as_posix()`
-      via `_path_glob_match`, which is path-segment bounded — `concepts/*.md`
-      matches `concepts/foo.md` but NOT `concepts/sub/foo.md`. Use `**` for
-      recursive matching: `concepts/**/*.md` matches every depth under
-      `concepts/`, including `concepts/foo.md` itself.
-    - A pattern without `/` matches against `path.name` via `fnmatch.fnmatch`
-      — basename only (e.g. `index.md` matches `<root>/index.md`,
-      `<root>/projects/foo/index.md`, and any other `index.md` at any depth;
-      `*.md` matches every `.md` basename).
-
-    This split fixes the `**/*.md`-doesn't-match-root-files trap that plain
-    glob semantics would create. Falls back to a very large cap (effectively
-    unbounded) if nothing matches — should never happen in practice given the
-    `*.md` default, but defensive.
-    """
-    try:
-        rel = path.relative_to(wiki_root).as_posix()
-    except ValueError:
-        rel = path.as_posix()
-    name = path.name
-    for pattern, cap in limits:
-        if "/" in pattern:
-            if _path_glob_match(rel, pattern):
-                return cap
-        else:
-            if fnmatch.fnmatch(name, pattern):
-                return cap
-    return 2**31
-
-
-# ---------- Char counting + cap check ----------
-
-
-def current_size(path: Path) -> int:
-    """Return the char count of `path`'s body (frontmatter excluded).
-
-    Reads the file. Returns 0 if the file is missing or unreadable; that's
-    the right answer for "what would a NEW write to this path project against
-    its cap" — no existing content to compare against.
-    """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return 0
-    return len(_md.strip_frontmatter(text))
-
-
-def would_exceed(
-    path: Path,
-    projected_text: str,
-    wiki_root: Path,
-    limits: list[tuple[str, int]],
-) -> tuple[bool, int, int]:
-    """Return `(over_cap, projected_chars, cap)` for a planned write.
-
-    Pure computation — does NOT read the file. The caller supplies
-    `projected_text` (the FULL post-write content for a Write, or the FULL
-    post-edit content for an Edit), and this function returns whether the
-    projected size exceeds the matched cap.
-
-    `projected_chars` is `len(strip_frontmatter(projected_text))` — frontmatter
-    is metadata, not content. The "is this a shrinking write?" decision lives
-    at the caller (compare against `current_size(path)`); shrinking writes that
-    still exceed the cap are the only escape hatch from legacy bloat and
-    require the caller to make that policy choice.
-    """
-    projected_chars = len(_md.strip_frontmatter(projected_text))
-    cap = cap_for(path, wiki_root, limits)
-    return (projected_chars > cap, projected_chars, cap)
+from . import _common, _md, _model
+from ._common import fcntl
 
 
 # ---------- Log rotation + append ----------
@@ -275,23 +76,6 @@ def _unique_archive_path(log_path: Path, when: datetime) -> Path:
         n += 1
 
 
-def _atomic_write(path: Path, content: str) -> None:
-    """Write `content` to `path` via tempfile + `os.replace`."""
-    fd, tmp = tempfile.mkstemp(
-        prefix=f".{path.name}.tmp-", dir=str(path.parent)
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-        os.replace(tmp, path)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
-
 _WIN32_NOTICE_EMITTED = False
 
 
@@ -317,7 +101,7 @@ def append_log_with_rotation(
     cap: int,
     *,
     wiki_root: Path | None = None,
-    limits: list[tuple[str, int]] | None = None,
+    table: _model.LimitTable | None = None,
     create_if_missing: bool = False,
     initial_content: str = "# Log\n",
 ) -> Path | None:
@@ -327,13 +111,16 @@ def append_log_with_rotation(
       1. Acquire exclusive lock on `log_path.parent` (stable inode — survives
          our own `unlink`/`os.replace` of `log_path` itself).
       2. (Optionally) create `log_path` atomically if `create_if_missing`.
-      3. Read current content. If the file was just created (empty), write
-         `initial_content` first.
+      3. Read current content. If the file was just created (empty), the
+         in-memory body starts from `initial_content`.
       4. If `len(current) + len(entry) > cap`, parse into entries, split at
          midpoint by entry count, write oldest half to a uniquely-named
          archive (`log.archive-<YYYYMMDD-HHMMSS>[-N].md`) atomically, keep
-         newest half in `log.md`.
-      5. Append `entry` to `log.md` (ensuring trailing newline).
+         newest half as the in-memory body.
+      5. Compose the final body (kept content + the new entry, trailing
+         newline ensured) and write `log.md` once via `_common.atomic_write`
+         — scaffold, rotation-kept-half, and entry land together or not at
+         all (crash-atomic, never a half-truncated log).
       6. Release lock.
 
     Returns the archive path when rotation happened, None otherwise.
@@ -380,18 +167,26 @@ def append_log_with_rotation(
         flags = os.O_RDWR | (os.O_CREAT if create_if_missing else 0)
         pre_existed = log_path.is_file()
         fd = os.open(log_path, flags, 0o644)
-        # Re-flag inside the lock+inside-open so callers see a single
-        # coherent state. (Tracked separately so the inner `finally`
-        # always closes `fd` regardless of what happens below.)
-        current_bytes = b""
-        offset = 0
-        while True:
-            chunk = os.read(fd, 65536)
-            if not chunk:
-                break
-            current_bytes += chunk
-            offset += len(chunk)
-        current = current_bytes.decode("utf-8", errors="replace")
+        try:
+            # Read the whole file, then close. Every subsequent mutation
+            # (scaffold, rotation, append) lands through one final
+            # `_common.atomic_write`, so the descriptor is only ever read —
+            # the O_CREAT above just claims `log_path` under the lock.
+            current_bytes = b""
+            while True:
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    break
+                current_bytes += chunk
+        finally:
+            os.close(fd)
+        # Decode STRICTLY: a non-UTF-8 `log.md` is a boundary input, not
+        # something to silently rewrite with `\ufffd` replacement chars and
+        # persist on the next append (HANDBOOK: distrust boundary inputs;
+        # refuse, never truncate). The UnicodeDecodeError propagates to
+        # `cmd_log`, which reports it and refuses — matching how the resolver
+        # treats a non-UTF-8 index.md / config.
+        current = current_bytes.decode("utf-8")
         entry_normalized = entry if entry.endswith("\n") else entry + "\n"
         # All-or-nothing scaffold: if we just opened a missing file via
         # O_CREAT (the first --create call to win the lock), check
@@ -401,7 +196,12 @@ def append_log_with_rotation(
         # disk after the entry append is refused — partial state on the
         # first --create call.
         if create_if_missing and not current:
-            if len(initial_content) + len(entry_normalized) > cap:
+            # Measure the scaffold by its frontmatter-stripped body too, so
+            # every cap comparison in this function uses the one stripped-body
+            # rule (a no-op for the default `# Log\n` scaffold, but it keeps a
+            # caller-supplied `initial_content` with frontmatter from
+            # reintroducing the two-notions divergence). Matches _projected_size.
+            if len(_md.strip_frontmatter(initial_content)) + len(entry_normalized) > cap:
                 # Unlink the freshly-created empty file so the next
                 # call doesn't see "log.md exists" and skip the
                 # scaffold step.
@@ -415,7 +215,8 @@ def append_log_with_rotation(
                     f"within cap ({cap} chars); shrink the entry or "
                     "increase the log.md cap in _meta/limits.md"
                 )
-            os.write(fd, initial_content.encode("utf-8"))
+            # The empty O_CREAT'd file stays empty on disk; `initial_content`
+            # becomes the in-memory base and lands via the final atomic write.
             current = initial_content
 
         archive_path: Path | None = None
@@ -426,9 +227,21 @@ def append_log_with_rotation(
         # the new entry" below); the fit check must include that byte
         # so a too-tight cap with a header like `# Log` (no `\n`)
         # doesn't pass the check and then write 1 byte over cap.
+        # The body is frontmatter-stripped to match the rest of the
+        # size system (current_size / would_exceed / check_size), so a
+        # log.md is judged against its cap identically everywhere.
         def _projected_size(curr: str) -> int:
+            # Measure the frontmatter-stripped body so log.md is judged
+            # by the SAME definition as current_size / would_exceed /
+            # check_size (frontmatter is metadata, not content). The
+            # literal writes below still emit the full `curr` (frontmatter
+            # + `# Log` header + entries) — only this cap arithmetic
+            # excludes the frontmatter, matching the rest of the system.
+            # `sep` stays byte-based on the raw `curr`: the literal write
+            # appends `b"\n"` based on the full on-disk content's trailing
+            # char, and that separator falls in the body region anyway.
             sep = 1 if (curr and not curr.endswith("\n")) else 0
-            return len(curr) + sep + len(entry_normalized)
+            return len(_md.strip_frontmatter(curr)) + sep + len(entry_normalized)
 
         if _projected_size(current) > cap:
             entries = _split_log_entries(current)
@@ -480,26 +293,33 @@ def append_log_with_rotation(
                         # archive — a framework write that the next
                         # `space audit` would flag. v1 contract: every
                         # framework write enforces its cap.
-                        if wiki_root is not None and limits is not None:
-                            archive_cap = cap_for(
-                                archive_path, wiki_root, limits
+                        if wiki_root is not None and table is not None:
+                            archive_cap = _model.cap_for_path(
+                                archive_path, wiki_root, table
+                            ).cap
+                            # Measure the archive by its stripped body too, so
+                            # every cap comparison in the rotation path shares
+                            # the one stripped-body rule. The joined oldest
+                            # entries never carry frontmatter (it rides in
+                            # `header_entries`, kept with the log), so this is a
+                            # no-op today — but it keeps the reported number the
+                            # one actually checked against the cap.
+                            archive_chars = len(
+                                _md.strip_frontmatter(archive_content)
                             )
-                            if len(archive_content) > archive_cap:
+                            if archive_chars > archive_cap:
                                 raise ValueError(
                                     f"log rotation would write an over-cap "
-                                    f"archive ({len(archive_content)} chars "
+                                    f"archive ({archive_chars} chars "
                                     f"> {archive_cap} cap for "
                                     f"{archive_path.name}); shrink the log "
                                     "or increase the log.archive-*.md cap "
                                     "in _meta/limits.md"
                                 )
-                        _atomic_write(archive_path, archive_content)
-                        kept = projected_kept
-                        # Truncate + rewrite log_path inside the lock.
-                        os.lseek(fd, 0, os.SEEK_SET)
-                        os.ftruncate(fd, 0)
-                        os.write(fd, kept.encode("utf-8"))
-                        current = kept
+                        _common.atomic_write(archive_path, archive_content)
+                        # Keep the newest half as the in-memory body; it lands
+                        # with the new entry in the final atomic write below.
+                        current = projected_kept
 
         # Last-resort fit check: with no rotation possible (single entry,
         # or pathological content). Reject rather than silently committing
@@ -511,20 +331,40 @@ def append_log_with_rotation(
                 "_meta/limits.md"
             )
 
-        # Append the new entry.
-        if current and not current.endswith("\n"):
-            os.write(fd, b"\n")
-        os.write(fd, entry_normalized.encode("utf-8"))
-        os.fsync(fd)
-        os.close(fd)
+        # Compose the final body and land the whole `log.md` mutation in one
+        # crash-atomic replace (temp + fsync + os.replace + parent-dir fsync,
+        # all still under the parent-directory flock). A separator newline is
+        # inserted when the kept content doesn't already end in one.
+        sep = "\n" if (current and not current.endswith("\n")) else ""
+        try:
+            _common.atomic_write(log_path, current + sep + entry_normalized)
+        except OSError:
+            # Fail-closed: the archive already landed on disk above. If this
+            # final log write fails, remove the orphaned archive so rotation is
+            # all-or-nothing (HANDBOOK: writes atomic and fail-closed) — never an
+            # archive with the log unchanged and the entry lost. Then re-raise
+            # for cmd_log to surface.
+            if archive_path is not None:
+                try:
+                    archive_path.unlink()
+                except OSError:
+                    pass
+            # Also remove the empty `O_CREAT` placeholder this call created: a
+            # failed `--create` first write must not leave a 0-byte `log.md`
+            # behind (logging would look opted-in but hold nothing, and the
+            # next plain append would write entries with no `# Log` scaffold).
+            # Mirrors the cap-rejection cleanup above; the placeholder is still
+            # empty because `atomic_write` replaces via a temp file, so a
+            # pre-replace failure never touched `log_path`.
+            if not pre_existed:
+                try:
+                    if log_path.stat().st_size == 0:
+                        log_path.unlink()
+                except OSError:
+                    pass
+            raise
         return archive_path
     finally:
-        # The inner fd was closed on the success path above; on the
-        # exception path it may still be open. Close best-effort.
-        try:
-            os.close(fd)
-        except (OSError, NameError):
-            pass
         if fcntl is not None:
             try:
                 fcntl.flock(parent_fd, fcntl.LOCK_UN)

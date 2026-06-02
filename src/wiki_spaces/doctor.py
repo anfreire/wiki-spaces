@@ -1,6 +1,6 @@
 """Read-only audit of wiki-spaces installation state.
 
-Reads ~/.config/wiki-spaces/config and reports:
+Reads ${XDG_CONFIG_HOME:-~/.config}/wiki-spaces/config and reports:
 - the configured wiki and repo paths (and whether they're valid)
 - vendor/kepano/ pin and (if network available) drift vs upstream
 - per-harness skill install state (symlink-ok / symlink-external /
@@ -15,6 +15,8 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 from ._common import (
@@ -24,6 +26,7 @@ from ._common import (
     KEPANO_DEPS,
     WIKI_SKILLS,
     _has_spaces_section,
+    config_exists_unreadable,
     data_root,
     harness_present,
     installed_root,
@@ -40,7 +43,7 @@ REPO_SENTINELS = (
     "references/SETUP.md",
     "vendor/kepano/obsidian-markdown/SKILL.md",
     "vendor/kepano/obsidian-bases/SKILL.md",
-    # PR-O / §42: COMMIT pins the vendored kepano sha. Missing → the repo
+    # COMMIT pins the vendored kepano sha. Missing → the repo
     # is incomplete; we force reinstall rather than half-trusting the
     # vendored content. The dev-only `vendor-kepano` recovery hint
     # doesn't apply to packaged installs, so we don't surface it.
@@ -48,29 +51,62 @@ REPO_SENTINELS = (
 )
 
 
-def _validate_wiki(wiki: str) -> str:
+class ValidationState(Enum):
+    """Typed outcome of a config-path check. The CLI renders `.value` (plus
+    any `ValidationResult.detail`) at the print site; callers compare on the
+    enum, never on a rendered string."""
+    OK = "OK"
+    NOT_ABSOLUTE = "NOT ABSOLUTE"
+    MISSING_ON_DISK = "MISSING ON DISK"
+    NO_INDEX = "no index.md"
+    NO_SPACES_SECTION = "no `## Spaces` section"
+    NOT_AN_INSTALL = "NOT A WIKI-SPACES INSTALL"
+
+
+@dataclass(frozen=True)
+class ValidationResult:
+    """A `ValidationState` plus optional provenance `detail` (e.g. which repo
+    sentinels were missing). `render()` is the one place the state becomes a
+    human string; `ok` is the only success check callers need."""
+    state: ValidationState
+    detail: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.state is ValidationState.OK
+
+    def render(self) -> str:
+        if self.detail:
+            return f"{self.state.value} ({self.detail})"
+        return self.state.value
+
+
+def _validate_wiki(wiki: str) -> ValidationResult:
     if not Path(wiki).is_absolute():
-        return "NOT ABSOLUTE"
+        return ValidationResult(ValidationState.NOT_ABSOLUTE)
     p = Path(wiki)
     if not p.exists():
-        return "MISSING ON DISK"
+        return ValidationResult(ValidationState.MISSING_ON_DISK)
     if not (p / "index.md").is_file():
-        return "no index.md"
+        return ValidationResult(ValidationState.NO_INDEX)
     if not _has_spaces_section(p):
-        return "no `## Spaces` section"
-    return "OK"
+        return ValidationResult(ValidationState.NO_SPACES_SECTION)
+    return ValidationResult(ValidationState.OK)
 
 
-def _validate_repo(repo: str) -> str:
+def _validate_repo(repo: str) -> ValidationResult:
     if not Path(repo).is_absolute():
-        return "NOT ABSOLUTE"
+        return ValidationResult(ValidationState.NOT_ABSOLUTE)
     p = Path(repo)
     if not p.exists():
-        return "MISSING ON DISK"
+        return ValidationResult(ValidationState.MISSING_ON_DISK)
     missing = [s for s in REPO_SENTINELS if not (p / s).exists()]
     if missing:
-        return f"NOT A WIKI-SPACES INSTALL (missing: {', '.join(missing)})"
-    return "OK"
+        return ValidationResult(
+            ValidationState.NOT_AN_INSTALL,
+            detail=f"missing: {', '.join(missing)}",
+        )
+    return ValidationResult(ValidationState.OK)
 
 
 def check_config() -> bool:
@@ -79,23 +115,29 @@ def check_config() -> bool:
     print(f"Config ({CONFIG_PATH}):")
     cfg = read_config()
     if not cfg:
-        print("  ! missing — run `wiki-spaces install` and `wiki-spaces init`")
+        if config_exists_unreadable():
+            print(
+                "  ! exists but could not be read — check its permissions "
+                "(an unreadable config is NOT the same as a missing one)"
+            )
+        else:
+            print("  ! missing — run `wiki-spaces install` and `wiki-spaces init`")
         print()
         return False
     wiki = cfg.get("wiki")
     repo = cfg.get("repo")
     ok = True
     if wiki:
-        state = _validate_wiki(wiki)
-        print(f"  wiki = {wiki}  ({state})")
-        ok = ok and state == "OK"
+        result = _validate_wiki(wiki)
+        print(f"  wiki = {wiki}  ({result.render()})")
+        ok = ok and result.ok
     else:
         print("  wiki = (unset — run `wiki-spaces init` to scaffold or set manually)")
         ok = False
     if repo:
-        state = _validate_repo(repo)
-        print(f"  repo = {repo}  ({state})")
-        ok = ok and state == "OK"
+        result = _validate_repo(repo)
+        print(f"  repo = {repo}  ({result.render()})")
+        ok = ok and result.ok
     else:
         print("  repo = (unset — run `wiki-spaces install` to set)")
         ok = False
@@ -124,7 +166,17 @@ def check_vendor(net: bool) -> None:
                 "(dev-only)."
             )
         return
-    lines = commit_file.read_text().strip().splitlines()
+    try:
+        lines = commit_file.read_text(encoding="utf-8").strip().splitlines()
+    except (OSError, UnicodeDecodeError) as e:
+        # A boundary diagnostic must not crash on an unreadable / non-UTF-8
+        # packaged file — report it as an incomplete install (HANDBOOK: handle
+        # failures at boundaries), mirroring the guarded subprocess below.
+        print(
+            f"  ! COMMIT unreadable ({e}) — reinstall wiki-spaces to restore "
+            "the vendored skills."
+        )
+        return
     sha = lines[0] if lines else "?"
     date = lines[1] if len(lines) > 1 else "?"
     remote = lines[2] if len(lines) > 2 else "?"
@@ -153,7 +205,7 @@ def check_harness(h: Harness) -> None:
     for skill in (*WIKI_SKILLS, *KEPANO_DEPS):
         src = root / ("skills" if skill in WIKI_SKILLS else "vendor/kepano") / skill
         dst = h.skills_dir / skill
-        print(f"  {skill:22s} -> {dst}: {installed_state(dst, src)}")
+        print(f"  {skill:22s} -> {dst}: {installed_state(dst, src).value}")
     print()
 
 

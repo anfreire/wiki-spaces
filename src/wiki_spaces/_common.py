@@ -13,9 +13,32 @@ Owns:
 """
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
+from types import ModuleType
 import os
 import shutil
+import sys
+import tempfile
+
+
+def _load_fcntl() -> ModuleType | None:
+    """Import `fcntl` if available (POSIX), else None.
+
+    The single optional-import site for `fcntl` in the package. `_log`,
+    `space`, and `manifest` import this name and guard their flock calls with
+    `if fcntl is not None`, so locking degrades to best-effort on platforms
+    without it instead of crashing on import — and the optional return type
+    carries that fact, so no `# type: ignore` is needed at any consumer.
+    """
+    try:
+        import fcntl
+    except ImportError:
+        return None
+    return fcntl
+
+
+fcntl: ModuleType | None = _load_fcntl()
 
 HOME = Path.home()
 
@@ -144,30 +167,112 @@ def harness_present(h: Harness) -> bool:
     return any((p if p.is_absolute() else cwd / p).exists() for p in h.detect)
 
 
+def has_control_chars(value: str) -> bool:
+    """True if `value` contains a char `str.splitlines()` treats as a line
+    boundary (plus DEL), i.e. anything that would split a one-line field.
+
+    The single definition of "would split a one-line field across lines",
+    shared by the `## Spaces` entry validator, the `space log` entry builder,
+    the path validator, and the scaffold input guards. Such a char in a
+    name/description/path that lands in `index.md` could inject a second
+    `## Spaces` heading and corrupt the navigation contract (HANDBOOK: distrust
+    boundary inputs; producer=consumer).
+
+    The boundary set MUST match the CONSUMER, `str.splitlines()` (used by
+    `_md.has_section` / `parse_section_entries`): every char below 0x20, NEL
+    (`\\x85`), LINE SEPARATOR (`\\u2028`), and PARAGRAPH SEPARATOR (`\\u2029`).
+    `\\x85` sits above 0x20 yet still splits a line, so an `ord(c) < 0x20` check
+    alone would accept a value the consumer then splits. DEL (`\\x7f`) is not a
+    line break but is rejected too — a control char never belongs on one line.
+    """
+    return any(
+        ord(c) < 0x20 or c in ("\x7f", "\x85", "\u2028", "\u2029") for c in value
+    )
+
+
 # ---------- Config ----------
 
-def read_config() -> dict[str, str]:
-    """Read ~/.config/wiki-spaces/config. Returns {} if missing.
+class ConfigReadStatus(Enum):
+    """Typed outcome of reading the config — distinguishes the three states a
+    `{}` return would conflate (HANDBOOK: missing and malformed are typed
+    values, not a special case)."""
+    OK = "ok"
+    MISSING = "missing"
+    UNREADABLE = "unreadable"
 
-    Format: plain text, key = value per line. Blank lines ignored.
-    Lines whose first non-whitespace character is '#' are comments;
-    inline '#' is NOT treated as a comment marker (paths may contain '#').
+
+@dataclass(frozen=True)
+class ConfigRead:
+    """One config read with provenance: `values` is populated only when
+    `status is OK`; MISSING and UNREADABLE both carry `{}`."""
+    status: ConfigReadStatus
+    values: dict[str, str]
+
+
+def _read_config() -> ConfigRead:
+    """Read the config in ONE filesystem pass, returning a typed outcome.
+
+    The single source the dict view (`read_config`), the unreadable probe
+    (`config_exists_unreadable`), and the writer (`write_config`) all share, so
+    none of them re-`read_text` the file to re-derive the same fact.
+
+    Format: plain text, key = value per line. Blank lines ignored. Lines whose
+    first non-whitespace character is '#' are comments; inline '#' is NOT a
+    comment marker (paths may contain '#').
     """
     if not CONFIG_PATH.exists():
-        return {}
+        return ConfigRead(ConfigReadStatus.MISSING, {})
+    try:
+        text = CONFIG_PATH.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ConfigRead(ConfigReadStatus.UNREADABLE, {})
     out: dict[str, str] = {}
-    for raw in CONFIG_PATH.read_text(encoding="utf-8").splitlines():
+    for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         k, _, v = line.partition("=")
         out[k.strip()] = v.strip()
-    return out
+    return ConfigRead(ConfigReadStatus.OK, out)
+
+
+def read_config() -> dict[str, str]:
+    """Dict view of the config — `{}` for a missing OR unreadable file.
+
+    Best-effort callers (doctor, install, `wiki_path`) that degrade gracefully;
+    callers that must distinguish unreadable from absent use `_read_config`.
+    """
+    return _read_config().values
+
+
+class ConfigUnreadableError(Exception):
+    """An existing config could not be read, so a merge-write would lose keys.
+
+    `write_config` merges over `read_config`, which collapses BOTH an absent
+    and an unreadable config to `{}`. Merging one key into `{}` and writing
+    would silently drop the other configured path — the same scope-unsafe
+    data loss the RESOLVER already refuses via `config_exists_unreadable`
+    (HANDBOOK: handle failures at boundaries). The producer must hard-stop on
+    the condition the consumer does, not clobber.
+    """
 
 
 def write_config(updates: dict[str, str]) -> None:
-    """Merge updates into the config file. Preserves only `wiki` and `repo` keys."""
-    current = read_config()
+    """Merge updates into the config file. Preserves only `wiki` and `repo` keys.
+
+    Raises `ConfigUnreadableError` when an existing config exists but cannot be
+    read: blindly merging over a `{}` fallback would drop the keys it could not
+    parse. An ABSENT config still writes cleanly (a fresh `{}` is the truth
+    then, not a parse failure). One read distinguishes the two.
+    """
+    existing = _read_config()
+    if existing.status is ConfigReadStatus.UNREADABLE:
+        raise ConfigUnreadableError(
+            f"{CONFIG_PATH} exists but could not be read (non-UTF-8 or "
+            "permissions); refusing to overwrite it and lose the existing "
+            "wiki/repo entries. Inspect or remove the file, then retry."
+        )
+    current = dict(existing.values)
     current.update(updates)
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -179,7 +284,7 @@ def write_config(updates: dict[str, str]) -> None:
         lines.append(f"wiki = {current['wiki']}")
     if "repo" in current:
         lines.append(f"repo = {current['repo']}")
-    CONFIG_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    atomic_write(CONFIG_PATH, "\n".join(lines) + "\n")
 
 
 def wiki_path() -> Path | None:
@@ -187,16 +292,26 @@ def wiki_path() -> Path | None:
     return Path(cfg["wiki"]) if "wiki" in cfg else None
 
 
-def repo_path() -> Path | None:
-    cfg = read_config()
-    return Path(cfg["repo"]) if "repo" in cfg else None
+def config_exists_unreadable() -> bool:
+    """True when `CONFIG_PATH` exists but its bytes cannot be read.
+
+    The dict view (`read_config`) collapses an ABSENT and an UNREADABLE config
+    into the same `{}` so its best-effort consumers (doctor, install) degrade
+    gracefully. The wiki RESOLVER must NOT: treating an unreadable configured
+    wiki as "no config" silently falls back to a CWD wiki — operating on a
+    DIFFERENT wiki than the user configured (HANDBOOK: handle failures at
+    boundaries; scope-safety). The resolver calls this to hard-stop instead.
+    """
+    return _read_config().status is ConfigReadStatus.UNREADABLE
 
 
 def _has_spaces_section(p: Path) -> bool:
     """True iff `p/index.md` exists and contains a `## Spaces` heading."""
     try:
         text = (p / "index.md").read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # UnicodeDecodeError: a non-UTF-8 index.md is a legal Obsidian-wire
+        # boundary input, not a crash — treat as no confirmable contract.
         return False
     # Late import — `_md` pulls in regex tables that are heavier than
     # `_common` should pay for on cold start.
@@ -204,13 +319,13 @@ def _has_spaces_section(p: Path) -> bool:
     return _md.has_section(text, "Spaces")
 
 
-def nearest_space_root_strict(start: Path | None = None) -> Path | None:
-    """Walk up from `start` (or CWD) returning the nearest folder with
-    `index.md` containing a `## Spaces` heading.
+def _nearest_space_root(start: Path | None, *, require_section: bool) -> Path | None:
+    """Walk up from `start` (or CWD) to the nearest folder with `index.md`.
 
-    The v1 navigation contract: a wiki is `index.md` + `## Spaces`. Strict callers
-    (read-only commands, skills, doctor without `--fix`) refuse to operate
-    on a folder that has `index.md` but no navigation contract.
+    `require_section` gates the v1 navigation contract: when True the folder
+    must also carry a `## Spaces` heading (strict, read-only callers); when
+    False a bare `index.md` qualifies (repair callers that insert the
+    heading on demand).
     """
     p = (start if start is not None else Path.cwd())
     if p.is_file():
@@ -220,51 +335,204 @@ def nearest_space_root_strict(start: Path | None = None) -> Path | None:
     except OSError:
         p = p.absolute()
     for candidate in (p, *p.parents):
-        if (candidate / "index.md").is_file() and _has_spaces_section(candidate):
+        if (candidate / "index.md").is_file() and (
+            not require_section or _has_spaces_section(candidate)
+        ):
             return candidate
     return None
 
 
-def nearest_space_root_for_repair(start: Path | None = None) -> Path | None:
-    """Walk up from `start` (or CWD) returning the nearest folder with
-    `index.md` — `## Spaces` not required.
+def _resolve_wiki(explicit: Path | None, *, require_section: bool) -> Path | None:
+    """Resolve the wiki root: explicit `--wiki` → absolute config → CWD ancestor.
 
-    Used by write commands that repair the spec on demand (`space add`,
-    `space remove`, `space mount`, `space promote`, `audit --fix`,
-    `init --adopt`). Repair-aware callers walk up to find a wiki by
-    `index.md` presence; if the resolved root lacks `## Spaces`, the
-    chain helper inserts it atomically as the first mutation step.
+    `require_section` gates the v1 `## Spaces` contract: strict callers
+    (read-only) require it; repair callers (write commands that insert it on
+    demand) accept a bare `index.md`. An explicit or configured path that
+    fails the contract hard-stops rather than falling through to a CWD
+    ancestor — a wiki the user named but that doesn't qualify is a real
+    error, not a cue to silently pick a different one. A non-absolute config
+    path is refused too: `.resolve()` would join it to CWD and pick a
+    different wiki per invocation (doctor rejects relatives for the same
+    reason).
     """
-    p = (start if start is not None else Path.cwd())
-    if p.is_file():
-        p = p.parent
-    try:
-        p = p.resolve()
-    except OSError:
-        p = p.absolute()
-    for candidate in (p, *p.parents):
-        if (candidate / "index.md").is_file():
-            return candidate
-    return None
+    if explicit is not None:
+        p = explicit.expanduser().resolve()
+        if (p / "index.md").is_file() and (
+            not require_section or _has_spaces_section(p)
+        ):
+            return p
+        return None
+    cfg_wiki = wiki_path()
+    if cfg_wiki is not None:
+        cfg_expanded = cfg_wiki.expanduser()
+        if not cfg_expanded.is_absolute():
+            return None
+        p = cfg_expanded.resolve()
+        if (p / "index.md").is_file() and (
+            not require_section or _has_spaces_section(p)
+        ):
+            return p
+        return None
+    return _nearest_space_root(None, require_section=require_section)
+
+
+def _no_wiki_msg() -> str:
+    # Name the path the tool ACTUALLY reads (the XDG-aware CONFIG_PATH), not a
+    # hardcoded `~/.config/...` that differs under $XDG_CONFIG_HOME
+    # (producer=consumer: the message must match the file the resolver reads).
+    return (
+        "  ! no wiki resolved. Pass --wiki <path>, set `wiki` in "
+        f"{CONFIG_PATH}, or run from inside a wiki."
+    )
+
+
+_NO_SPACES_MSG = (
+    "  ! wiki has an index.md but no `## Spaces` heading; not a wiki. "
+    "Run a write command (`space add`/`remove`/`mount`/`promote`) or "
+    "`space audit --fix` to insert it automatically."
+)
+
+
+def _config_unreadable_msg() -> str:
+    return (
+        f"  ! {CONFIG_PATH} exists but could not be read; refusing to silently "
+        "fall back to a CWD wiki (it may not be the wiki you configured). Fix "
+        "its permissions or pass --wiki <path>."
+    )
+
+
+def resolve_wiki(explicit: Path | None = None, *, repair: bool) -> tuple[Path | None, str | None]:
+    """Resolve the wiki root, returning `(wiki, error_message)`.
+
+    `repair=True` for write commands that insert `## Spaces` on demand (a
+    bare `index.md` suffices); `repair=False` for read-only commands that
+    require the navigation contract. Success returns `(wiki, None)`; a miss
+    returns `(None, message)` — the caller prints `message` at the CLI layer,
+    so this shared resolver builds the message but never presents it. On a
+    strict miss we re-probe in repair mode so the message names the actual
+    cause — "no wiki anywhere" vs. "found an index.md but it lacks
+    `## Spaces`" — instead of one vague line.
+
+    With no explicit `--wiki`, an existing-but-unreadable config hard-stops
+    here (rather than via the CWD fallback `_resolve_wiki` would otherwise
+    take) so the tool never silently operates on a wiki the user didn't
+    configure.
+    """
+    if explicit is None and config_exists_unreadable():
+        return None, _config_unreadable_msg()
+    if repair:
+        wiki = _resolve_wiki(explicit, require_section=False)
+        return (wiki, None) if wiki is not None else (None, _no_wiki_msg())
+    wiki = _resolve_wiki(explicit, require_section=True)
+    if wiki is not None:
+        return wiki, None
+    if _resolve_wiki(explicit, require_section=False) is not None:
+        return None, _NO_SPACES_MSG
+    return None, _no_wiki_msg()
 
 
 # ---------- Filesystem ----------
 
-def link_or_copy(src: Path, dst: Path, *, prefer_copy: bool = False) -> str:
+def durable_replace(dest: Path, content: str, *, parent_fd: int | None = None) -> None:
+    """Crash-atomically replace `dest` with `content`.
+
+    temp file in `dest.parent` -> write + flush + fsync -> `os.replace` ->
+    fsync the parent directory (so the rename itself survives a crash). The
+    temp file is unlinked if anything before the replace fails. When the
+    caller already holds an fd on `dest.parent` (e.g. a `flock` fd), pass it
+    as `parent_fd` to reuse it for the directory fsync; otherwise one is
+    opened and closed here.
+
+    The single durable-write primitive: `atomic_write` (symlink-aware text
+    writes), `manifest._atomic_write_under_flock`, and
+    `space._atomic_mutate_index` all route through it, so the crash-safety
+    sequence lives in exactly one place.
+    """
+    fd, tmp = tempfile.mkstemp(prefix=f".{dest.name}.tmp-", dir=str(dest.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, dest)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    # The replace already committed; a dir-fsync failure must not turn a
+    # successful write into an error (best-effort).
+    if parent_fd is not None:
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            pass
+        return
+    try:
+        dir_fd = os.open(str(dest.parent), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(dir_fd)
+    except OSError:
+        pass
+    finally:
+        os.close(dir_fd)
+
+
+def atomic_write(path: Path, content: str) -> None:
+    """Write `content` to `path` via tempfile + `os.replace`, durably.
+
+    A crash-safe, symlink-faithful drop-in for `path.write_text(...)`: a
+    half-written file is never observable — on any interruption the reader
+    sees either the old file intact or the complete new one.
+
+    When `path` is a symlink the write lands on its resolved target, matching
+    `write_text` (which follows links), and the temp file is created beside
+    that target so the `os.replace` stays on one filesystem.
+
+    Routes through `durable_replace` — the one crash-safety primitive shared
+    with the lock-scoped writers (`manifest`, `space`'s `## Spaces` mutator).
+    """
+    dest = path.resolve() if path.is_symlink() else path
+    durable_replace(dest, content)
+
+
+class LinkResult(Enum):
+    """Outcome of `link_or_copy`: a fresh symlink, a copy, or a no-op (dst
+    already resolved to src)."""
+    SYMLINK = "symlink"
+    COPY = "copy"
+    NOOP = "noop"
+
+
+class InstalledState(Enum):
+    """State of an installed skill destination, reported by `installed_state`."""
+    MISSING = "missing"
+    SYMLINK_OK = "symlink-ok"
+    SYMLINK_EXTERNAL = "symlink-external"
+    SYMLINK_BROKEN = "symlink-broken"
+    COPY_CURRENT = "copy-current"
+    COPY_STALE = "copy-stale"
+
+
+def link_or_copy(src: Path, dst: Path, *, prefer_copy: bool = False) -> LinkResult:
     """Materialize src at dst as symlink (preferred) or copy (fallback).
 
-    Returns 'symlink', 'copy', or 'noop'. Idempotent: replaces stale links/files;
-    merges into existing directories on copy. Short-circuits when src and dst
-    resolve to the same path (would otherwise self-destruct). Refuses to mix
-    file/directory types — if dst is a real directory and src is a file (or
-    vice versa), the existing dst is removed first.
+    Returns a `LinkResult`. Idempotent: replaces stale links/files and MIRRORS
+    an existing destination directory on copy (a removed-upstream file does not
+    linger). Short-circuits when src and dst resolve to the same path (would
+    otherwise self-destruct). Refuses to mix file/directory types — if dst is a
+    real directory and src is a file (or vice versa), the existing dst is
+    removed first.
     """
     src_resolved = src.resolve()
     if dst.exists() or dst.is_symlink():
         try:
             if dst.resolve() == src_resolved:
                 if not (prefer_copy and dst.is_symlink()):
-                    return "noop"
+                    return LinkResult.NOOP
         except (OSError, RuntimeError):
             pass
     if dst.is_symlink() or dst.is_file():
@@ -277,14 +545,21 @@ def link_or_copy(src: Path, dst: Path, *, prefer_copy: bool = False) -> str:
             shutil.rmtree(dst)
         try:
             os.symlink(src_resolved, dst, target_is_directory=src_resolved.is_dir())
-            return "symlink"
+            return LinkResult.SYMLINK
         except (OSError, NotImplementedError):
             pass
     if src_resolved.is_dir():
-        shutil.copytree(src_resolved, dst, symlinks=False, dirs_exist_ok=True)
+        # Mirror, not merge: replace an existing destination dir so a file
+        # removed upstream cannot linger beside the current ones on reinstall
+        # (HANDBOOK: one source of truth; delete superseded). Safe — the only
+        # caller (`install`) gates on `is_owned_install`/`--force` first, and
+        # the symlink path already replaces the dir.
+        if dst.is_dir() and not dst.is_symlink():
+            shutil.rmtree(dst)
+        shutil.copytree(src_resolved, dst, symlinks=False)
     else:
         shutil.copy2(src_resolved, dst)
-    return "copy"
+    return LinkResult.COPY
 
 
 def _max_mtime(p: Path) -> float:
@@ -300,7 +575,7 @@ def _max_mtime(p: Path) -> float:
     return 0.0
 
 
-def installed_state(dst: Path, src: Path) -> str:
+def installed_state(dst: Path, src: Path) -> InstalledState:
     """Return a one-word state: symlink-ok, symlink-external, symlink-broken,
     copy-current, copy-stale, missing.
 
@@ -312,16 +587,24 @@ def installed_state(dst: Path, src: Path) -> str:
     file inside (recursively).
     """
     if not dst.exists() and not dst.is_symlink():
-        return "missing"
+        return InstalledState.MISSING
     if dst.is_symlink():
         target = Path(os.readlink(dst))
         if not target.is_absolute():
             target = dst.parent / target
         target = target.resolve()
         if target == src.resolve() and src.exists():
-            return "symlink-ok"
-        return "symlink-external" if target.exists() else "symlink-broken"
-    return "copy-current" if _max_mtime(dst) >= _max_mtime(src) else "copy-stale"
+            return InstalledState.SYMLINK_OK
+        return (
+            InstalledState.SYMLINK_EXTERNAL
+            if target.exists()
+            else InstalledState.SYMLINK_BROKEN
+        )
+    return (
+        InstalledState.COPY_CURRENT
+        if _max_mtime(dst) >= _max_mtime(src)
+        else InstalledState.COPY_STALE
+    )
 
 
 OWNED_MARKER = ".installed-by-wiki-spaces"
@@ -354,8 +637,69 @@ def write_owned_marker(dst: Path, src: Path) -> None:
     """
     if not dst.is_dir():
         return
-    (dst / OWNED_MARKER).write_text(
+    atomic_write(
+        dst / OWNED_MARKER,
         f"# Installed by wiki-spaces. Safe to overwrite on re-install.\n"
         f"source = {src.resolve()}\n",
-        encoding="utf-8",
     )
+
+
+# ---------- CLI argv ----------
+
+def normalize_wiki_flag(argv: list[str] | None) -> list[str] | None:
+    """Lift `--wiki <path>` (or `--wiki=<path>`) to the front of argv.
+
+    `--wiki` is registered on the top-level parser, so argparse requires it
+    *before* the subcommand — yet `space audit --wiki ~/wiki` (the natural
+    order) is what users type. Strip the flag from anywhere in argv and
+    re-inject it at the front so both positions work. When `argv` is None,
+    normalize `sys.argv[1:]` so direct module execution
+    (`python -m wiki_spaces.space audit --wiki ~/wiki`) benefits too. Leaves
+    argv unchanged when `--wiki` is absent.
+    """
+    if argv is None:
+        argv = sys.argv[1:]
+    i = 0
+    new: list[str] = []
+    wiki_args: list[str] = []
+    while i < len(argv):
+        token = argv[i]
+        if token == "--wiki":
+            if i + 1 < len(argv):
+                wiki_args = ["--wiki", argv[i + 1]]
+                i += 2
+                continue
+            # `--wiki` with no value — let argparse produce its own error.
+            new.append(token)
+            i += 1
+            continue
+        if token.startswith("--wiki="):
+            wiki_args = [token]
+            i += 1
+            continue
+        new.append(token)
+        i += 1
+    return wiki_args + new
+
+
+# ---------- Index scaffold ----------
+
+def new_index_md(name: str, description: str | None = None) -> str:
+    """index.md body for a freshly created space (the wiki is the same shape).
+
+    Always emits title + `## Spaces` — the navigation contract, present from
+    t=0 on every CLI-created space so `space add foo/bar` works immediately on
+    a fresh `foo`. When `description` is non-empty, also emits
+    `## What this space is` with it; otherwise that section is skipped entirely
+    rather than written as a placeholder the user would have to overwrite.
+
+    The single producer of a new index body — shared by `init` (the wiki root)
+    and `space add` (every nested space) so the two can't drift on the shape of
+    the contract they create.
+    """
+    if description and description.strip():
+        return (
+            f"# {name}\n\n## What this space is\n\n"
+            f"{description.strip()}\n\n## Spaces\n\n"
+        )
+    return f"# {name}\n\n## Spaces\n\n"
