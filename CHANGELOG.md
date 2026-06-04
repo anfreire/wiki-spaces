@@ -4,6 +4,30 @@ All notable changes to wiki-spaces are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [2.0.0] — 2026-06-04
+
+### Removed
+
+- The `bridges/` directory.
+- The `--bridge` flag.
+- The `BRIDGES` dict and `_emit_bridge` helper.
+- Harnesses antigravity, hermes, devin/windsurf, and aider as installable or auto-detected options.
+
+### Added
+
+- Integration of opencode, copilot, and cursor as first-class hub-reading harnesses.
+
+### Changed
+
+- The install model is now a single shared hub at `~/.agents/skills/` with per-skill owned-gated aliases for claude and kiro only (the two harnesses without documented hub support).
+- Command `doctor` verifies install state against the hub-maximalism harness table.
+
+### Unchanged
+
+- Python floor `>=3.11`.
+- Runtime dependency on pyyaml only.
+- The `AGENTS.md` `## Spaces` spec remains frozen.
+
 ## [1.2.0] — 2026-06-02
 
 ### Added

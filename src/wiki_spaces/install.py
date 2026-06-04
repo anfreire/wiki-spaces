@@ -1,9 +1,18 @@
-"""Install wiki-spaces skills into detected AI coding harnesses.
+"""Install wiki-spaces skills into AI coding harnesses.
 
-For each detected (or selected) harness with a skills concept, link the wiki
-skills + vendored kepano skills into the harness's skills directory. After
-install, write the wiki-spaces data path to ~/.config/wiki-spaces/config so
-skills can locate AGENTS.md, CONVENTIONS.md, and references/ on demand.
+Install writes each wiki skill and vendored kepano dependency once into the
+shared hub at ~/.agents/skills/. Harnesses that read the hub are served from
+there; harnesses that do not read it get per-skill aliases in their configured
+alias directories. No whole-directory links are created.
+
+--harness <key> restricts which harnesses are selected. The shared hub is
+written only when at least one selected harness reads it, or when --all is
+passed. Selecting only a non-hub harness writes aliases only and reports that
+the hub was skipped.
+
+After install, write the wiki-spaces data path to
+~/.config/wiki-spaces/config so skills can locate AGENTS.md, CONVENTIONS.md,
+and references/ on demand.
 
 Two source-resolution cases:
 - Dev (source checkout): data lives at the repo root; symlinks point there.
@@ -17,10 +26,6 @@ Flags:
   --copy                force copies instead of symlinks
   --harness <key>       restrict to one harness; can repeat
   --all                 install for every supported harness regardless of detection
-
-The user's project state is NOT modified by this script. Cursor, Windsurf,
-GitHub Copilot, and Aider users see references/HARNESS_INTEGRATION.md for
-optional manual rule snippets.
 """
 
 from __future__ import annotations
@@ -28,30 +33,28 @@ from __future__ import annotations
 import argparse
 import shutil
 import sys
+from enum import Enum
 from pathlib import Path
 
 from ._common import (
+    COMMON_SKILLS_DIR,
     CONFIG_PATH,
     HARNESSES,
     KEPANO_DEPS,
+    OWNED_MARKER,
     WIKI_SKILLS,
     ConfigUnreadableError,
     Harness,
     LinkResult,
     data_root,
     harness_present,
-    is_owned_install,
     is_packaged,
     link_or_copy,
     share_dir,
+    skill_rel,
     write_config,
     write_owned_marker,
 )
-
-BRIDGES: dict[str, str] = {
-    "cursor": "cursor/wiki-spaces.mdc",
-    "windsurf": "windsurf/wiki-spaces.md",
-}
 
 
 def _ensure_vendor_dev(*, dry_run: bool) -> None:
@@ -87,7 +90,7 @@ def _materialize_share_dir(*, dry_run: bool) -> Path:
         return target
     target.mkdir(parents=True, exist_ok=True)
     source = data_root()
-    for entry in ("AGENTS.md", "CONVENTIONS.md", "bridges", "references", "skills", "vendor"):
+    for entry in ("AGENTS.md", "CONVENTIONS.md", "references", "skills", "vendor"):
         src = source / entry
         dst = target / entry
         if not src.exists():
@@ -124,104 +127,141 @@ def _resolve_install_root(*, dry_run: bool) -> tuple[Path, Path]:
     return _materialize_share_dir(dry_run=False), target
 
 
-def install_harness(
-    h: Harness, read_root: Path, write_root: Path, *, dry: bool, copy: bool, force: bool
-) -> tuple[list[str], bool]:
-    """Install one harness. Returns (stdout_actions, had_fatal_error).
+class _OverwriteVerdict(Enum):
+    """Typed outcome of the shared-hub ownership check (HANDBOOK: verdicts
+    carry their provenance). `.safe` is the only gate callers need; the
+    `.value` names the specific conflict for the warning message."""
+    MISSING = "missing"
+    OWNED_SYMLINK = "owned-symlink"
+    OWNED_COPY = "owned-copy"
+    FOREIGN_SYMLINK = "foreign-symlink"
+    UNRESOLVABLE_SYMLINK = "unresolvable-symlink"
+    UNMARKED_DIR = "unmarked-directory"
+    PLAIN_FILE = "plain-file"
 
-    `had_fatal_error` is True when any required skill source is missing — the
-    install is partial and the harness will not have a working wiki-spaces
-    surface. Fatal messages are written to stderr inline; the caller exits
-    nonzero so setup scripts can gate on it.
-    """
+    @property
+    def safe(self) -> bool:
+        return self in (
+            _OverwriteVerdict.MISSING,
+            _OverwriteVerdict.OWNED_SYMLINK,
+            _OverwriteVerdict.OWNED_COPY,
+        )
+
+
+def _can_overwrite_skill(dst: Path, expected_src: Path) -> _OverwriteVerdict:
+    if not dst.exists() and not dst.is_symlink():
+        return _OverwriteVerdict.MISSING
+    if dst.is_symlink():
+        try:
+            if dst.resolve() == expected_src.resolve():
+                return _OverwriteVerdict.OWNED_SYMLINK
+            return _OverwriteVerdict.FOREIGN_SYMLINK
+        except (OSError, RuntimeError):
+            return _OverwriteVerdict.UNRESOLVABLE_SYMLINK
+    if dst.is_dir() and (dst / OWNED_MARKER).is_file():
+        return _OverwriteVerdict.OWNED_COPY
+    if dst.is_dir():
+        return _OverwriteVerdict.UNMARKED_DIR
+    return _OverwriteVerdict.PLAIN_FILE
+
+
+def _install_skill_target(
+    label: str,
+    skill: str,
+    dst: Path,
+    read_root: Path,
+    write_root: Path,
+    *,
+    dry: bool,
+    copy: bool,
+    force: bool,
+) -> tuple[str | None, bool]:
+    rel = skill_rel(skill)
+    src = read_root / rel
+    expected_src = write_root / rel
+    if not src.exists():
+        print(f"  {label}: ! source missing {src}", file=sys.stderr)
+        return None, True
+    verdict = _can_overwrite_skill(dst, expected_src)
+    if not force and not verdict.safe:
+        print(
+            f"  {label}: ! refusing to overwrite {verdict.value} at {dst} "
+            "(pass --force to replace)",
+            file=sys.stderr,
+        )
+        return None, True
+    if dry:
+        verb = "copy" if copy else "link"
+        return f"  {label}: would {verb} {expected_src} -> {dst}", False
+    mode = link_or_copy(src, dst, prefer_copy=copy)
+    if mode == LinkResult.COPY:
+        write_owned_marker(dst, src)
+    return f"  {label}: {mode.value} {dst}", False
+
+
+def _install_hub(
+    read_root: Path, write_root: Path, *, dry: bool, copy: bool, force: bool
+) -> tuple[list[str], bool]:
     actions: list[str] = []
     had_fatal = False
     for skill in (*WIKI_SKILLS, *KEPANO_DEPS):
-        rel = ("skills" if skill in WIKI_SKILLS else "vendor/kepano") + f"/{skill}"
-        src = read_root / rel
-        if not src.exists():
-            print(f"  {h.key}: ! source missing {src}", file=sys.stderr)
-            had_fatal = True
-            continue
-        dst = h.skills_dir / skill
-        if not force and not is_owned_install(dst):
-            print(
-                f"  {h.key}: ! refusing to overwrite unowned {dst} "
-                "(pass --force to replace)",
-                file=sys.stderr,
-            )
-            had_fatal = True
-            continue
-        if dry:
-            future_src = write_root / rel
-            verb = "copy" if copy else "link"
-            actions.append(f"  {h.key}: would {verb} {future_src} -> {dst}")
-            continue
-        mode = link_or_copy(src, dst, prefer_copy=copy)
-        if mode == LinkResult.COPY:
-            write_owned_marker(dst, src)
-        actions.append(f"  {h.key}: {mode.value} {dst}")
+        action, failed = _install_skill_target(
+            "hub",
+            skill,
+            COMMON_SKILLS_DIR / skill,
+            read_root,
+            write_root,
+            dry=dry,
+            copy=copy,
+            force=force,
+        )
+        if action is not None:
+            actions.append(action)
+        had_fatal = had_fatal or failed
     return actions, had_fatal
 
 
-def _emit_bridge(key: str) -> int:
-    if key not in BRIDGES:
-        print(
-            f"Unknown bridge key {key!r}. Supported: {', '.join(sorted(BRIDGES))}",
-            file=sys.stderr,
-        )
-        return 2
-    src = data_root() / "bridges" / BRIDGES[key]
-    if not src.is_file():
-        print(f"  ! bridge file missing on disk: {src}", file=sys.stderr)
-        return 1
-    # Bridge snippets reference the `repo` config key (so the harness can
-    # locate AGENTS.md / CONVENTIONS.md / skills on demand). When `repo`
-    # is unset, the snippet would land in a broken state — warn so the
-    # user runs the full install before relying on the snippet. Warning
-    # goes to stderr; stdout stays clean for the shell-redirect pipe.
-    from ._common import read_config, CONFIG_PATH
-    cfg = read_config()
-    if not cfg.get("repo"):
-        print(
-            # Name the path the tool ACTUALLY reads (XDG-aware), not a
-            # hardcoded `~/.config/...` — they differ under $XDG_CONFIG_HOME
-            # (producer=consumer: the message must match the resolved file).
-            f"warning: `repo` key unset in {CONFIG_PATH}; "
-            "the bridge snippet references that path. Run "
-            "`wiki-spaces install` (without --bridge) at least once to "
-            "set it before relying on this snippet.",
-            file=sys.stderr,
-        )
-    sys.stdout.write(src.read_text(encoding="utf-8"))
-    return 0
+def _install_harness_aliases(
+    h: Harness, read_root: Path, write_root: Path, *, dry: bool, copy: bool, force: bool
+) -> tuple[list[str], bool]:
+    actions: list[str] = []
+    had_fatal = False
+    for alias_dir in h.alias_dirs:
+        for skill in (*WIKI_SKILLS, *KEPANO_DEPS):
+            action, failed = _install_skill_target(
+                h.key,
+                skill,
+                alias_dir / skill,
+                read_root,
+                write_root,
+                dry=dry,
+                copy=copy,
+                force=force,
+            )
+            if action is not None:
+                actions.append(action)
+            had_fatal = had_fatal or failed
+    return actions, had_fatal
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--copy", action="store_true", help="force copies instead of symlinks")
-    parser.add_argument("--harness", action="append", default=[], help="restrict to one harness; repeatable")
+    parser.add_argument(
+        "--harness",
+        action="append",
+        default=[],
+        help="restrict to one harness; repeatable. Selecting only non-hub "
+        "harnesses skips the shared hub unless --all is also passed",
+    )
     parser.add_argument("--all", action="store_true", help="install for every supported harness")
     parser.add_argument(
         "--force",
         action="store_true",
         help="overwrite existing skill directories that wiki-spaces didn't install",
     )
-    parser.add_argument(
-        "--bridge",
-        metavar="KEY",
-        choices=sorted(BRIDGES),
-        help="emit a project-scoped rule snippet to stdout for a harness without "
-        "a skills concept (cursor, windsurf). Pipe to the appropriate rules "
-        "file: `wiki-spaces install --bridge cursor > .cursor/rules/wiki-spaces.mdc`. "
-        "Ignores --dry-run / --copy / --harness / --all (it writes nothing — the "
-        "caller controls placement via shell redirection).",
-    )
     args = parser.parse_args(argv)
-
-    if args.bridge:
-        return _emit_bridge(args.bridge)
 
     known_keys = {h.key for h in HARNESSES}
     unknown = [k for k in args.harness if k not in known_keys]
@@ -232,15 +272,24 @@ def main(argv: list[str] | None = None) -> int:
 
     _ensure_vendor_dev(dry_run=args.dry_run)
 
-    selected = [h for h in HARNESSES if (not args.harness or h.key in args.harness)]
-    if not args.all:
-        selected = [h for h in selected if harness_present(h)]
+    if args.all:
+        selected = list(HARNESSES)
+    elif args.harness:
+        # Explicit --harness X is a scope directive — install even when X
+        # is undetected (HANDBOOK: never silently narrow a user-named scope).
+        selected = [h for h in HARNESSES if h.key in args.harness]
+    else:
+        selected = [h for h in HARNESSES if harness_present(h)]
 
-    # Write the `repo` config key even when no harnesses were
-    # detected. Bridge-only users (Cursor, Windsurf, GitHub Copilot, Aider)
-    # need `repo` so their rule snippets resolve `<repo>/skills/...` and
-    # `<repo>/references/...`. An earlier version returned early on empty
-    # selection, leaving `repo` unset and forcing `doctor` to fail.
+    # Hub-once is the v2 default model (README + HARNESS_INTEGRATION). Skip
+    # the hub only when the user explicitly narrowed scope with --harness X
+    # without --all AND no selected harness reads the hub — anything else
+    # silently breaks the "every skill once into the hub" promise.
+    explicit_narrow = bool(args.harness) and not args.all
+    write_hub = not explicit_narrow or any(h.reads_hub for h in selected)
+
+    # Write the `repo` config key even when no harnesses were detected. Skills
+    # locate the installed data via this path, and `doctor` expects it to exist.
     read_root, write_root = _resolve_install_root(dry_run=args.dry_run)
 
     header = "DRY RUN" if args.dry_run else "INSTALL"
@@ -250,22 +299,34 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  harnesses: {', '.join(h.key for h in selected)}")
     else:
         print("  harnesses: none detected")
+    if write_hub:
+        print("  hub: written")
+    else:
+        print("  hub: skipped (no hub-reading harness selected)")
     print()
 
     any_failure = False
+    if write_hub:
+        actions, had_fatal = _install_hub(
+            read_root, write_root, dry=args.dry_run, copy=args.copy, force=args.force
+        )
+        for line in actions:
+            print(line)
+        any_failure = any_failure or had_fatal
     if selected:
         for h in selected:
-            actions, had_fatal = install_harness(
+            if h.reads_hub:
+                continue
+            actions, had_fatal = _install_harness_aliases(
                 h, read_root, write_root, dry=args.dry_run, copy=args.copy, force=args.force
             )
             for line in actions:
                 print(line)
             any_failure = any_failure or had_fatal
     else:
-        print("  No harnesses with a skills directory present.")
-        print("  Cursor and Windsurf integrate via `wiki-spaces install")
-        print("  --bridge cursor|windsurf`; GitHub Copilot and Aider via a manual")
-        print("  snippet. See references/HARNESS_INTEGRATION.md for both.")
+        print("  No supported harnesses detected.")
+        print("  Use --all to pre-position the shared hub and non-hub aliases,")
+        print("  or pass --harness <key> for a specific harness.")
         print()
 
     if not args.dry_run:

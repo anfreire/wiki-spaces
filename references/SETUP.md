@@ -93,7 +93,7 @@ See [`MOUNT.md`](MOUNT.md) for the full playbook and trade-offs. Quick summary:
 - **Wiki path in config but folder doesn't exist on disk.** Tell the user, ask if they want to (a) re-scaffold (here or at a different path — `wiki-spaces init` updates the config) or (b) restore the folder from a backup.
 - **Wiki path exists but no `index.md`.** Same — re-scaffold or restore.
 - **`repo` key in config but path doesn't exist.** Re-run `uvx wiki-spaces install --all` (or `wiki-spaces install --all`) to refresh the share dir and rewrite `repo`. For dev-from-source users, ensure the clone is back at the recorded path then run `scripts/install.py --all`.
-- **`wiki-spaces install` (default detection) reports "No harnesses selected".** The user has none of the 6 supported harnesses on disk. Either ask whether to pre-position skills via `--all` (creates skill dirs for every supported harness), or — if they only use Cursor / Windsurf / GitHub Copilot / Aider — point them at [`HARNESS_INTEGRATION.md`](HARNESS_INTEGRATION.md) for manual snippets and skip the skills install entirely.
+- **`wiki-spaces install` (default detection) reports "No harnesses selected".** The user has none of the 7 supported harnesses on disk. Either ask whether to pre-position skills via `--all` (creates skill dirs for every supported harness), or point them at [`HARNESS_INTEGRATION.md`](HARNESS_INTEGRATION.md) for manual setup details.
 - **Description doesn't cleanly match a canonical pattern.** Don't force the user into one. Identify the recurring kinds of content they mentioned and translate those into 3-6 folder names directly. Default to no opt-in bundle (offer them, but let the user opt in later as the wiki grows). Default git to "ask."
 - **User wants a flat wiki (no folders).** Omit `--folders` from the `wiki-spaces init` invocation. `ws-update` will write pages at the wiki root or ask where to place. Fully valid; the wiki only needs its `index.md` with a `## Spaces` heading (an empty `## Spaces` is fine — a flat wiki has no nested spaces to list).
 - **User gives a description so short it doesn't suggest folders** (e.g., *"general notes"*). Ask one follow-up: "What recurring kinds of content do you expect — even a rough list?" If still vague, propose a flat wiki and offer to grow folders later.
@@ -114,4 +114,4 @@ Discovery resolution is **explicit path → config → CWD ancestor**. Skills fo
 - `CONVENTIONS.md` — opt-in conventions catalog (frontmatter, taxonomy, linking, etc.)
 - `references/EXAMPLES.md` — topology examples (six shapes spanning developer / research / writing / recipe / personal / team)
 - `references/MOUNT.md` — mount external wiki as space
-- `references/HARNESS_INTEGRATION.md` — Cursor/Windsurf/Copilot/Aider manual snippets
+- `references/HARNESS_INTEGRATION.md` — supported harnesses and installation details

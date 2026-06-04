@@ -278,46 +278,55 @@ def test_link_or_copy_copy_mode_mirrors_removing_stale_files(tmp_path):
     assert not (dst / "old_reference.md").exists()
 
 
-# ---------- is_owned_install / write_owned_marker ----------
+# ---------- write_owned_marker ----------
 
-def test_is_owned_install_missing_dst(tmp_path):
-    assert _common.is_owned_install(tmp_path / "absent") is True
-
-
-def test_is_owned_install_symlink_is_owned(tmp_path):
-    src = tmp_path / "src"
-    src.mkdir()
-    dst = tmp_path / "dst"
-    os.symlink(src, dst)
-    assert _common.is_owned_install(dst) is True
-
-
-def test_is_owned_install_marker_present(tmp_path):
+def test_write_owned_marker_records_source(tmp_path):
     src = tmp_path / "src"
     src.mkdir()
     dst = tmp_path / "dst"
     dst.mkdir()
     _common.write_owned_marker(dst, src)
-    assert _common.is_owned_install(dst) is True
+    marker = dst / _common.OWNED_MARKER
+    assert marker.is_file()
+    body = marker.read_text(encoding="utf-8")
+    assert "Installed by wiki-spaces" in body
+    assert f"source = {src.resolve()}" in body
 
 
-def test_is_owned_install_unowned_dir(tmp_path):
-    dst = tmp_path / "user-skill"
-    dst.mkdir()
-    (dst / "SKILL.md").write_text("user content")
-    assert _common.is_owned_install(dst) is False
+def test_write_owned_marker_is_noop_on_non_directory(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    dst = tmp_path / "file.txt"
+    dst.write_text("not a dir", encoding="utf-8")
+    _common.write_owned_marker(dst, src)
+    assert dst.read_text(encoding="utf-8") == "not a dir"
+    assert not (tmp_path / _common.OWNED_MARKER).exists()
 
 
 # ---------- HARNESSES matrix ----------
 
-def test_harnesses_includes_antigravity():
-    assert "antigravity" in {h.key for h in _common.HARNESSES}
+def test_harnesses_are_the_seven_verified():
+    keys = sorted(h.key for h in _common.HARNESSES)
+    assert keys == ["claude", "codex", "copilot", "cursor", "gemini", "kiro", "opencode"]
 
 
-def test_antigravity_harness_paths():
-    ag = next(h for h in _common.HARNESSES if h.key == "antigravity")
-    assert ag.skills_dir == _common.HOME / ".gemini/antigravity/skills"
-    assert _common.HOME / ".gemini/antigravity" in ag.detect
+def test_only_claude_and_kiro_have_alias_dirs():
+    aliased = sorted(h.key for h in _common.HARNESSES if h.alias_dirs)
+    assert aliased == ["claude", "kiro"]
+
+
+def test_hub_readers_have_no_alias_dirs():
+    for h in _common.HARNESSES:
+        if h.reads_hub:
+            assert h.alias_dirs == ()
+
+
+def test_claude_kiro_alias_paths():
+    claude = next(h for h in _common.HARNESSES if h.key == "claude")
+    kiro = next(h for h in _common.HARNESSES if h.key == "kiro")
+    assert claude.alias_dirs == (_common.HOME / ".claude" / "skills",)
+    assert kiro.alias_dirs == (_common.HOME / ".kiro" / "skills",)
+    assert claude.reads_hub is False and kiro.reads_hub is False
 
 
 def test_harness_keys_are_unique():
@@ -400,6 +409,15 @@ def test_installed_state_copy_stale(tmp_path):
     (dst / "SKILL.md").write_text("ok")
     os.utime(dst / "SKILL.md", (1000000000, 1000000000))
     assert _common.installed_state(dst, src) == _common.InstalledState.COPY_STALE
+
+
+def test_installed_state_plain_file_is_wrong_shape(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "SKILL.md").write_text("ok")
+    dst = tmp_path / "dst"
+    dst.write_text("not a skill directory")
+    assert _common.installed_state(dst, src) == _common.InstalledState.WRONG_SHAPE
 
 
 # ---------- atomic_write ----------

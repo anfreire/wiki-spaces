@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "wiki-spaces"
-version = "1.2.0"
+version = "2.0.0"
 description = "Minimal nestable wiki for AI coding harnesses. A folder with `index.md` and a `## Spaces` navigation contract, for any use case (notes, research, recipes, writing, team docs). Spec, conventions catalog, and reference skills. Out of scope: browser-only AI assistants."
 readme = "README.md"
 license = "MIT"
@@ -31,7 +31,11 @@ classifiers = [
 dependencies = ["pyyaml>=6"]
 
 [dependency-groups]
-test = ["pytest>=8.0", "ruff>=0.14"]
+test = [
+    "pytest>=8.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.14",
+]
 
 [project.scripts]
 wiki-spaces = "wiki_spaces.cli:main"
@@ -47,7 +51,6 @@ packages = ["src/wiki_spaces"]
 [tool.hatch.build.targets.wheel.force-include]
 "AGENTS.md" = "wiki_spaces/data/AGENTS.md"
 "CONVENTIONS.md" = "wiki_spaces/data/CONVENTIONS.md"
-"bridges" = "wiki_spaces/data/bridges"
 "references" = "wiki_spaces/data/references"
 "skills" = "wiki_spaces/data/skills"
 "vendor" = "wiki_spaces/data/vendor"
@@ -56,7 +59,6 @@ packages = ["src/wiki_spaces"]
 include = [
     "src/wiki_spaces",
     "scripts",
-    "bridges",
     "references",
     "skills",
     "vendor",

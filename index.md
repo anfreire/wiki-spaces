@@ -17,6 +17,5 @@ A wiki is a folder with `index.md` whose contents include a `## Spaces` heading.
 
 - [skills/](skills/index.md) — the three reference skills
 - [vendor/](vendor/index.md) — pinned upstream (kepano/obsidian-skills)
-- [bridges/](bridges/index.md) — manual integration templates for harnesses without skills
 - [references/](references/index.md) — agent-facing setup, examples, mounting playbooks
 - [scripts/](scripts/index.md) — Python+uv installer and sync tooling

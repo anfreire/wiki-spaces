@@ -1,238 +1,396 @@
-"""Unit tests for wiki_spaces.install: --bridge stdout flow + fail-fast on
-missing skill sources."""
+"""Tests for wiki_spaces.install: the hub + per-harness alias model.
+
+Two layers:
+- In-process unit tests drive `_can_overwrite_skill`, `_install_skill_target`,
+  `_install_hub`, and `_install_harness_aliases` directly with explicit tmp_path
+  roots/destinations (no frozen-HOME problem — paths are arguments).
+- Subprocess fake-HOME tests drive `install` end to end against an isolated
+  home (see `tests.conftest.run_cli_subprocess` for why a subprocess is the
+  only correct isolation here).
+"""
 
 from __future__ import annotations
 
-import functools
 import io
 from contextlib import redirect_stderr
 from pathlib import Path
 
-import pytest
+from wiki_spaces import _common, install
+from wiki_spaces._common import (
+    OWNED_MARKER,
+    Harness,
+)
 
-from wiki_spaces import install
-from wiki_spaces._common import Harness
-
-from tests.conftest import run_cli
-
-_run = functools.partial(run_cli, entry=install.main)
-
-
-def test_bridge_cursor_emits_exact_file_content():
-    """`--bridge cursor` must emit the packaged bridge file byte-for-byte. The
-    user pipes this into their rules file via shell redirection; any mutation
-    here would silently corrupt the rule snippet."""
-    from wiki_spaces._common import data_root
-    expected = (data_root() / "bridges" / install.BRIDGES["cursor"]).read_text(encoding="utf-8")
-    rc, out, _ = _run(["--bridge", "cursor"])
-    assert rc == 0
-    assert out == expected
+from tests.conftest import (
+    ALL_SKILL_NAMES,
+    KEPANO_SKILL_NAMES,
+    WIKI_SKILL_NAMES,
+    run_cli_subprocess,
+    seed_fake_home,
+    seed_source_tree,
+)
 
 
-def test_bridge_windsurf_emits_exact_file_content():
-    from wiki_spaces._common import data_root
-    expected = (data_root() / "bridges" / install.BRIDGES["windsurf"]).read_text(encoding="utf-8")
-    rc, out, _ = _run(["--bridge", "windsurf"])
-    assert rc == 0
-    assert out == expected
+def _alias_harness(key: str, alias_dir: Path) -> Harness:
+    return Harness(
+        key=key,
+        detect=(),
+        reads_hub=False,
+        alias_dirs=(alias_dir,),
+        source_url="https://example.test/skills",
+    )
 
 
-def test_bridge_unknown_key_rejected_by_argparse():
-    """Argparse `choices=` enforces the bridge key whitelist before main()
-    runs — invalid keys terminate via SystemExit, not return code."""
-    with pytest.raises(SystemExit):
-        _run(["--bridge", "bogus"])
+# ---------------------------------------------------------------------------
+# _can_overwrite_skill — ownership gate, exercised on every destination shape.
+# ---------------------------------------------------------------------------
 
 
-def test_bridge_short_circuits_install_writes(tmp_path, monkeypatch):
-    """`--bridge` returns before harness install logic runs; it must not
-    touch the config file or harness skill dirs. Combined with --dry-run
-    or any install flag, --bridge wins."""
-    from wiki_spaces import _common
-    fake_config = tmp_path / "absent-config"
-    monkeypatch.setattr(_common, "CONFIG_PATH", fake_config)
-    rc, out, _ = _run(["--dry-run", "--bridge", "cursor"])
-    assert rc == 0
-    assert out.startswith("---")
-    assert not fake_config.exists()
+def test_can_overwrite_skill_allows_missing_destination(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    verdict = install._can_overwrite_skill(tmp_path / "absent", src)
+    assert verdict is install._OverwriteVerdict.MISSING
+    assert verdict.safe
 
 
-def _empty_read_root(tmp_path: Path) -> Path:
-    """A `read_root` with no skill/vendor source files at all — every required
-    skill is missing, so install_harness should report fatal."""
-    root = tmp_path / "empty-source"
-    root.mkdir(exist_ok=True)
-    return root
+def test_can_overwrite_skill_allows_symlink_pointing_at_expected_src(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    dst = tmp_path / "dst"
+    dst.symlink_to(src)
+    verdict = install._can_overwrite_skill(dst, src)
+    assert verdict is install._OverwriteVerdict.OWNED_SYMLINK
+    assert verdict.safe
 
 
-def test_install_harness_returns_fatal_when_source_missing(tmp_path):
-    """The contract: every required skill source MUST exist. A missing source
-    means the harness will not have a working wiki-spaces surface. This is the
-    case codex flagged as the blocking bug — install previously returned 0
-    silently while writing the config, leaving a useless install behind."""
-    h = Harness(key="claude", detect=(), skills_dir=tmp_path / "claude-skills")
-    h.skills_dir.mkdir()
-    read_root = _empty_read_root(tmp_path)
+def test_can_overwrite_skill_refuses_symlink_to_foreign_target(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    dst = tmp_path / "dst"
+    dst.symlink_to(foreign)
+    verdict = install._can_overwrite_skill(dst, src)
+    assert verdict is install._OverwriteVerdict.FOREIGN_SYMLINK
+    assert not verdict.safe
+
+
+def test_can_overwrite_skill_allows_owned_directory(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    (dst / OWNED_MARKER).write_text("ours")
+    verdict = install._can_overwrite_skill(dst, src)
+    assert verdict is install._OverwriteVerdict.OWNED_COPY
+    assert verdict.safe
+
+
+def test_can_overwrite_skill_refuses_unmarked_directory(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    (dst / "SKILL.md").write_text("user content")
+    verdict = install._can_overwrite_skill(dst, src)
+    assert verdict is install._OverwriteVerdict.UNMARKED_DIR
+    assert not verdict.safe
+
+
+def test_can_overwrite_skill_refuses_plain_file(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    dst = tmp_path / "dst"
+    dst.write_text("user file")
+    verdict = install._can_overwrite_skill(dst, src)
+    assert verdict is install._OverwriteVerdict.PLAIN_FILE
+    assert not verdict.safe
+
+
+# ---------------------------------------------------------------------------
+# _install_hub / _install_harness_aliases / _install_skill_target — fatal paths
+# and the copy fallback, all with explicit roots so HOME stays irrelevant.
+# ---------------------------------------------------------------------------
+
+
+def test_install_hub_reports_fatal_when_every_source_missing(tmp_path):
+    empty = tmp_path / "empty-source"
+    empty.mkdir()
     err = io.StringIO()
     with redirect_stderr(err):
-        actions, had_fatal = install.install_harness(
-            h, read_root, read_root, dry=True, copy=False, force=False
+        actions, had_fatal = install._install_hub(
+            empty, empty, dry=True, copy=False, force=False
         )
     assert had_fatal is True
-    # Each missing skill produces one stderr line, but no stdout actions.
     assert actions == []
-    err_text = err.getvalue()
-    assert "source missing" in err_text
-    # All required skills surfaced (don't pin the exact set — verify count).
-    assert err_text.count("source missing") >= 3
+    assert err.getvalue().count("source missing") == len(ALL_SKILL_NAMES)
 
 
-def test_install_main_exits_nonzero_on_missing_source(tmp_path, monkeypatch):
-    """End-to-end: install.main() must propagate the fatal flag to its exit
-    code so setup scripts can gate on it. Config is still written (so partial
-    installs are at least self-describing for doctor to flag), but exit is 1."""
-    # Point install at an empty read_root + a single test harness.
-    from wiki_spaces import _common
-
-    fake_skills = tmp_path / "claude-skills"
-    fake_skills.mkdir()
-    h = Harness(key="claude", detect=(tmp_path / "claude-marker",), skills_dir=fake_skills)
-    (tmp_path / "claude-marker").mkdir()
-    monkeypatch.setattr(install, "HARNESSES", (h,))
-    monkeypatch.setattr(install, "_resolve_install_root",
-                        lambda *, dry_run: (_empty_read_root(tmp_path), _empty_read_root(tmp_path)))
-    monkeypatch.setattr(install, "_ensure_vendor_dev", lambda *, dry_run: None)
-    monkeypatch.setattr(_common, "CONFIG_PATH", tmp_path / "config")
-
-    rc, out, err = _run([])
-    assert rc == 1, "missing skill source must exit nonzero"
-    assert "source missing" in err
-    assert "completed with errors" in err
-
-
-def test_install_with_no_harnesses_writes_repo(monkeypatch, tmp_path):
-    """PR-N (§41): when zero harnesses are detected, install must still
-    write the `repo` config key. Bridge-only users (Cursor, Windsurf,
-    GitHub Copilot, Aider) need it so their rule snippets can resolve
-    `<repo>/skills/...` and `<repo>/references/...`. Pre-PR-N, install
-    returned early with exit 1 and `repo` stayed unset, which made
-    `doctor` fail after the documented setup flow."""
-    from wiki_spaces import _common
-    # No harnesses at all — every detect path points at a missing marker.
-    fake_harness = Harness(
-        key="claude", detect=(tmp_path / "absent",),
-        skills_dir=tmp_path / "absent-skills",
-    )
-    monkeypatch.setattr(install, "HARNESSES", (fake_harness,))
-    monkeypatch.setattr(
-        install, "_resolve_install_root",
-        lambda *, dry_run: (tmp_path / "fake-read", tmp_path / "fake-write"),
-    )
-    monkeypatch.setattr(install, "_ensure_vendor_dev", lambda *, dry_run: None)
-    cfg_path = tmp_path / "config"
-    monkeypatch.setattr(_common, "CONFIG_PATH", cfg_path)
-
-    rc, out, _ = _run([])
-    assert rc == 0  # No harness selected is no longer an error.
-    assert "harnesses: none detected" in out
-    # `repo` written to config — `doctor` now passes for bridge-only users.
-    assert cfg_path.exists()
-    assert "repo = " in cfg_path.read_text()
-
-
-def test_bridge_warns_when_repo_unset(monkeypatch, tmp_path):
-    """`--bridge cursor` emits a stderr warning when the `repo` key is unset
-    in the config. The snippet still goes to stdout unchanged — only the
-    warning is added. Bridge snippets reference the repo path, so a snippet
-    emitted before any `wiki-spaces install` run would land in a broken state
-    without the warning."""
-    from wiki_spaces import _common
-    # Point the config at a path with no `repo` key.
-    cfg_path = tmp_path / "config"
-    monkeypatch.setattr(_common, "CONFIG_PATH", cfg_path)
-    rc, out, err = _run(["--bridge", "cursor"])
-    assert rc == 0
-    # stdout still has the snippet (byte-for-byte; verified by the
-    # existing `test_bridge_cursor_emits_exact_file_content`).
-    assert out  # non-empty
-    # stderr carries the warning.
-    assert "warning" in err.lower()
-    assert "repo" in err
-    assert "unset" in err
-
-
-def test_bridge_no_warning_when_repo_set(monkeypatch, tmp_path):
-    """When `repo` is set, `--bridge` emits no warning — stderr stays clean."""
-    from wiki_spaces import _common
-    cfg_path = tmp_path / "config"
-    cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg_path.write_text("repo = /tmp/fake\n")
-    monkeypatch.setattr(_common, "CONFIG_PATH", cfg_path)
-    rc, out, err = _run(["--bridge", "cursor"])
-    assert rc == 0
-    assert "warning" not in err.lower()
-
-
-def test_bridge_warning_names_resolved_config_path(monkeypatch, tmp_path):
-    """C7: the `repo`-unset warning must name the path the tool ACTUALLY reads
-    (the XDG-aware `CONFIG_PATH`), not a hardcoded `~/.config/...` that differs
-    under $XDG_CONFIG_HOME — message vs resolved file (producer=consumer)."""
-    from wiki_spaces import _common
-    # A resolved config path that is NOT under ~/.config (as $XDG_CONFIG_HOME
-    # would produce).
-    cfg_path = tmp_path / "xdg" / "wiki-spaces" / "config"
-    monkeypatch.setattr(_common, "CONFIG_PATH", cfg_path)
-    rc, _, err = _run(["--bridge", "cursor"])
-    assert rc == 0
-    assert str(cfg_path) in err
-    assert "~/.config/wiki-spaces/config" not in err
-
-
-def test_bridge_files_document_xdg_aware_config_path():
-    """C7: the static bridge snippets can't resolve CONFIG_PATH at emit time,
-    so they document the XDG-aware location (`${XDG_CONFIG_HOME:-~/.config}`)
-    rather than a bare `~/.config/...` that's wrong under $XDG_CONFIG_HOME."""
-    from wiki_spaces._common import data_root
-    for key in install.BRIDGES:
-        text = (data_root() / "bridges" / install.BRIDGES[key]).read_text(
-            encoding="utf-8"
+def test_install_harness_aliases_reports_fatal_when_source_missing(tmp_path):
+    empty = tmp_path / "empty-source"
+    empty.mkdir()
+    h = _alias_harness("claude", tmp_path / "claude" / "skills")
+    err = io.StringIO()
+    with redirect_stderr(err):
+        actions, had_fatal = install._install_harness_aliases(
+            h, empty, empty, dry=True, copy=False, force=False
         )
-        assert "${XDG_CONFIG_HOME:-~/.config}/wiki-spaces/config" in text
-        assert "`~/.config/wiki-spaces/config`" not in text
+    assert had_fatal is True
+    assert actions == []
+    assert err.getvalue().count("source missing") == len(ALL_SKILL_NAMES)
 
 
-def test_install_unowned_dst_exits_nonzero_without_force(tmp_path, monkeypatch):
-    """When a destination is user-owned (not wiki-spaces-installed) and
-    `--force` is not passed, the per-skill action is recorded and the final
-    exit code is nonzero — a silently-partial install must not exit 0."""
-    from wiki_spaces import _common
+def test_install_harness_aliases_dry_run_plans_every_skill(tmp_path):
+    read_root = seed_source_tree(tmp_path / "src")
+    alias_dir = tmp_path / "claude" / "skills"
+    h = _alias_harness("claude", alias_dir)
+    actions, had_fatal = install._install_harness_aliases(
+        h, read_root, read_root, dry=True, copy=False, force=False
+    )
+    assert had_fatal is False
+    assert len(actions) == len(ALL_SKILL_NAMES)
+    assert all("would" in line for line in actions)
+    assert not alias_dir.exists()
 
-    fake_skills = tmp_path / "claude-skills"
-    fake_skills.mkdir()
-    # Pre-create a user-owned (no OWNED_MARKER) directory at the install
-    # destination — install must refuse without --force.
-    for skill in ("ws-search", "ws-update", "ws-tend",
-                  "obsidian-markdown", "obsidian-bases"):
-        d = fake_skills / skill
-        d.mkdir()
-        (d / "SKILL.md").write_text("user content")  # not our marker
 
-    h = Harness(key="claude", detect=(tmp_path / "claude-marker",), skills_dir=fake_skills)
-    (tmp_path / "claude-marker").mkdir()
-    # Provide a valid source tree so `source missing` doesn't kick in first.
-    read_root = tmp_path / "src"
-    for skill in ("ws-search", "ws-update", "ws-tend"):
-        (read_root / "skills" / skill).mkdir(parents=True)
-        (read_root / "skills" / skill / "SKILL.md").write_text("ok")
-    for skill in ("obsidian-markdown", "obsidian-bases"):
-        (read_root / "vendor" / "kepano" / skill).mkdir(parents=True)
-        (read_root / "vendor" / "kepano" / skill / "SKILL.md").write_text("ok")
-    monkeypatch.setattr(install, "HARNESSES", (h,))
-    monkeypatch.setattr(install, "_resolve_install_root",
-                        lambda *, dry_run: (read_root, read_root))
+def test_install_harness_aliases_copy_fallback_writes_copies_and_owned_marker(
+    tmp_path, monkeypatch
+):
+    read_root = seed_source_tree(tmp_path / "src")
+    alias_dir = tmp_path / "claude" / "skills"
+    h = _alias_harness("claude", alias_dir)
+
+    def _no_symlink(*args, **kwargs):
+        raise OSError("symlink unsupported on this platform")
+
+    monkeypatch.setattr(_common.os, "symlink", _no_symlink)
+
+    actions, had_fatal = install._install_harness_aliases(
+        h, read_root, read_root, dry=False, copy=False, force=False
+    )
+    assert had_fatal is False
+    assert all("copy" in line for line in actions)
+    for skill in ALL_SKILL_NAMES:
+        dst = alias_dir / skill
+        assert dst.is_dir() and not dst.is_symlink()
+        assert (dst / "SKILL.md").read_text() == "ok"
+        assert (dst / OWNED_MARKER).is_file()
+
+
+def test_install_skill_target_refuses_unowned_without_force(tmp_path):
+    read_root = seed_source_tree(tmp_path / "src")
+    dst = tmp_path / "dst" / "ws-search"
+    dst.mkdir(parents=True)
+    (dst / "SKILL.md").write_text("user content")
+    err = io.StringIO()
+    with redirect_stderr(err):
+        action, failed = install._install_skill_target(
+            "claude", "ws-search", dst, read_root, read_root,
+            dry=True, copy=False, force=False,
+        )
+    assert failed is True
+    assert action is None
+    assert "refusing to overwrite unmarked-directory" in err.getvalue()
+
+
+def test_install_skill_target_force_overrides_unowned(tmp_path):
+    read_root = seed_source_tree(tmp_path / "src")
+    dst = tmp_path / "dst" / "ws-search"
+    dst.mkdir(parents=True)
+    (dst / "SKILL.md").write_text("user content")
+    action, failed = install._install_skill_target(
+        "claude", "ws-search", dst, read_root, read_root,
+        dry=True, copy=False, force=True,
+    )
+    assert failed is False
+    assert action is not None and "would" in action
+
+
+# ---------------------------------------------------------------------------
+# main() argument validation — in-process, no writes.
+# ---------------------------------------------------------------------------
+
+
+def test_main_rejects_unknown_harness_key(capsys):
+    rc = install.main(["--harness", "bogus", "--dry-run"])
+    assert rc == 2
+    assert "Unknown --harness key(s): bogus" in capsys.readouterr().err
+
+
+def _hub_harness(key: str) -> Harness:
+    return Harness(
+        key=key,
+        detect=(),
+        reads_hub=True,
+        alias_dirs=(),
+        source_url="https://example.test/skills",
+    )
+
+
+def _wire_main(monkeypatch, tmp_path, *, harnesses, present=True):
+    read_root = seed_source_tree(tmp_path / "src")
+    hub_dir = tmp_path / "agents" / "skills"
+    cfg = tmp_path / "config"
     monkeypatch.setattr(install, "_ensure_vendor_dev", lambda *, dry_run: None)
-    monkeypatch.setattr(_common, "CONFIG_PATH", tmp_path / "config")
+    monkeypatch.setattr(
+        install, "_resolve_install_root", lambda *, dry_run: (read_root, read_root)
+    )
+    monkeypatch.setattr(install, "HARNESSES", harnesses)
+    monkeypatch.setattr(install, "COMMON_SKILLS_DIR", hub_dir)
+    monkeypatch.setattr(install, "harness_present", lambda h: present)
+    monkeypatch.setattr(_common, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(install, "CONFIG_PATH", cfg)
+    return hub_dir, cfg
 
-    rc, out, err = _run([])
-    assert rc == 1, "refused-unowned destinations must exit nonzero"
-    assert "refusing to overwrite unowned" in err
+
+def test_main_dry_run_all_plans_without_writing(tmp_path, monkeypatch, capsys):
+    hub_dir, cfg = _wire_main(
+        monkeypatch, tmp_path,
+        harnesses=(_hub_harness("codex"), _alias_harness("claude", tmp_path / "claude")),
+    )
+    rc = install.main(["--dry-run", "--all"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "DRY RUN" in out
+    assert "would" in out
+    assert not hub_dir.exists()
+    assert not cfg.exists()
+
+
+def test_main_all_writes_hub_alias_and_repo_config(tmp_path, monkeypatch, capsys):
+    alias_dir = tmp_path / "claude" / "skills"
+    hub_dir, cfg = _wire_main(
+        monkeypatch, tmp_path,
+        harnesses=(_hub_harness("codex"), _alias_harness("claude", alias_dir)),
+    )
+    rc = install.main(["--all"])
+    assert rc == 0, capsys.readouterr().out
+    for skill in ALL_SKILL_NAMES:
+        assert (hub_dir / skill).exists()
+        assert (alias_dir / skill).exists()
+    assert "repo = " in cfg.read_text()
+
+
+def test_main_no_harness_detected_still_writes_hub_and_repo(tmp_path, monkeypatch, capsys):
+    hub_dir, cfg = _wire_main(
+        monkeypatch, tmp_path,
+        harnesses=(_hub_harness("codex"),),
+        present=False,
+    )
+    rc = install.main([])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "harnesses: none detected" in out
+    # Hub-once is the v2 default model — written even when no harness is
+    # detected, so a later-installed hub-reader (codex/gemini/...) finds
+    # the skills already in place.
+    assert hub_dir.is_dir()
+    for skill in ALL_SKILL_NAMES:
+        assert (hub_dir / skill).exists()
+    assert "repo = " in cfg.read_text()
+
+
+# ---------------------------------------------------------------------------
+# Subprocess fake-HOME end-to-end coverage of the documented install flow.
+# ---------------------------------------------------------------------------
+
+
+def _hub_dir(home: Path) -> Path:
+    return home / ".agents" / "skills"
+
+
+def test_install_all_writes_hub_once_and_claude_kiro_aliases(tmp_path):
+    home = seed_fake_home(tmp_path / "home")
+    result = run_cli_subprocess(["install", "--all"], home)
+    assert result.returncode == 0, result.stderr
+    assert "hub: written" in result.stdout
+
+    for skill in ALL_SKILL_NAMES:
+        assert (_hub_dir(home) / skill).is_symlink()
+        assert (home / ".claude" / "skills" / skill).is_symlink()
+        assert (home / ".kiro" / "skills" / skill).is_symlink()
+
+    # Hub-reading harnesses get served from the hub — never their own alias dir.
+    assert not (home / ".gemini" / "skills").exists()
+    assert not (home / ".codex" / "skills").exists()
+    assert not (home / ".config" / "opencode" / "skills").exists()
+    assert not (home / ".copilot" / "skills").exists()
+    assert not (home / ".cursor" / "skills").exists()
+
+
+def test_install_refuses_foreign_hub_symlink_then_force_overrides(tmp_path):
+    home = seed_fake_home(tmp_path / "home")
+    hub = _hub_dir(home)
+    hub.mkdir(parents=True)
+    foreign = tmp_path / "foreign-skill"
+    foreign.mkdir()
+    (hub / "ws-search").symlink_to(foreign)
+
+    refused = run_cli_subprocess(["install", "--all"], home)
+    assert refused.returncode == 1
+    assert "refusing to overwrite foreign-symlink" in refused.stderr
+    assert (hub / "ws-search").resolve() == foreign.resolve()
+
+    forced = run_cli_subprocess(["install", "--all", "--force"], home)
+    assert forced.returncode == 0, forced.stderr
+    assert (hub / "ws-search").resolve() != foreign.resolve()
+    assert (hub / "ws-search").resolve().name == "ws-search"
+
+
+def test_install_single_non_hub_harness_skips_hub(tmp_path):
+    home = seed_fake_home(tmp_path / "home")
+    result = run_cli_subprocess(["install", "--harness", "claude"], home)
+    assert result.returncode == 0, result.stderr
+    assert "hub: skipped (no hub-reading harness selected)" in result.stdout
+    assert not _hub_dir(home).exists()
+    for skill in ALL_SKILL_NAMES:
+        assert (home / ".claude" / "skills" / skill).is_symlink()
+
+
+def test_install_explicit_harness_overrides_detection(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    result = run_cli_subprocess(["install", "--harness", "claude"], home)
+    assert result.returncode == 0, result.stderr
+    assert "harnesses: claude" in result.stdout
+    for skill in ALL_SKILL_NAMES:
+        assert (home / ".claude" / "skills" / skill).is_symlink()
+
+
+def test_install_default_writes_hub_when_only_non_hub_reader_detected(tmp_path):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    result = run_cli_subprocess(["install"], home)
+    assert result.returncode == 0, result.stderr
+    assert "hub: written" in result.stdout
+    for skill in ALL_SKILL_NAMES:
+        assert (_hub_dir(home) / skill).is_symlink()
+        assert (home / ".claude" / "skills" / skill).is_symlink()
+
+
+def test_install_all_is_idempotent_on_reinstall(tmp_path):
+    home = seed_fake_home(tmp_path / "home")
+    first = run_cli_subprocess(["install", "--all"], home)
+    assert first.returncode == 0, first.stderr
+
+    second = run_cli_subprocess(["install", "--all"], home)
+    assert second.returncode == 0, second.stderr
+    assert "noop" in second.stdout
+    assert "symlink" not in second.stdout.replace("noop", "")
+
+
+def test_install_all_writes_repo_config(tmp_path):
+    home = seed_fake_home(tmp_path / "home")
+    result = run_cli_subprocess(["install", "--all"], home)
+    assert result.returncode == 0, result.stderr
+    config = home / ".config" / "wiki-spaces" / "config"
+    assert config.is_file()
+    assert "repo = " in config.read_text()
+
+
+# Touch the imported skill-name tuples so the module's public mirrors are
+# observably consistent with the package constants (guards silent drift).
+def test_skill_name_mirrors_match_package_constants():
+    assert WIKI_SKILL_NAMES == _common.WIKI_SKILLS
+    assert KEPANO_SKILL_NAMES == _common.KEPANO_DEPS

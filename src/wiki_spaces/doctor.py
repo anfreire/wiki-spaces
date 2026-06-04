@@ -20,9 +20,11 @@ from enum import Enum
 from pathlib import Path
 
 from ._common import (
+    COMMON_SKILLS_DIR,
     CONFIG_PATH,
     HARNESSES,
     Harness,
+    InstalledState,
     KEPANO_DEPS,
     WIKI_SKILLS,
     _has_spaces_section,
@@ -32,6 +34,7 @@ from ._common import (
     installed_root,
     installed_state,
     read_config,
+    skill_rel,
 )
 
 REPO_SENTINELS = (
@@ -198,14 +201,48 @@ def check_vendor(net: bool) -> None:
     print()
 
 
+def _skill_src(skill: str) -> Path:
+    """Source path a skill destination should resolve to — `installed_root()`
+    joined with the shared `skill_rel()` so install and doctor can never
+    compute different relative paths (HANDBOOK: producer=consumer)."""
+    return installed_root() / skill_rel(skill)
+
+
+def check_hub() -> None:
+    """Verify the shared hub (COMMON_SKILLS_DIR) holds every skill. install
+    materializes each `(*WIKI_SKILLS, *KEPANO_DEPS)` skill here once; this is
+    the consumer half. Flags the hub incomplete on any missing/broken skill."""
+    print(f"hub ({COMMON_SKILLS_DIR}):")
+    incomplete = False
+    for skill in (*WIKI_SKILLS, *KEPANO_DEPS):
+        src = _skill_src(skill)
+        dst = COMMON_SKILLS_DIR / skill
+        state = installed_state(dst, src)
+        if state in (
+            InstalledState.MISSING,
+            InstalledState.SYMLINK_BROKEN,
+            InstalledState.WRONG_SHAPE,
+        ):
+            incomplete = True
+        print(f"  {skill:22s} -> {dst}: {state.value}")
+    if incomplete:
+        print("  ! hub incomplete — run `wiki-spaces install` to materialize skills")
+    print()
+
+
 def check_harness(h: Harness) -> None:
     present = harness_present(h)
     print(f"{h.key}: {'detected' if present else 'not detected'}")
-    root = installed_root()
-    for skill in (*WIKI_SKILLS, *KEPANO_DEPS):
-        src = root / ("skills" if skill in WIKI_SKILLS else "vendor/kepano") / skill
-        dst = h.skills_dir / skill
-        print(f"  {skill:22s} -> {dst}: {installed_state(dst, src).value}")
+    if h.reads_hub:
+        msg = "served by hub" if present else "would be served by hub if present"
+        print(f"  {msg}")
+        print()
+        return
+    for alias_dir in h.alias_dirs:
+        for skill in (*WIKI_SKILLS, *KEPANO_DEPS):
+            src = _skill_src(skill)
+            dst = alias_dir / skill
+            print(f"  {skill:22s} -> {dst}: {installed_state(dst, src).value}")
     print()
 
 
@@ -246,6 +283,7 @@ def main(argv: list[str] | None = None) -> int:
     print()
     config_ok = check_config()
     check_vendor(net=not args.no_net)
+    check_hub()
     for h in HARNESSES:
         check_harness(h)
     if not config_ok:

@@ -65,6 +65,99 @@ def run_cli(
 
 
 # ---------------------------------------------------------------------------
+# Fake-HOME subprocess harness — the ONLY correct way to drive install/doctor
+# end to end against an isolated home.
+#
+# `_common.py` freezes `HOME = Path.home()` at IMPORT, and HARNESSES /
+# COMMON_SKILLS_DIR / CONFIG_PATH derive from it. `monkeypatch.setenv("HOME")`
+# fired *after* the module is imported does NOT redirect any of them — the
+# values are already bound. A fresh subprocess re-imports `_common` with the
+# fake HOME already in the environment, so every derived path lands under the
+# temp home. This keeps the test's writes off the developer's real ~/.agents,
+# ~/.claude, ~/.config, etc.
+# ---------------------------------------------------------------------------
+
+WIKI_SKILL_NAMES = ("ws-search", "ws-update", "ws-tend")
+"""The three first-party skills install materializes (mirror of WIKI_SKILLS)."""
+
+KEPANO_SKILL_NAMES = ("obsidian-markdown", "obsidian-bases")
+"""The two vendored kepano deps install materializes (mirror of KEPANO_DEPS)."""
+
+ALL_SKILL_NAMES = WIKI_SKILL_NAMES + KEPANO_SKILL_NAMES
+"""Every skill name install writes, in the install order (wiki skills first)."""
+
+# Detection markers, one per harness, mkdir'd into the fake home so a
+# subprocess `install --all` / `doctor` detects all seven deterministically.
+_HARNESS_MARKER_DIRS = (
+    ".claude", ".codex", ".gemini", ".config/opencode",
+    ".copilot", ".cursor", ".kiro",
+)
+
+_REPO_SRC = Path(__file__).resolve().parent.parent / "src"
+"""Absolute path to the package's `src/` — injected as PYTHONPATH so the
+subprocess imports the in-tree package even without an editable install."""
+
+
+def seed_fake_home(home: Path) -> Path:
+    """Create every harness detection marker under `home` and return it.
+
+    `install --all` ignores detection, but `doctor` and a bare `install`
+    report per-harness state, so seeding all markers makes the subprocess see
+    the full HARNESSES matrix as "detected" — deterministic across machines.
+    """
+    for d in _HARNESS_MARKER_DIRS:
+        (home / d).mkdir(parents=True, exist_ok=True)
+    (home / ".codex" / "config.toml").touch()  # codex's file-form detect marker
+    return home
+
+
+def run_cli_subprocess(
+    args: list[str], home: Path, *, cwd: Path | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run `python -m wiki_spaces.cli <args>` in a subprocess with a fake HOME.
+
+    Returns the `CompletedProcess` (`.returncode`, `.stdout`, `.stderr`). The
+    env pins HOME / USERPROFILE / XDG_CONFIG_HOME at the fake home so every
+    frozen `_common` path resolves under it, and PYTHONPATH at the in-tree
+    `src/` so the subprocess imports this checkout's package.
+    """
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "USERPROFILE": str(home),
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "PYTHONPATH": str(_REPO_SRC),
+    }
+    return subprocess.run(
+        [sys.executable, "-m", "wiki_spaces.cli", *args],
+        env=env,
+        capture_output=True,
+        text=True,
+        cwd=str(cwd) if cwd is not None else str(home),
+    )
+
+
+def seed_source_tree(read_root: Path) -> Path:
+    """Materialize a minimal install source tree under `read_root`.
+
+    Lays down `skills/<wiki-skill>/SKILL.md` and
+    `vendor/kepano/<dep>/SKILL.md` for every install skill so the lower-level
+    `install_hub` / `install_harness_aliases` / `_install_skill_target`
+    functions find a source for each (mirrors `_common.skill_rel`). Returns
+    `read_root`.
+    """
+    for skill in WIKI_SKILL_NAMES:
+        d = read_root / "skills" / skill
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "SKILL.md").write_text("ok", encoding="utf-8")
+    for skill in KEPANO_SKILL_NAMES:
+        d = read_root / "vendor" / "kepano" / skill
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "SKILL.md").write_text("ok", encoding="utf-8")
+    return read_root
+
+
+# ---------------------------------------------------------------------------
 # Tree builders.
 # ---------------------------------------------------------------------------
 

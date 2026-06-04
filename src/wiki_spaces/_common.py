@@ -48,6 +48,16 @@ CONFIG_PATH = XDG_CONFIG_HOME / "wiki-spaces" / "config"
 WIKI_SKILLS = ("ws-search", "ws-update", "ws-tend")
 KEPANO_DEPS = ("obsidian-markdown", "obsidian-bases")
 
+
+def skill_rel(skill: str) -> str:
+    """Relative path from a data root to a skill directory.
+
+    The single definition of the skill-layout convention — install (producer)
+    and doctor (consumer) both route through it so the paths cannot drift
+    (HANDBOOK: one value, one definition; producer=consumer).
+    """
+    return ("skills" if skill in WIKI_SKILLS else "vendor/kepano") + f"/{skill}"
+
 DATA_SENTINELS = ("AGENTS.md", "CONVENTIONS.md", "references", "skills")
 
 
@@ -117,47 +127,81 @@ def installed_root() -> Path:
     return data_root()
 
 
+COMMON_SKILLS_DIR = HOME / ".agents" / "skills"
+
+
 @dataclass(frozen=True)
 class Harness:
     key: str
     detect: tuple[Path, ...]
-    skills_dir: Path
+    reads_hub: bool
+    alias_dirs: tuple[Path, ...]
+    source_url: str
 
 
+# Hub-maximalism: install once into COMMON_SKILLS_DIR; only harnesses that do
+# not read the hub get aliases into their native skills dirs.
+# Live skills-doc confirmations for the HARNESSES matrix:
+# claude: confirmed native ~/.claude/skills and no ~/.agents hub; duplicate names are precedence-ordered — "Where skills live" lists Personal `~/.claude/skills/<skill-name>/SKILL.md`; "enterprise overrides personal, and personal overrides project" — https://code.claude.com/docs/en/skills (confirmed 2026-06-04)
+# codex: confirmed hub-only install target; developers doc lists USER `$HOME/.agents/skills` and says duplicate names are not merged — "Where to save skills" / "Codex reads skills from repository, user, admin, and system locations"; "If two skills share the same `name`, Codex doesn’t merge them" — https://developers.openai.com/codex/skills (confirmed 2026-06-04)
+# codex: confirmed conflicting native-dir source but hub-read resolves alias need — "Installing Skills" says "Skills are stored in `$CODEX_HOME/skills/` (typically `~/.codex/skills/`)" — https://openai-codex.mintlify.app/features/skills (confirmed 2026-06-04)
+# gemini: confirmed native ~/.gemini/skills plus ~/.agents hub; duplicate names are precedence-ordered — "Discovery tiers" lists "User skills: Located in `~/.gemini/skills/` or the `~/.agents/skills/` alias"; "Precedence and aliases" says `.agents/skills/` takes precedence — https://geminicli.com/docs/cli/skills (confirmed 2026-06-04)
+# opencode: confirmed native ~/.config/opencode/skills plus documented compat hub; duplicate names must be unique/no precedence documented — "Place files" lists `~/.config/opencode/skills/<name>/SKILL.md` and "Global agent-compatible: `~/.agents/skills/<name>/SKILL.md`"; troubleshooting says "Ensure skill names are unique across all locations" — https://opencode.ai/docs/skills (confirmed 2026-06-04)
+# copilot: confirmed native ~/.copilot/skills plus ~/.agents hub; duplicate-name precedence is not defined on the page — "Creating and adding a skill" says personal skills use "`~/.copilot/skills` or `~/.agents/skills`" and project skills include `.agents/skills` — https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-skills (confirmed 2026-06-04)
+# cursor: confirmed native ~/.cursor/skills plus ~/.agents hub; duplicate-name precedence is not defined on the page — "How do I create a skill?" says skills are loaded from ".agents/skills/, .cursor/skills/, ~/.agents/skills/ (global), and ~/.cursor/skills/ (global)" — https://cursor.com/help/customization/skills (confirmed 2026-06-04)
+# kiro: confirmed native ~/.kiro/skills and no ~/.agents hub; duplicate names are precedence-ordered — "Skill scope" says global skills reside under `~/.kiro/skills/`; "In case of conflicting names between global and workspace skills, Kiro will prioritize the workspace skill" — https://docs.kiro.dev/skills (confirmed 2026-06-04)
 HARNESSES: tuple[Harness, ...] = (
     Harness(
         "claude",
         detect=(HOME / ".claude", Path(".claude")),
-        skills_dir=HOME / ".claude/skills",
+        reads_hub=False,
+        alias_dirs=(HOME / ".claude" / "skills",),
+        source_url="https://code.claude.com/docs/en/skills",
     ),
     Harness(
         "codex",
         detect=(HOME / ".codex/config.toml", HOME / ".codex"),
-        skills_dir=HOME / ".codex/skills",
+        reads_hub=True,
+        alias_dirs=(),
+        source_url="https://developers.openai.com/codex/skills",
     ),
     Harness(
         "gemini",
         detect=(HOME / ".gemini",),
-        skills_dir=HOME / ".gemini/skills",
+        reads_hub=True,
+        alias_dirs=(),
+        source_url="https://geminicli.com/docs/cli/skills",
     ),
     Harness(
-        # Google Antigravity nests its skills under ~/.gemini/antigravity/;
-        # detecting that subdir (not ~/.gemini) keeps it distinct from the
-        # Gemini CLI harness above. An Antigravity-only machine still trips
-        # gemini's ~/.gemini detect — harmless (an unused ~/.gemini/skills/).
-        "antigravity",
-        detect=(HOME / ".gemini/antigravity",),
-        skills_dir=HOME / ".gemini/antigravity/skills",
+        "opencode",
+        detect=(HOME / ".config/opencode", Path(".opencode")),
+        reads_hub=True,
+        alias_dirs=(),
+        source_url="https://opencode.ai/docs/skills",
     ),
     Harness(
-        "hermes",
-        detect=(HOME / ".hermes",),
-        skills_dir=HOME / ".hermes/skills",
+        "copilot",
+        detect=(HOME / ".copilot",),
+        reads_hub=True,
+        alias_dirs=(),
+        source_url=(
+            "https://docs.github.com/en/copilot/how-tos/copilot-cli/"
+            "customize-copilot/add-skills"
+        ),
+    ),
+    Harness(
+        "cursor",
+        detect=(HOME / ".cursor", Path(".cursor")),
+        reads_hub=True,
+        alias_dirs=(),
+        source_url="https://cursor.com/help/customization/skills",
     ),
     Harness(
         "kiro",
         detect=(Path(".kiro"), HOME / ".kiro"),
-        skills_dir=HOME / ".kiro/skills",
+        reads_hub=False,
+        alias_dirs=(HOME / ".kiro" / "skills",),
+        source_url="https://docs.kiro.dev/skills",
     ),
 )
 
@@ -508,13 +552,19 @@ class LinkResult(Enum):
 
 
 class InstalledState(Enum):
-    """State of an installed skill destination, reported by `installed_state`."""
+    """State of an installed skill destination, reported by `installed_state`.
+
+    `WRONG_SHAPE` mirrors install's shape gate (a plain file at a skill path is
+    refused by `_can_overwrite_skill` as `PLAIN_FILE`); without it the consumer
+    would silently bless what the producer refused (HANDBOOK: producer=consumer).
+    """
     MISSING = "missing"
     SYMLINK_OK = "symlink-ok"
     SYMLINK_EXTERNAL = "symlink-external"
     SYMLINK_BROKEN = "symlink-broken"
     COPY_CURRENT = "copy-current"
     COPY_STALE = "copy-stale"
+    WRONG_SHAPE = "wrong-shape"
 
 
 def link_or_copy(src: Path, dst: Path, *, prefer_copy: bool = False) -> LinkResult:
@@ -552,8 +602,8 @@ def link_or_copy(src: Path, dst: Path, *, prefer_copy: bool = False) -> LinkResu
         # Mirror, not merge: replace an existing destination dir so a file
         # removed upstream cannot linger beside the current ones on reinstall
         # (HANDBOOK: one source of truth; delete superseded). Safe — the only
-        # caller (`install`) gates on `is_owned_install`/`--force` first, and
-        # the symlink path already replaces the dir.
+        # caller (`install`) gates on `can_overwrite_skill`/`--force` first,
+        # and the symlink path already replaces the dir.
         if dst.is_dir() and not dst.is_symlink():
             shutil.rmtree(dst)
         shutil.copytree(src_resolved, dst, symlinks=False)
@@ -577,11 +627,17 @@ def _max_mtime(p: Path) -> float:
 
 def installed_state(dst: Path, src: Path) -> InstalledState:
     """Return a one-word state: symlink-ok, symlink-external, symlink-broken,
-    copy-current, copy-stale, missing.
+    copy-current, copy-stale, wrong-shape, missing.
 
     symlink-external means the symlink resolves to an existing path that
     is not the expected source — typically because the skill was
     installed via a different mechanism (e.g. an aggregator directory).
+
+    wrong-shape means dst exists as a plain file (or symlink to a file)
+    where a skill directory was expected. Install's `_can_overwrite_skill`
+    refuses that destination as `PLAIN_FILE`; the consumer must agree, or
+    a refused-but-present plain file would read as `copy-current` and be
+    silently accepted (HANDBOOK: producer=consumer).
 
     For directories, copy-current/stale compares the latest mtime of any
     file inside (recursively).
@@ -600,6 +656,8 @@ def installed_state(dst: Path, src: Path) -> InstalledState:
             if target.exists()
             else InstalledState.SYMLINK_BROKEN
         )
+    if not dst.is_dir():
+        return InstalledState.WRONG_SHAPE
     return (
         InstalledState.COPY_CURRENT
         if _max_mtime(dst) >= _max_mtime(src)
@@ -608,26 +666,6 @@ def installed_state(dst: Path, src: Path) -> InstalledState:
 
 
 OWNED_MARKER = ".installed-by-wiki-spaces"
-
-
-def is_owned_install(dst: Path) -> bool:
-    """True when dst is safe for wiki-spaces to overwrite.
-
-    Ownership signals:
-    - dst does not exist (nothing to overwrite).
-    - dst is any symlink (we make symlinks by default; treat as ours).
-    - dst is a directory containing the OWNED_MARKER file.
-
-    A plain directory or file at dst without the marker is treated as
-    user-owned content; install must refuse without --force.
-    """
-    if not dst.exists() and not dst.is_symlink():
-        return True
-    if dst.is_symlink():
-        return True
-    if dst.is_dir() and (dst / OWNED_MARKER).is_file():
-        return True
-    return False
 
 
 def write_owned_marker(dst: Path, src: Path) -> None:

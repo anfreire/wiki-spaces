@@ -14,6 +14,13 @@ from pathlib import Path
 import pytest
 
 from wiki_spaces import doctor
+from wiki_spaces._common import Harness
+
+from tests.conftest import (
+    ALL_SKILL_NAMES,
+    run_cli_subprocess,
+    seed_fake_home,
+)
 
 
 def _run_main(monkeypatch, cfg, *, wiki_state=None, repo_state=None):
@@ -286,3 +293,101 @@ def test_check_vendor_handles_non_utf8_commit_without_crashing(tmp_path, monkeyp
     doctor.check_vendor(net=False)  # must not raise
     out = capsys.readouterr().out
     assert "COMMIT" in out
+
+
+# ---------- hub + alias reporting (in-process, no HOME dependence) ----------
+
+
+def _harness(key: str, *, reads_hub: bool, alias_dir: Path | None = None) -> Harness:
+    return Harness(
+        key=key,
+        detect=(),
+        reads_hub=reads_hub,
+        alias_dirs=((alias_dir,) if alias_dir is not None else ()),
+        source_url="https://example.test/skills",
+    )
+
+
+def test_check_harness_hub_reader_reports_served_by_hub(capsys):
+    doctor.check_harness(_harness("codex", reads_hub=True))
+    out = capsys.readouterr().out
+    assert "codex:" in out
+    assert "served by hub" in out
+
+
+def test_check_harness_undetected_hub_reader_uses_conditional_wording(capsys):
+    doctor.check_harness(_harness("codex", reads_hub=True))
+    out = capsys.readouterr().out
+    assert "codex: not detected" in out
+    assert "would be served by hub if present" in out
+
+
+def test_check_harness_non_hub_lists_each_skill(tmp_path, capsys):
+    alias_dir = tmp_path / "claude" / "skills"
+    doctor.check_harness(_harness("claude", reads_hub=False, alias_dir=alias_dir))
+    out = capsys.readouterr().out
+    assert "served by hub" not in out
+    for skill in ALL_SKILL_NAMES:
+        assert skill in out
+
+
+# ---------- subprocess fake-HOME verification of the install + doctor flow ----------
+
+_HUB_READER_KEYS = ("codex", "gemini", "opencode", "copilot", "cursor")
+_ALIAS_KEYS = ("claude", "kiro")
+
+
+@pytest.fixture(scope="module")
+def doctor_after_install(tmp_path_factory):
+    home = seed_fake_home(tmp_path_factory.mktemp("home"))
+    install = run_cli_subprocess(["install", "--all"], home)
+    assert install.returncode == 0, install.stderr
+    init = run_cli_subprocess(["init", str(home / "wiki")], home)
+    assert init.returncode == 0, init.stderr
+    result = run_cli_subprocess(["doctor", "--no-net"], home)
+    return result
+
+
+def test_doctor_green_after_install_with_seeded_wiki(doctor_after_install):
+    assert doctor_after_install.returncode == 0, doctor_after_install.stderr
+    assert "doctor: OK" in doctor_after_install.stdout
+
+
+@pytest.mark.parametrize("key", _HUB_READER_KEYS)
+def test_doctor_reports_served_by_hub_for_hub_readers(doctor_after_install, key):
+    parts = doctor_after_install.stdout.split(f"{key}: detected", 1)
+    assert len(parts) == 2, f"{key} section absent"
+    block = parts[1].split("\n\n", 1)[0]
+    assert "served by hub" in block
+
+
+@pytest.mark.parametrize("key", _ALIAS_KEYS)
+def test_doctor_reports_symlink_ok_aliases_for_non_hub_harnesses(
+    doctor_after_install, key
+):
+    assert f"{key}: detected" in doctor_after_install.stdout
+    alias_section = doctor_after_install.stdout.split(f"{key}: detected", 1)[1]
+    for skill in ALL_SKILL_NAMES:
+        assert f"{skill:22s} -> " in alias_section
+
+
+def test_doctor_reports_no_false_drift(doctor_after_install):
+    out = doctor_after_install.stdout
+    assert "hub incomplete" not in out
+    assert "symlink-broken" not in out
+    assert "symlink-external" not in out
+    assert ": missing" not in out
+
+
+@pytest.mark.parametrize("skill", ALL_SKILL_NAMES)
+def test_doctor_flags_incomplete_hub_when_skill_deleted(tmp_path, skill):
+    home = seed_fake_home(tmp_path / "home")
+    assert run_cli_subprocess(["install", "--all"], home).returncode == 0
+    assert run_cli_subprocess(["init", str(home / "wiki")], home).returncode == 0
+
+    (home / ".agents" / "skills" / skill).unlink()
+
+    result = run_cli_subprocess(["doctor", "--no-net"], home)
+    assert f"{skill:22s} -> " in result.stdout
+    assert "missing" in result.stdout
+    assert "hub incomplete" in result.stdout

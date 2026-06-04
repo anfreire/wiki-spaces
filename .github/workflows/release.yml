@@ -102,8 +102,11 @@ jobs:
       - name: Install --all --dry-run
         run: smoke/bin/wiki-spaces install --all --dry-run
 
-      - name: Bridge snippet emits
-        run: smoke/bin/wiki-spaces install --bridge cursor > /dev/null
+      - name: Hub install smoke
+        run: |
+          smoke_home="$(mktemp -d)"
+          HOME="$smoke_home" smoke/bin/wiki-spaces install --all
+          test -d "$smoke_home/.agents/skills/ws-search" || { echo "hub not populated"; exit 1; }
 
       - name: Packaged --help hides vendor-kepano
         run: |

@@ -13,3 +13,4 @@ build/
 .pytest_cache/
 .claude/
 _archives/
+.opencode/

@@ -6,7 +6,7 @@ Markdown flavor is **Obsidian** — wikilinks, frontmatter, callouts, embeds, co
 
 ## Audience
 
-wiki-spaces is built for **AI coding harnesses with filesystem access** — Claude Code, Codex, Cursor, Windsurf, Gemini CLI, Aider, and similar tools that read and write local files. Browser-only AI assistants (ChatGPT in a tab, Claude.ai web) are out of scope: they can't reach the filesystem to read or write your wiki. If your AI lives in a browser, this isn't the tool.
+wiki-spaces is built for **AI coding harnesses with filesystem access** — Claude Code, Codex, Cursor, Copilot, Gemini CLI, OpenCode, and Kiro. Browser-only AI assistants (ChatGPT in a tab, Claude.ai web) are out of scope: they can't reach the filesystem to read or write your wiki. If your AI lives in a browser, this isn't the tool.
 
 The *shape* of the wiki — research notes, recipes, journal, team reference, anything — is yours. The *harness* that drives it is what wiki-spaces assumes you have.
 
@@ -16,7 +16,7 @@ Installing gives your agent the reference skills plus a scaffolded, registered w
 
 ### Let your AI agent do it (recommended)
 
-Paste this to your coding agent (Claude Code, Codex, Cursor, Windsurf, Gemini CLI, Antigravity, …):
+Paste this to your coding agent (Claude Code, Codex, Cursor, Copilot, Gemini CLI):
 
 ```
 Install and set up wiki-spaces for me by following the instructions here:
@@ -34,7 +34,7 @@ uvx wiki-spaces init ~/notes --adopt     # OR adopt an existing folder of notes
 uvx wiki-spaces doctor --no-net          # verify
 ```
 
-`install` auto-detects and links the skills into whichever of **Claude Code, Codex, Gemini CLI, Antigravity, Hermes, and Kiro** are present (`--all` pre-positions for every one). Cursor and Windsurf have no global skills directory — they integrate via a generated rule-file snippet (`wiki-spaces install --bridge cursor|windsurf`). GitHub Copilot and Aider integrate via a manual rule snippet — see [`HARNESS_INTEGRATION.md`](references/HARNESS_INTEGRATION.md) for both. For a permanent install, `pip install wiki-spaces` or `uv tool install wiki-spaces`, then drop the `uvx` prefix.
+`install` writes every skill once into the hub directory (`~/.agents/skills/`) — this hub is read directly by Codex, Gemini CLI, OpenCode, Copilot, and Cursor. For harnesses without hub support — like Claude Code and Kiro — the installer creates per-skill aliases in their native directories (`~/.claude/skills/` and `~/.kiro/skills/` respectively). See [`HARNESS_INTEGRATION.md`](references/HARNESS_INTEGRATION.md) for details on supported harnesses. For a permanent install, run `pip install wiki-spaces` or `uv tool install wiki-spaces`, then drop the `uvx` prefix.
 
 `init` always emits `## Spaces` in the new wiki's `index.md` from t=0 so the `space` subcommands work immediately. `--adopt` walks the existing folder, registers every nested folder containing `index.md` in its ancestor's `## Spaces`, and inserts `## Spaces` into any pre-existing index that lacks the heading (the v1 navigation contract — a wiki is a folder with `index.md` AND `## Spaces`). After adoption every folder carries both, so audit reports zero drift on day 1. External subtrees (`shared/`, foreign submodules, escaping symlinks) are skipped with a per-skip notice; pass `--include-external` to override.
 
@@ -72,8 +72,6 @@ Three reference skills your AI agent uses to work with the wiki:
 - `ws-search` — find content
 - `ws-update` — capture / save / sync, with per-file size discipline (hard caps at write time, see [`CONVENTIONS.md` § `_meta/limits.md`](CONVENTIONS.md))
 - `ws-tend` — audit, normalize tags, cross-link
-
-Cursor / Windsurf / Copilot / Aider integration is covered under [Install](#install) above and in [`HARNESS_INTEGRATION.md`](references/HARNESS_INTEGRATION.md).
 
 ## Search at scale
 
