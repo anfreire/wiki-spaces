@@ -1,0 +1,13 @@
+spaces: 6  pages: 12
+contract bare/index.md: no ## Spaces heading (audit --fix inserts it)
+drift index.md: missing entry for bare/ (audit --fix registers owned children)
+drift index.md: missing entry for unregistered/ (audit --fix registers owned children)
+drift index.md: stale entry missing/ (no index.md on disk)
+broken notes.md: [[nope]]
+over-cap big.md: 15008 > 15000 bytes — split, promote, or trim
+over-cap tiny.md: 32 > 10 bytes — split, promote, or trim
+orphans (3 — informational, a page may be standalone on purpose):
+  . big.md
+  . orphan.md
+  . tiny.md
+issues: 7

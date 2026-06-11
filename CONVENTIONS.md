@@ -1,350 +1,138 @@
 # Conventions
 
-This is the opt-in catalog of conventions a wiki may adopt. Every section is independent — pick the markers that fit your use case; tools degrade where a marker is absent. The [spec](AGENTS.md) defines `index.md` with a `## Spaces` heading as the required floor; everything in this catalog is layered on top.
+This catalog lists the opt-in conventions a wiki can adopt. Every section is independent. Pick the markers that fit your vault. Skills degrade where a marker is absent. The spec defines `index.md` with a `## Spaces` heading as the required floor. Everything here is layered on top.
 
-**"Tools" in this catalog** means the three reference skills (`ws-search`, `ws-update`, `ws-tend`) — LLM-driven procedures that read these markers and degrade gracefully. The `wiki-spaces` CLI handles `install` / `init` / `doctor` / `space` / `manifest` / `vendor-kepano` only; runtime knowledge operations (search, capture, audit, normalize, colorize) live in the skills.
+Skills are LLM-driven procedures that read these markers and degrade gracefully. They're self-contained after installation. A bundled read-mostly script `scripts/ws.py` per skill handles local operations.
 
-**Obsidian-flavored markdown is the wire format** — see [`AGENTS.md` / Markdown flavor](AGENTS.md#markdown-flavor). Syntax facts (wikilinks, frontmatter, callouts, embeds, comments, Bases) live in [`vendor/kepano/obsidian-markdown`](vendor/kepano/obsidian-markdown/SKILL.md) and [`vendor/kepano/obsidian-bases`](vendor/kepano/obsidian-bases/SKILL.md). Cite those skills, never restate their contents.
-
----
-
-## Memory-aid conventions
-
-Four conventions compose well for wikis used as a *memory aid* (research notes, developer notebooks, technical wikis) rather than a *content store* (recipes, journals, runbooks, contact lists, curricula). Each is independently usable; pick any subset.
-
-- [Frontmatter schema](#frontmatter-schema) — `title`, `tags`, `summary`, `sources`, etc.
-- [Page template](#page-template) — `## Key Ideas` / `## Open Questions` body shape
-- [Provenance markers](#provenance-markers) — `%%inferred%%` / `%%ambiguous%%` on claims
-- [Noise filter](#noise-filter) — "skip what code answers; capture what took 30 minutes"
-
-Content-store wikis typically skip these four. Both flavors can still adopt the rest of the catalog (`log.md`, `_meta/taxonomy.md`, `_meta/limits.md`, `.manifest.json`, `.obsidian/`, etc.) independently.
-
----
-
-## Example opt-in bundles
-
-A new wiki needs `index.md` with a `## Spaces` heading to be valid (per the [spec](AGENTS.md)). Beyond that, the bundle of opt-in markers that's useful varies by use case. Examples — none are required:
-
-| Use case | Suggested bundle |
-|---|---|
-| Developer notebook | `log.md` + `_meta/taxonomy.md` + `.manifest.json` |
-| Research wiki | `log.md` + `_meta/taxonomy.md` |
-| Writing project | `hot.md` |
-| Recipe collection | (none — pure content) |
-| Personal knowledge | (none — pure content) |
-| Team reference | `log.md` + `_meta/taxonomy.md` |
-
-Each opt-in is independent — adopt any combination. Frontmatter (see § Frontmatter schema) is per-page rather than a bundle file; mixed adoption is permitted. The catalog below explains what each marker enables; skip any of them and the corresponding tooling step degrades. The scaffold command takes any subset: `wiki-spaces init <path> --with log.md _meta/taxonomy.md` (prefix with `uvx` for no-install runs).
-
-> See `references/SETUP.md` for the combined install priors (folders + opt-ins + git) presented per use case.
+Obsidian-flavored markdown is the wire format. Syntax facts (wikilinks, frontmatter, callouts, embeds, comments, Bases) live in the kepano skills.
 
 ---
 
 ## Discovery via config
 
-Skills locate the user's canonical wiki by reading `${XDG_CONFIG_HOME:-~/.config}/wiki-spaces/config`. Plain text, key = value, blank lines ignored; whole-line comments start with `#`. Inline `#` is not a comment marker — paths may legitimately contain `#`, so keep comments on their own lines:
+The optional config file `~/.config/wiki-spaces/config` is plain text. Its only key is the `wiki` pointer naming your canonical personal wiki:
 
 ```
 # wiki-spaces config
-# wiki: canonical wiki path (must contain index.md with `## Spaces`)
-# repo: path to wiki-spaces install (share dir from `wiki-spaces install`, or source checkout)
 wiki = /home/you/Wiki
-repo = /home/you/.local/share/wiki-spaces
 ```
 
-Both keys are absolute paths — relative paths are refused by the CLI's resolvers AND by `doctor`, since a relative config would silently target a different wiki per CWD. `wiki` points to a folder containing `index.md` with a `## Spaces` heading; `repo` points to the wiki-spaces install — the share dir written by `wiki-spaces install` (PyPI users) or a source checkout (dev users) — so skills can fetch `AGENTS.md`, `CONVENTIONS.md`, and `references/` on demand. When `wiki` is **missing entirely** (no config or no `wiki` key), skills fall through to the resolution order below (CWD discovery, then inline setup); when `wiki` is **set but invalid** (path doesn't exist, isn't absolute, or lacks `index.md`/`## Spaces` for read commands), the CLI refuses with a clear error and skills surface that error — they do NOT silently redirect to a different wiki. When `repo` is missing or invalid, skills fail soft on docs-fetching steps only — they fall back to the raw GitHub URL where possible and tell the user `wiki-spaces install` would fix the local path.
-
-**One canonical wiki per user.** wiki-spaces is built around a single wiki you call yours; the tooling assumes that. Users who want to switch between multiple wikis can swap configs manually. The single-wiki model is what makes global capture, cross-linking, and "open in Obsidian" all work coherently.
-
-Bootstrap: `wiki-spaces install` writes the `repo` key automatically; `wiki-spaces init` writes the `wiki` key when scaffolding (unless `--no-config`).
-
-**Resolution order.** Skills resolve the target wiki in three steps, **each step short-circuits**: (1) an explicit path or named space in the user's request — if invalid, fail (no fallback); (2) the `wiki` value in the config — if invalid (not absolute, missing on disk, missing `index.md`, or for read commands missing `## Spaces`), fail (no fallback). Step (3) **CWD ancestor** runs only when no config `wiki` is set at all: the nearest ancestor of the current working directory that contains `index.md` with `## Spaces`. Step 3 lets a no-install wiki work whenever the agent runs from inside it; skills note once when step 3 was the source and suggest `wiki-spaces init` to register it. A folder with `index.md` but no `## Spaces` is *not* a wiki under the v1 contract — read-only commands refuse to operate on it, while write commands (`space add`, `space remove`, `space mount`, `space promote`, `audit --fix`) auto-insert `## Spaces` as the first mutation step.
-
-When all three miss — no config *and* the CWD is not inside any wiki — every skill drives the setup flow inline before doing its own work. `ws-update` owns the canonical Initialization procedure (`ws-update/SKILL.md` § Initialization, which mirrors `references/SETUP.md`); `ws-search` and `ws-tend` follow the same flow (reading `<repo>/references/SETUP.md` directly when `repo` is set, the raw GitHub URL otherwise) and resume the user's original request once `wiki-spaces init` has registered the wiki.
-
-**CWD informs placement, not wiki choice.** Once a wiki is resolved by any step above, CWD and conversation context decide only *where within that wiki* a write goes — a project space vs global concepts — never which wiki to use. A configured `wiki` is never overridden by CWD; CWD acts as a discovery source only in step 3, the fallback when neither an explicit path nor a config is available.
-
-## Per-space convention auto-detection
-
-Each space is autonomous: optional conventions (frontmatter, `_meta/taxonomy.md`, `log.md`, etc.) are detected by file presence *within that space*. Parent conventions do not propagate to children. Each space picks its own conventions independently — but every space carries the same required `## Spaces` heading per [AGENTS.md](AGENTS.md).
-
-**Scope-root operations.** When a tool operates on a specific space (the wiki, or a space the user named), every convention check happens at *that scope's root* — not at an ancestor. The `log.md` appended to is the one at the scope being operated on. The taxonomy enforced is the one at that scope. The `.manifest.json` consulted is that scope's. Skip the marker at that scope and the corresponding step degrades for that scope only.
-
-## Owned vs external
-
-Per [`AGENTS.md / Sharing & nesting`](AGENTS.md#sharing--nesting), tools distinguish *owned* spaces (yours) from *external* spaces (mounts you don't own). Detection heuristic, in order:
-
-1. Path is under `<wiki>/shared/` → external.
-2. Path is a git submodule (in `.gitmodules`) whose origin URL doesn't match the wiki's own origin → external.
-3. Path is a symlink whose realpath resolves outside the wiki tree → external.
-4. Otherwise → owned.
-
-**Read operations** (search, status, audit) cross owned spaces by default. External spaces are visited only when the user explicitly names one or asks to include all.
-
-**Write operations** stay within the targeted space. Other spaces — owned or external — are written to only with explicit instruction.
-
-**Why does `mount` work without `--force-external` but `add shared/...` requires it?** Intentional. `mount` opts into external scope by construction — the command exists to set up external mounts, and the default destination (`shared/<basename>/`) is itself an external path. `add shared/...` requires `--force-external` because the user typed an owned-add verb against an externally-classified path, which is almost always a mistake; the flag is the explicit acknowledgement.
-
-**Traversal safeguards** (when crossing into other spaces):
-- Track visited realpaths (resolve symlinks) to break cycles.
-- Skip broken symlinks and uninitialized git submodules with a one-line notice; don't error out on them.
-- Refuse `..` traversal above the wiki root. External spaces reached through a legitimate `## Spaces` entry ARE in scope when the user opts in — the prohibition is on ascending lexically, not on cross-mount realpaths.
+The path must be absolute; relative paths and unknown lines are ignored. The config key is the final fallback in the resolution order, which — along with the ambiguity rules and trust scope — is defined in [AGENTS.md](AGENTS.md), not here. If nothing resolves, the operation cannot proceed; `ws-update` offers setup.
 
 ---
 
-## Sharing & permissions
+## Markers catalog
 
-For shared or collaborative spaces, the recommended mechanism is **git repositories**. Each shared space is its own git repo; embed it in a parent via git submodule, clone, or symlink (see [`AGENTS.md` / Sharing & nesting](AGENTS.md#sharing--nesting) — all FS mechanisms remain valid; this section recommends one).
+### `log.md`
 
-**Two-gate write protection.** Tools should avoid accidental out-of-scope writes; sharing-aware tools should preflight ownership before mutating git-backed spaces they don't own.
+Optional append-only notes. When present, skills append one ISO-8601-UTC-timestamped line per operation. No structured-field schema is enforced. Log files are never archived or rotated. Concurrency locks are not guaranteed.
 
-1. **First gate (always on).** The trust scope clause in [`AGENTS.md`](AGENTS.md#sharing--nesting) defaults *write operations* to the targeted space only. Other spaces — owned or external — are written to only when the user's request explicitly includes them (naming a space, asking for all, or any clear instruction). Read operations follow their own rule: they cross owned spaces by default; external spaces require opt-in. Both rules are scope-based, not ownership-based — and together form the primary safety net.
-
-2. **Second gate (only if backed by git).** Push access on the remote is the de facto upstream-publication permission. Without push access, local commits succeed but `git push` fails — changes never reach collaborators. This is a publication backstop, not a write-time check.
-
-**Honest caveat.** Push-as-permissions is a *late* check: local commits succeed; only the push fails. For agent-driven workflows this can surprise the user hours later. Always rely on the trust scope (gate #1) as the primary protection; treat push permissions as the safety net.
-
-**For local-only or private wikis,** git is not required. A folder with `index.md` containing a `## Spaces` heading is a complete wiki. Add git when you decide to share or back up.
-
-**Submodules.** When nesting shared spaces as git submodules:
-- Cloners need `git clone --recursive` (or `git submodule update --init` after a plain clone). Mention this in your wiki's `index.md` if you use them.
-- Submodules pin a SHA; the parent sees the pinned version until `git submodule update --remote` advances the working tree.
-- After advancing, the new SHA is only local until you commit the parent repo's updated submodule pointer (gitlink) and push.
-- GitHub release ZIPs do NOT include submodule contents.
-
----
-
-## `index.md`
-
-**If present (with a `## Spaces` heading):** This folder is a space (per the [spec](AGENTS.md)). `index.md` typically carries three sections:
-
-- **`## What this space is`** — opening paragraph, plain prose. The space's own description; preserved across regenerations.
-- **`## Items`** — optional, purely human-facing navigation: a hand-picked landing list of files or folders worth surfacing. Tools never read or write it.
-- **`## Spaces`** — the navigation map: every space directly inside this one, listed once. The convention: the parent owns the link entry, the child owns its content. Adding a space inside means adding an entry here in the same change; removing a space means removing the entry. Tools rely on `## Spaces` being complete to traverse the tree.
-
-Entries in `## Items` and `## Spaces` are markdown bullet lists, one per line. Order is the author's choice (typically navigational, not alphabetical):
-
-- `## Items` — `[label](relative/path)` or `[[wikilink]]`, with an optional ` — short description`. Files and plain folders (folders without their own `index.md`) both belong here when worth surfacing. Hidden control files (`.manifest.json`, `_meta/...`, `_template.md`) are conventionally omitted unless a human reader needs to navigate to them.
-- `## Spaces` — `[label](sub-folder/index.md)`, with an optional ` — short description`.
-
-`## Items` carries no contract — it is human-maintained and tools never touch it. `## Spaces` is the opposite: meant to be exhaustive, so tools maintain it and flag sub-folders with `index.md` that aren't listed.
-
-### Malformed `## Spaces` entries
-
-Audit reports the following entry shapes as errors (and flips the exit code):
-
-- Empty href (e.g. `- []()`).
-- Absolute-path href (e.g. `- [foo](/abs/path/index.md)`).
-- Href containing `..` segments.
-- Href that escapes the wiki root after symlink resolution (excluding legitimate external mounts under `shared/` or foreign submodules, which are classified external rather than malformed).
-- Reserved-name href segment (hidden `.X`, `_archives`, `_meta`) — consumer walkers prune these by convention; the entry is unreachable.
-- Markdown link metacharacters (`[`, `]`, `(`, `)`, `{`, `}`) in the href — the entry regex stops at the first `)` and the registration becomes silently incomplete.
-- Duplicate entries pointing at the same directory.
-
-Consumer traversal (`space list`, `space files`, the contract walker) silently skips these entries; `space audit` surfaces them so the user can repair. `audit --fix` does **NOT** auto-repair malformed entries — they signal author intent the framework can't reconstruct from disk.
-
-Skip the optional `## What this space is` or `## Items` sections and `index.md` still marks the folder as a wiki **provided `## Spaces` is present** (per the [spec](AGENTS.md)). Tools that lean on optional conventions degrade where they aren't followed — your wiki is still your wiki.
-
-**If absent:** This folder is not a wiki. Tools refuse to operate.
-
----
-
-## `log.md`
-
-**If present:** Tools append one line per operation. Format:
-
-```
-- [TIMESTAMP] OPERATION key=value key=value
-```
-
-`TIMESTAMP` is UTC ISO-8601. `OPERATION` is uppercase verb (`SEARCH`, `UPDATE`, `TEND`). Keys are operation-specific.
-
-The `wiki-spaces space log <OP> [--field k=v …]` CLI is the safe writer the skills use: it prepends the timestamp, holds an `fcntl.flock` on the parent directory for the whole check-rotate-append sequence (so concurrent writers never lose a line), and auto-rotates the file to `log.archive-<YYYYMMDD-HHMMSS>.md` when the append would exceed the `log.md` cap (default 100,000 chars; see [`_meta/limits.md`](#metalimitsmd)). Logging is opt-in: `--create` scaffolds `log.md` on first use; without it an absent file makes the writer refuse rather than auto-create.
-
-**If absent:** Tools skip logging. No log file is created automatically; create it (or run `wiki-spaces init <path> --with log.md`) to opt in.
-
----
-
-## `hot.md`
-
-**If present:** Free-form scratchpad for current active work. Tools may read it for context (e.g., `ws-search` may surface its mentions) but never rewrite it. Users own its content. Size-wise, `hot.md` carries a 100,000-char default cap (same as `log.md`) — it's a convention file, not a content page. Override in `_meta/limits.md` if needed.
-
-**If absent:** Tools ignore. No proxy file is created.
-
----
-
-## `.manifest.json`
-
-**If present:** Project sync state. Schema:
-
-```json
-{
-  "projects": {
-    "<project-slug>": {
-      "source_cwd": "/abs/path/to/source/repo",
-      "last_synced": "2026-05-14T10:30:00Z",
-      "last_commit_synced": "abc123",
-      "pages_in_vault": 12
-    }
-  }
-}
-```
-
-`last_commit_synced` is `null` when the source has no git. `ws-update` reads it to skip unchanged sources and writes it after each sync.
-
-**If malformed:** Tools warn once, treat the file as absent for this run, and refuse to overwrite it until the user repairs or removes it.
-
-**If absent:** `ws-update` performs a full scan on every sync. No project tracking.
-
-### How to safely update `.manifest.json`
-
-`.manifest.json` is an opt-in convention. Prefer the CLI writer so producers and consumers share the same locking, schema, and JSON-portability rules:
-
+Example shell one-liner to append:
 ```sh
-wiki-spaces manifest set <entry-id> key=value ...
+printf '%s UPDATE pages=2\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> log.md
 ```
 
-Without `--create`, `manifest set` refuses when the file is absent. Pass `--create` only when the user explicitly opts into the convention in this session. `manifest get <entry-id>` and `manifest list` read the same schema the writer enforces.
+If absent, skills skip logging.
 
-Custom writers should mirror the CLI with these properties:
+### `_meta/taxonomy.md`
 
-1. **Refuse on absent.** Logging is opt-in; so is the manifest. If the file isn't there, the user hasn't opted in — surface the absence rather than scaffolding.
-2. **Refuse on schema-invalid.** Don't silently overwrite a malformed file; warn and treat as absent for this run.
-3. **Reject non-finite JSON.** Python accepts `NaN`/`Infinity` and numeric overflows like `1e999` by default; reject them recursively on read and write, and use `json.dumps(..., allow_nan=False)` as the final backstop.
-4. **Lock the parent directory** with `fcntl.flock` so concurrent writers serialize. Locking the file itself doesn't serialize past an `os.replace` — the lock is inode-based, and `os.replace` swaps the inode out from under any holder. The parent directory's inode is stable.
-5. **Read fresh inside the lock.** Other writers may have committed since the caller's last read.
-6. **Write via `tempfile.mkstemp` + `os.replace`, fsyncing both the temp file and parent directory.** Fsyncing only the temp file persists its bytes; the directory fsync makes the rename durable.
-
-The canonical implementation of all six lives in `src/wiki_spaces/manifest.py` — `_read_manifest` + `_validate_manifest` (refuse-on-absent, schema, and non-finite checks, including the per-entry "must be a mapping" rule) and `_atomic_write_under_flock` (parent-directory lock + `tempfile.mkstemp` + `os.replace` + dual fsync). A custom writer should reproduce that behavior; read it there rather than copying a snippet here that would drift.
-
-Typed-field coercion (e.g. `pages_in_vault` is an int, `last_commit_synced` may be `null`) is the writer's responsibility when bypassing the CLI. Skills should use `wiki-spaces manifest set/get/list` rather than writing `.manifest.json` directly.
-
----
-
-## `_meta/taxonomy.md`
-
-**If present:** Canonical tag vocabulary. Applies to YAML frontmatter `tags:` fields. `ws-tend` normalizes those to the canonical list, suggests adding genuinely new tags that appear on 2+ pages, and rejects unknown one-off tags with a closest-match suggestion. `ws-update` consults it before assigning tags. Inline `#tag` syntax outside frontmatter is not normalized.
+Canonical tag vocabulary for YAML frontmatter `tags:` fields. When present, skills normalize tags to this list, suggest new tags appearing on multiple pages, and reject unknown one-off tags.
 
 Document shape:
 
 ```markdown
 # Tag Taxonomy
 
-Constraints: max 5 tags per page, lowercase/hyphenated.
+Constraints: max 5 tags per page, lowercase or hyphenated.
 
 ## Domain Tags
 
 | Tag | Purpose | Aliases |
 |---|---|---|
 | `python` | Python language, ecosystem | |
-...
 
 ## Type Tags
 
 | Tag | Purpose |
 |---|---|
 | `how-to` | Step-by-step procedure |
-...
 ```
 
-Aliases are mappings the normalizer uses to rewrite non-canonical tags to canonical form.
+If absent, tags are free-form.
 
-**If absent:** Tags are free-form. `ws-tend` skips tag normalization with a notice; `ws-update` does not enforce a vocabulary.
+### `_meta/limits.md`
 
----
+Size discipline is default-on. It's configured via this file. Caps are enforced in UTF-8 bytes. Frontmatter's included in the count. Basename-keyed defaults apply:
 
-## `_meta/limits.md`
-
-**Size discipline is default-on, configurable via this file.** Per-file character caps enforced at write time (by every framework writer — `wiki-spaces init`, `space add`, `space remove`, `space mount`, `space promote`, `space log`, `space audit --fix`, the chain helper's ancestor mutations) and audited by `ws-tend` / `wiki-spaces space audit`. The discipline: hard caps, errors on overflow, no silent truncation — the producer must consolidate, split, or promote before the next write.
-
-**Defaults (override via this file):**
-
-| Pattern | Cap (chars) |
+| Basename | Cap (bytes) |
 |---|---|
-| `index.md` | 5,000 |
-| `log.md` | 100,000 (auto-rotates) |
-| `log.archive-*.md` | 100,000 |
-| `hot.md` | 100,000 |
-| `*.md` | 15,000 |
+| `index.md` | 5000 |
+| `log.md` | 100000 |
+| `hot.md` | 100000 |
+| `*.md` | 15000 |
 
-`index.md` gets a small cap because it's the navigation hub — read often, should stay light. Content pages get a "single readable page" cap that triggers `space promote` (then split by hand) when exceeded. `log.md` is append-only with automatic entry-based rotation to `log.archive-<YYYYMMDD-HHMMSS>.md` when the cap is reached. `hot.md` is a user-owned scratchpad — same cap as `log.md` because it's a convention file, not a content page.
-
-**Char counting:** `len(text)` with YAML frontmatter excluded. Frontmatter is metadata, not content. Everything else (headings, wikilinks, code blocks) counts — those are real bytes the consumer reads.
-
-**If present:** parses a markdown table of `(pattern, cap)` overrides. User patterns are checked **first**, in file order; built-in defaults fill in only what the user didn't cover. So a `concepts/*.md` cap of 8000 wins over the broader `*.md` default of 15000.
+Shrinking writes are always allowed. Size checks run via `python3 scripts/ws.py check-size` before writes. The `scripts/ws.py audit` command flags over-cap files after the fact. Plain `basename: bytes` lines configure the limits file; the literal name `*.md` re-caps the catch-all row above. Non-matching lines are ignored. No glob patterns, paths, or first-match-wins chains are supported — `*.md` is a reserved name, not a glob.
 
 Example:
-
-```markdown
-# Size limits
-
-| Pattern          | Cap (chars) |
-|------------------|-------------|
-| concepts/*.md    |        8000 |
-| projects/**/*.md |       20000 |
+```
+index.md: 5000
+hot.md: 100000
+custom-page.md: 8000
+*.md: 20000
 ```
 
-**Match semantics** — a pattern containing `/` matches the wiki-root-relative posix path as a glob with `**` path-segment support (`concepts/*.md` matches one level under `concepts/`; `projects/**/*.md` matches every depth below `projects/`); a pattern without `/` matches the basename only, case-sensitively via `fnmatchcase` (`index.md` matches every `index.md` at any depth). First match wins; user overrides precede the built-in defaults.
+If absent, the defaults apply.
 
-**Rejection guidance** — when a content page exceeds its cap, the producer (via `ws-update`) suggests split → promote-then-split-by-hand → summarize, in that order. Splitting is preferred because a 15K content page would just become an over-cap 5K `index.md` after a plain promote.
+### Frontmatter schema
 
-**If absent:** the built-in defaults apply unchanged.
-
----
-
-## Self-maintenance signals
-
-`wiki-spaces space audit` surfaces two **informational** signals so the structure can reorganize *before* a hard cap rejection forces it. They are reflection prompts the LLM acts on with judgment — they never flip the audit exit code, so the release gate stays stable.
-
-- **`promote_candidates`** — structural triggers that a file has grown into a space (per AGENTS.md / "When something becomes a space"): `kind: hub` (a space's directory holds ≥ 6 direct content pages — accreted siblings under a hub-like `index.md`) and `kind: split_ready` (a content page at ≥ 80% of its cap *and* carrying ≥ 2 H2 sections — size pressure plus clean split boundaries). Size-gated on purpose: a large-but-under-cap reference doc (cap bumped here) is not flagged. `ws-update`'s size-discipline step consults these; `ws-tend` reports them.
-- **`prune_candidates`** — `kind: hot_distill`: an opt-in `hot.md` scratch buffer at ≥ 80% of its cap, a prompt to distill the hot buffer into cold structured pages (drain, don't subdivide). Clock-dependent `updated:`-staleness is *not* a generic signal here — it varies with wall-clock and can't be reported deterministically; `ws-tend`'s manifest-gated >30d check covers that against a recorded `last_synced`.
-
-**Bounded self-correction.** At close-out, `ws-update` / `ws-tend` may run exactly **one** `wiki-spaces space audit --fix` pass — the safe structural repairs only (insert a missing `## Spaces`, register on-disk children) — then **re-audit** and report the delta. No recursion. Malformed `## Spaces` entries and malformed frontmatter are author intent the framework can't reconstruct: `--fix` never rewrites them, so they stay reported (the post-fix audit still exits non-zero until a human repairs them).
-
----
-
-## `_template.md`
-
-**If present in any folder:** New pages created by `ws-update` in that folder use this file as their boilerplate (frontmatter + body skeleton). The closest ancestor `_template.md` wins.
-
-**If absent:** New pages are created from the section "Page template" below if frontmatter is in use, otherwise as bare markdown.
-
----
-
-## Frontmatter schema
-
-*Part of the [memory-aid conventions](#memory-aid-conventions).*
-
-**If used (any content page in the wiki has YAML frontmatter):** The opt-in schema is:
+Optional YAML metadata at the top of content pages:
 
 ```yaml
 ---
 title: >-
   Page Title
-category: <one of your categorical layout values>
-tags: [tag1, tag2]
-aliases: [alternate-name]        # optional
+category: concepts
+tags: [python, how-to]
+aliases: [alternate-name]
 sources: [project-name, url]
 summary: >-
-  ≤200 chars; enough to decide whether to open the page.
+  Short summary under 200 characters.
 created: 2026-05-14T00:00:00Z
 updated: 2026-05-14T00:00:00Z
 ---
 ```
 
-Timestamps are UTC ISO-8601. `>-` folded scalar avoids YAML quoting issues for `title` and `summary`. Frontmatter syntax is owned by [obsidian-markdown](vendor/kepano/obsidian-markdown/SKILL.md).
+Timestamps are UTC ISO-8601. Special files like `index.md` and `log.md` are exempt. If absent, skills write plain markdown.
 
-**Mixed adoption is allowed.** A wiki may have some content pages with frontmatter and some without; the convention is per-page, not per-wiki. `ws-tend` audits required-field completeness only on pages that already have frontmatter — it never flags a page as "missing frontmatter." Special files (`index.md`, `log.md`, `hot.md`, `.manifest.json`, `_meta/taxonomy.md`, `_template.md`) are exempt.
+### `_template.md`
 
-**If absent (no page in the wiki has frontmatter):** `ws-tend` skips frontmatter checks. `ws-update` writes plain markdown pages.
+When present in a folder, new pages created in that folder use this file as boilerplate. The closest ancestor template wins. If absent, pages use the default page template.
+
+### `hot.md`
+
+Free-form scratchpad for active work. Skills read it for context but never rewrite it. Users own the content. Default cap is 100,000 bytes. If absent, skills ignore it.
+
+### `.obsidian/`
+
+Obsidian vault configuration. When present, the colorize step writes graph color groups into `.obsidian/graph.json`. Close Obsidian before running colorize to prevent Obsidian from overwriting the file.
+
+Default palette (RGB integers):
+```
+[5142951, 15896107, 14767961, 7780786, 5873999,
+ 15583048, 11565217, 16751527, 10253663, 12234924]
+```
+
+If absent, the colorize step is skipped.
+
+### `.git`
+
+Presence of `.git` indicates the wiki is a git repository. Skills can surface git status in reports. Automatic commits or pushes are never performed. If absent, git context is skipped.
 
 ---
 
 ## Page template
 
-*Part of the [memory-aid conventions](#memory-aid-conventions).*
-
-**If used:** Body structure for content pages:
+Body structure for content pages:
 
 ```markdown
 # Page Title
@@ -362,148 +150,62 @@ One-paragraph summary.
 Unresolved items.
 ```
 
-**If absent:** Pages are free-form.
+If absent, pages are free-form.
 
 ---
 
 ## Provenance markers
 
-*Part of the [memory-aid conventions](#memory-aid-conventions).*
-
-**If used:** Inline markers attached to claims indicate epistemic status. The syntax is Obsidian's comment form — invisible in rendered preview, parseable from raw markdown.
+Inline comments indicating epistemic status:
 
 | State | Marker | Meaning |
 |---|---|---|
-| Extracted | *(no marker)* | Stated directly by source, docs, or code |
-| Inferred | `%%inferred%%` | Synthesized or implied — not stated directly |
-| Ambiguous | `%%ambiguous%%` | Sources disagree or evidence is unclear |
+| Extracted | *(no marker)* | Stated directly by source |
+| Inferred | `%%inferred%%` | Synthesized or implied |
+| Ambiguous | `%%ambiguous%%` | Sources disagree |
 
-Place the marker at the end of the claim it qualifies (typically end of sentence or end of list item). Obsidian renders `%% ... %%` as nothing; tools parse it as a trailing tag.
-
-Unmarked claims carry no enforced provenance — the convention treats them as extracted by default, but nothing in the tooling verifies the distinction. `ws-update` applies markers when capturing; `ws-tend` does not enforce them.
-
-**If absent:** No provenance is tracked; all claims are unmarked.
+Place the marker at the end of the claim. If absent, all claims are unmarked.
 
 ---
 
 ## Categorical layout
 
-**If used:** A folder convention for placing pages by kind. There's no canonical shape — your wiki's layout comes from what it's for. Pick what fits, mix shapes, or invent your own.
-
-A few example shapes:
+Folder convention for placing pages by kind. Example folders:
 
 | Use case | Common top-level folders |
 |---|---|
-| **Developer notebook** | `concepts/`, `entities/`, `skills/`, `projects/<name>/` |
-| **Research wiki** | `papers/`, `topics/`, `methods/`, `datasets/`, `projects/<name>/` |
-| **Writing project** | `drafts/`, `characters/`, `worldbuilding/`, `notes/`, `archive/` |
-| **Recipe collection** | `recipes/`, `ingredients/`, `techniques/`, `meal-plans/` |
-| **Personal knowledge** | `journal/`, `learning/`, `contacts/`, `places/`, `interests/` |
-| **Team reference** | `runbooks/`, `decisions/`, `services/`, `people/`, `clients/` |
+| Developer notebook | `concepts/`, `entities/`, `skills/`, `projects/` |
+| Research wiki | `papers/`, `topics/`, `methods/` |
 
-> See `references/SETUP.md` for the combined install priors (folders + opt-ins + git) presented per use case.
+Reserved top-level folder names:
 
-Project-scoped content nests inside the wiki's project-grouping folder (commonly `projects/<name>/<sub-folder>/`, but `clients/<name>/` or `work/<name>/` follow the same pattern). Shared / external content typically lives under `shared/<name>/` (per `## Sharing & permissions`). `_archives/` is a conventional name for retired content / snapshots.
-
-### Reserved top-level folder names
-
-A handful of names carry tool-level behavior across every wiki. They're not arbitrary categories — name a top-level folder one of these and the tool layer treats it differently.
-
-| Name | Tool behavior |
+| Name | Behavior |
 |---|---|
-| `shared/` | External by default. `space mount` defaults the mount destination to `shared/<basename-of-source>/`. `space add shared/...` requires `--force-external`. Read operations opt into externals via `space audit --include-external` (and the equivalent skill toggle). |
-| `_archives/` | Excluded from `space audit` walks and `ws-tend` scans. Conventional name for retired / snapshot content the producer kept but does not want surfaced. |
-| `_meta/` | Configuration files — `_meta/limits.md` (size caps), `_meta/taxonomy.md` (tag vocabulary). Read by the tooling; not treated as content. |
-| `.obsidian/` | Obsidian vault configuration. `ws-tend colorize` writes `colorGroups` here when present (see `.obsidian/ integration` below). |
-| `.git/`, `.<anything>/` | Hidden directories — always skipped by walks. Includes `.git`, `.obsidian`, and any other dot-prefixed name. |
+| `shared/` | External by default — trust scope is defined in [AGENTS.md](AGENTS.md). |
+| `_archives/` | Excluded from audits and scans. |
+| `_meta/` | Configuration files. |
+| `.obsidian/` | Obsidian configuration. |
+| `.git/` | Hidden directory, skipped. |
 
-A user-named top-level folder that collides with one of these inherits the tool behavior — `ws-update` will not route content into `_archives/`, `space audit` will skip it, etc. Pick a different name if you want default treatment.
-
-Slugs for new pages are lowercase, hyphen-separated, ≤50 chars, descriptive.
-
-**Self-documenting layouts.** A child space (a folder with `index.md` carrying `## Spaces`) can advertise itself with a one-line "what goes here" description in its parent's `## Spaces` entry — `ws-update` reads those descriptions when classifying new content. Plain folders (no `index.md`) have no such entry and route by folder name alone, so name them concretely (`recipes/` not `stuff/`) and routing still works; a description just makes it more precise. `## Items` is human-only and never consulted for routing.
-
-`ws-update`'s classification follows folder-name semantics first, then descriptions: a "sourdough recipe" matches `recipes/`, a "character bio" matches `characters/`, a "Python typing pattern" matches `concepts/` (or `notes/`, or whatever your wiki uses). When two folders are equally plausible the skill surfaces both options before writing; when none fit it asks, optionally creating a new folder for content that represents a recurring kind. Project-scoped content (identified by the user's intent — CWD is only a hint that disambiguates *which* project, never the trigger for project-vs-global) lands under whichever folder the wiki uses to group per-project content (`projects/`, `clients/`, `work/`, etc.).
-
-**If absent (no top-level folders at the wiki root other than `_meta/`, `_archives/`, `.git/`, or hidden directories):** `ws-update` writes pages flat at the wiki root or asks the user where to place. `ws-tend`'s cross-category scoring is skipped.
-
----
-
-## Retrieval primitives
-
-Cost-ordered lookup table for `ws-search`. Use the cheapest primitive that answers the question; escalate only when it cannot.
-
-| Need | Primitive | Cost |
-|---|---|---|
-| Page exists? Title/tags? | `wiki-spaces space files [--include-external] [--json]` (contract walker — exhaustive list of consumer-visible `.md` files), then grep frontmatter on the matches | Cheapest |
-| 1–2 sentence preview | `summary:` frontmatter field | Cheap |
-| Specific claim or section | `grep -A 10 -B 2 "<term>" <file>` (or your harness's grep tool) | Medium |
-| Full page content | read the file | Expensive |
-
-`index.md` is **not** an exhaustive page index — `## Items` is hand-maintained and `## Spaces` only lists child spaces, not files. Page enumeration goes through `wiki-spaces space files` so the consumer set matches the navigation contract: registered spaces (and the plain folders inside them) are visible, unregistered drift is invisible until `space audit` surfaces it. Grep-style search is preferred over full reads. Full reads are capped at 3 candidates per query.
-
-### Recommended search backends
-
-For wikis bigger than a few dozen pages, grep alone misses semantic matches and aliases. When the harness has a markdown-aware search tool available, `ws-search` prefers it over raw grep:
-
-| Backend | When to use | Notes |
-|---|---|---|
-| **[qmd](https://github.com/tobi/qmd) MCP** | Recommended primary. Local search over markdown with BM25 + semantic vectors + hybrid + rerank. | The project Andrej Karpathy references in the canonical [LLM-wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). MCP- and CLI-installable into Claude Code, Codex, OpenCode, Cursor, and similar harnesses. |
-| Harness-native search MCP | Use what's already in the harness (e.g., the harness's built-in file search). | Beats grep when it understands markdown headings + frontmatter. |
-| **Ripgrep** (`rg`) or the harness's grep tool | Universal fallback. Always available. | Fast keyword search; misses semantics and aliases. |
-
-`ws-search` checks for the recommended backends in order and uses the first one it finds; otherwise it falls back to grep. Tools should never *require* a specific backend — the wiki is plain markdown and any retrieval method that reads files works.
+If absent, pages are written flat at the root.
 
 ---
 
 ## Linking rules
 
-Wikilink and markdown-link syntax: see [obsidian-markdown](vendor/kepano/obsidian-markdown/SKILL.md). This section covers usage convention, not syntax.
-
-- Add up to 2 relevant wikilinks per page; never force irrelevant links.
-- Link the first natural mention only. Skip mentions inside code blocks or frontmatter.
+- Add up to 2 relevant wikilinks per page.
+- Link the first natural mention only.
 - Use the shortest link that resolves unambiguously.
-- `ws-tend`'s cross-link pass scores each candidate link: exact name match (+4), partial name match (+1), shared tags ≥2 (+2), same project (+2), cross-category (+2); a link is applied at score ≥3.
 
 ---
 
 ## Noise filter
 
-*Part of the [memory-aid conventions](#memory-aid-conventions).*
+Before writing a page, apply these checks:
 
-A heuristic for **knowledge-capture use cases** (research notes, technical wikis, developer notebooks) where the goal is "store what was hard to derive." Before writing a page, apply:
+- Code answers it? Skip.
+- Quick search answers it? Skip.
+- Needed in 3 months? Keep.
+- Already there? Merge instead of creating a new page.
 
-- **Code answers it?** Skip — wiki the reasoning, not what code says.
-- **10-second search answers it?** Skip — wiki what took 30 minutes.
-- **Needed in 3 months?** If you'd have to re-research, wiki it.
-- **Already there?** Run the `ws-search` candidate pass (filename / path-segment / frontmatter overlap with the content being captured). When a near-match exists, prefer merging into the existing page over creating a new one. `## Items` is non-contractual (tools never write it), so `index.md` is not a reliable index of what's on disk — use the search candidate pass instead.
-
-**Skip this filter** for content-store use cases where every entry is intentional regardless of derivation cost — recipe collections, personal journals, contact lists, team runbooks, etc. The "would you re-derive this?" test doesn't apply when the wiki *is* the source of truth, not a memory aid.
-
----
-
-## `.git`
-
-Detection: a `.git` entry at the wiki root, whether a directory (regular repo) or a file (git submodule, worktree). Tools that need an authoritative answer should run `git -C <wiki-root> rev-parse --is-inside-work-tree`.
-
-**If present:** The wiki is also a git repository. Tools may surface git context (current branch, uncommitted changes, ahead/behind upstream) in their reports when relevant. Tools NEVER auto-commit or auto-push; all git operations are user-driven. See [`Sharing & permissions`](#sharing--permissions) for the recommended sharing pattern.
-
-**If absent:** No git context surfaced. Tools operate on the filesystem directly.
-
----
-
-## `.obsidian/` integration
-
-**If present:** The wiki is intended to be opened in Obsidian. `ws-tend`'s colorize step writes graph color groups into `.obsidian/graph.json` (only the `colorGroups` key; everything else preserved; backup written).
-
-**Hazard — Obsidian overwrites `graph.json` on graph-view interaction.** Opening the color-groups panel in Obsidian's graph view can wipe `colorGroups` entirely (most reliably with `collapse-color-groups: false`). The backup written by `ws-tend` protects against `ws-tend`'s own writes, not Obsidian's. Close Obsidian before running colorize, and avoid the graph color panel afterward until the vault is reloaded.
-
-Default colorize mode is `by-tag` (top 10 tags by usage, default palette below). `by-category` colors the categorical layout folders. `custom` honors user-provided mappings.
-
-Default palette (RGB ints) — tools may override:
-```
-[5142951, 15896107, 14767961, 7780786, 5873999,
- 15583048, 11565217, 16751527, 10253663, 12234924]
-```
-
-**If absent:** Colorize step is skipped. The wiki is treated as a plain markdown directory.
+Skip this filter for content-store use cases.

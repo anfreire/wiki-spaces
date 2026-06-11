@@ -5,70 +5,68 @@ description: Maintain the user's canonical wiki's health. Use when the user says
 
 # Wiki Tend
 
-One-shot maintenance for the user's canonical wiki: status, audit (read-only), normalize (tags + cross-links), and colorize. Each step degrades gracefully when the convention it depends on is absent.
+One-shot maintenance: status, audit, normalize (tags + cross-links), colorize. Report first, repair only what's safe, and degrade gracefully wherever a convention the step depends on is absent.
 
-## Defers to
+<!-- ws:core -->
+## The wiki model
 
-- Spec: `AGENTS.md` at the wiki-spaces repo (path in `~/.config/wiki-spaces/config` `repo` key).
-- Conventions: `CONVENTIONS.md` at the same repo; this skill enforces nothing the wiki hasn't opted into.
-- Markdown syntax: kepano's `obsidian-markdown` skill — installed alongside this one in your harness's skills directory.
-- Traversal model: contract-first per AGENTS.md / The navigation contract. Use `wiki-spaces space list` / `wiki-spaces space files` / `wiki-spaces space audit --json` for structured traversal and audit consumption.
+A wiki is a folder whose `index.md` carries a `## Spaces` heading. `## Spaces` is the navigation contract: every space directly inside is listed there as `- [label](path/index.md) — description`, and tools traverse only what it lists. Spaces nest recursively; each space is itself a wiki one level down. Plain folders (no `index.md`) just group files. The markdown dialect is Obsidian — wikilinks, frontmatter, callouts, embeds; the companion `obsidian-markdown` and `obsidian-bases` skills cover the syntax.
+
+## Resolving the wiki
+
+Resolution order: an explicit path from the user → the nearest CWD-ancestor folder that is a wiki → the `wiki` key in `~/.config/wiki-spaces/config`. The user's words override the mechanics: "my wiki" means the configured one even when CWD sits inside another wiki (a company repo, say). When a CWD wiki and a different configured wiki both exist, announce which root you resolved; ask once if intent is ambiguous. Never silently operate on the wrong wiki.
+
+## The bundled script
+
+`scripts/ws.py` sits next to this SKILL.md — stdlib python3, zero dependencies. Invoke it by absolute path (your working directory is usually elsewhere):
+
+- `python3 <skill-dir>/scripts/ws.py list --wiki <root>` — spaces reachable via the `## Spaces` contract (`--external` to cross mounts).
+- `… files --wiki <root>` — markdown files reachable via the contract.
+- `… grep <pattern> [-i] --wiki <root>` — regex line search over those files; prints `rel:line: text`, exits 1 on no match.
+- `… check-size <target> [--stdin] --wiki <root>` — cap verdict for a file; pipe planned content with `--stdin` to check before writing.
+- `… audit [--fix] --wiki <root>` — drift, broken wikilinks, over-cap files; `--fix` only inserts missing `## Spaces` headings and registers unlisted owned child spaces.
+
+Trust the script's output over re-deriving structure by hand; it is the deterministic view of the contract.
+
+## Trust scope and size discipline
+
+Owned vs external is relative to the resolved root: anything under `shared/`, a foreign-origin git submodule, or a symlink escaping the tree is external. Reads cross owned spaces by default and enter external ones only when the user explicitly asks. Writes stay inside the targeted space; any other space — owned or external — is written only on explicit instruction.
+
+Caps are UTF-8 bytes including frontmatter, keyed by basename: `index.md` 5000, `log.md` and `hot.md` 100000, any other `*.md` 15000; a wiki overrides them in `_meta/limits.md` with plain `basename: bytes` lines (the literal name `*.md` re-caps the content-page catch-all). Run `check-size` before writing. An overflow is a signal to split, promote, or trim — never to truncate.
+
+Conventions are opt-in per wiki. Read the markers present at the scope root — `log.md`, `_meta/taxonomy.md`, `_meta/limits.md`, frontmatter on pages, `_template.md`, `hot.md`, `.obsidian/`, `.git` — and degrade gracefully when one is absent. If `log.md` exists, append one line per operation:
+
+```sh
+printf '%s <OP> <details>\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> <root>/log.md
+```
+<!-- /ws:core -->
 
 ## Procedure
 
-1. **Resolve the target wiki** per [`CONVENTIONS.md` / Discovery via config](../../CONVENTIONS.md#discovery-via-config) — explicit path → `wiki` config key → nearest CWD ancestor whose `index.md` contains `## Spaces` → inline setup via [`ws-update/SKILL.md` § Initialization](../ws-update/SKILL.md#initialization). When CWD was the source (config missing), say so once in the report. A freshly scaffolded wiki has nothing to tend — say so plainly: `status` reports the empty layout, `audit` finds zero issues. No need to invent work.
-2. **Detect adopted conventions at the SCOPE root** (the canonical wiki for default operation; the targeted space if the user named one): `log.md`, `_meta/taxonomy.md`, `.manifest.json`, frontmatter (scan content pages until one with frontmatter is found, or confirm none), categorical layout, `.obsidian/`. Spaces are autonomous — never inherit detection from a parent. Skip every mode whose required marker is absent.
-3. **Mode detection.**
+1. **Resolve the wiki** (core block) and announce the root when it came from CWD or could be ambiguous. A freshly scaffolded wiki has nothing to tend — say so plainly rather than inventing work.
+2. **Detect conventions at the scope root** — the wiki by default, the targeted space when the user named one. Spaces are autonomous; never inherit detection from a parent. Skip every mode whose marker is absent.
+3. **Pick the mode** from the user's words:
    | User says | Mode |
    |---|---|
-   | "wiki status", "what's in my wiki" | `status` |
-   | "audit wiki", "health check", "what needs fixing" | `audit` |
-   | "fix tags", "normalize tags" | `normalize:tags` |
-   | "link pages", "cross-reference" | `normalize:links` |
-   | "normalize" | `normalize:all` |
-   | "color graph", "colorize" | `colorize` |
-   | "tend wiki" / "clean wiki" | full sweep: status → audit → ask → normalize → colorize |
+   | "wiki status", "what's in my wiki" | status |
+   | "audit", "health check", "what needs fixing" | audit |
+   | "fix tags", "normalize tags" | normalize: tags |
+   | "link pages", "cross-reference" | normalize: links |
+   | "color graph", "colorize" | colorize |
+   | "tend wiki", "clean wiki" | full sweep: status → audit → ask → normalize → colorize |
 
-   For `audit` and `status`: report only. For `normalize`, `colorize`, and full sweep: preview changes and ask before modifying unless the user explicitly said "fix" or "apply".
-4. **Status.** Walk the SCOPE via `wiki-spaces space files <scope-rel-path>` (omit the positional when SCOPE is the wiki root; add `--include-external` when the user opted in). The contract walker honors trust scope automatically — external spaces are excluded by default. Always exclude `.obsidian/` and `_archives/` (the framework already skips those). Count pages per top-level folder; report `.manifest.json` synced projects (if present); count tags and top 10 by usage (if frontmatter in use); show last `log.md` entry (if present).
-5. **Audit (report only).** Run `wiki-spaces space audit --json` (add `--wiki <path>` when the scope is a named sub-space) for the structural facts and consume the JSON document — easier than parsing human output, and the exit code is included. It walks owned scope and reports ten things:
-   - **`## Spaces` drift** — listed entries with no space on disk, and sub-folders with `index.md` not listed (the navigation contract per AGENTS.md; `## Items` is human-maintained and not audited).
-   - **Missing `## Spaces` section** (`missing_spaces_section` in the JSON payload) — owned spaces whose `index.md` lacks the heading entirely. Violates the v1 navigation contract ("no `## Spaces` means no wiki"). `audit --fix` inserts an empty section to repair. Flips the exit code.
-   - **Broken `[[wikilinks]]`** — links resolving to no page by path, filename, or frontmatter alias; links inside fenced/inline code and frontmatter are ignored.
-   - **Size violations** — pages exceeding their per-pattern cap from CONVENTIONS / `_meta/limits.md` (defaults: `index.md` 5K, `log.md` 100K, `*.md` 15K). Flips the exit code like drift and broken links.
-   - **Approaching cap** — pages at ≥80% of their cap. Informational; does not flip the exit code. Surface these in the report so the producer can plan a split before the next over-cap rejection.
-   - **Orphan pages** — zero incoming wikilinks, `index.md` / `log.md` exempt. Reported as informational.
-   - **Malformed `## Spaces` entries** — empty href, absolute href, `..` segment, escape-after-resolution, duplicate dir target, reserved-folder href (hidden / `_archives` / `_meta`), markdown-link metacharacters, and entry-shaped bullets the parser can't read. Author errors the framework cannot reconstruct; `audit --fix` does NOT repair these. Flips the exit code.
-   - **Duplicate aliases** — two owned pages declaring the same alias make wikilink resolution nondeterministic. Flips the exit code; the producer disambiguates.
-   - **Malformed frontmatter** (`malformed_frontmatter`) — YAML parse errors or frontmatter whose top level is not a mapping. Flips the exit code; repair before trusting aliases/tags from that page.
-   - **Malformed limits** (`malformed_limits`) — rows in `_meta/limits.md` the cap engine can't parse (bad pattern or non-integer cap). Flips the exit code; the file's defaults silently wouldn't apply otherwise, so repair before trusting any size verdict.
-
-   The CLI is the source of truth for those ten — don't re-derive them by hand. Then add the two judgment-bearing checks it does not do:
-   - **Frontmatter field completeness.** On pages that already have frontmatter, check required fields per CONVENTIONS / Frontmatter schema. Pages without frontmatter are NOT flagged (mixed adoption is allowed). Special files exempt.
-   - **Stale content.** Only if `.manifest.json` is present. Compare `updated:` to `last_synced`; flag project-scoped pages stale > 30 days.
-
-   Then the CLI adds two **informational self-maintenance signals** (never flip the exit code) — surface them so the structure reorganizes before a hard rejection forces it:
-   - **`promote_candidates`** — `kind: hub` (a space with ≥6 direct content pages — accreted siblings) and `kind: split_ready` (a content page ≥80% of its cap with ≥2 H2 sections — split-ready). The structural "files grow into spaces" prompt; suggest `space promote <path>` (then split by hand) or grouping siblings into a sub-space.
-   - **`prune_candidates`** — `kind: hot_distill` (an opt-in `hot.md` ≥80% full); prompt to distill the hot buffer into cold structured pages.
-
-   Orphans, approaching-cap pages, and broken links are *facts*; deciding whether an orphan is acceptable, how to repair a broken link, or which split/promote action to take for a size violation is judgment — apply it when presenting the report. For size violations specifically, suggest `space promote <path>` (then split sections by hand) for hubs, or in-place split/summarize for content pages (see `ws-update/SKILL.md` § Size discipline for the deterministic remediation order).
-
-   **Bounded self-correction (close-out).** After reporting, you may run exactly **one** `wiki-spaces space audit --fix` pass for the SAFE structural repairs only (insert a missing `## Spaces`, register on-disk children), then **re-audit** and report the delta. No recursion. `--fix` never touches malformed `## Spaces` entries or malformed frontmatter (author intent the framework can't reconstruct) — those stay reported for human repair, so a post-fix audit still exits non-zero until they're fixed.
-6. **Normalize: tags.** Only if `_meta/taxonomy.md` present at the SCOPE root. Use the **same `space files <scope-rel-path>` output as step 4** — the contract walker scopes to SCOPE and excludes externals (write trust scope per step 9). Filter to pages in SCOPE itself, excluding any contained child spaces (each space carries its own conventions independently — don't write tags into a child whose taxonomy may differ). Extract `tags` from frontmatter. Flag non-canonical, alias-mapped, over-tagged (>5), untagged. Replace alias tags only when taxonomy defines an explicit mapping. Unknown tags appearing on 2+ pages: suggest adding to taxonomy. Unknown one-offs: suggest closest canonical.
-7. **Normalize: cross-links.** Per CONVENTIONS / Linking rules. Build a page registry from frontmatter (or filenames if no frontmatter) using the same `space files <scope-rel-path>` output as step 4, filtered to SCOPE-only (no contained child spaces — same write-trust-scope rule as step 6): name, title, aliases, tags. Scan body text for unlinked mentions of registry entries. Score each candidate by the CONVENTIONS / Linking rules weights and apply a link at score ≥3. Inline (preferred) by wrapping the first natural mention; fallback to a `## Related` section appended at page bottom. No self-links.
-8. **Colorize.** Only if `.obsidian/` present. Default `by-tag` (top 10 tags by usage, default palette per CONVENTIONS / `.obsidian/` integration). Read `.obsidian/graph.json`; if missing, instruct the user to open the vault in Obsidian first. Back up to `.obsidian/graph.json.backup-<YYYYMMDD-HHMM>`. Replace **only** the `colorGroups` key; preserve everything else. Remind the user to reload Obsidian. Per CONVENTIONS / `.obsidian/` integration § Hazard, close Obsidian before running colorize — the backup protects against `ws-tend`'s own writes, not Obsidian's.
-9. **Scope defaults.** Read operations (status, audit) descend through owned spaces by default; external spaces (shared mounts, foreign submodules, out-of-tree symlinks) are excluded unless named. Write operations (normalize, colorize) stay within the targeted scope; other spaces require explicit instruction. Trust scope per AGENTS.md / CONVENTIONS / Owned vs external.
+   Status and audit only report. Normalize and colorize preview their changes and ask before writing — unless the user already said "fix" or "apply".
+4. **Status.** `list` + `files` for the shape (add `--external` only when the user opted in). Report: spaces and their one-line descriptions, page counts per top-level folder, tag counts and the top 10 by usage (when frontmatter is in use), the last `log.md` line (when present), and git status (when `.git` exists — read-only; never commit or push).
+5. **Audit.** Run `audit` and relay its findings in its own vocabulary — `contract` (a space's `index.md` missing the `## Spaces` heading, or a malformed entry), `drift` (an on-disk space not listed / a listed entry with nothing on disk), `broken` wikilinks, `over-cap` files, and informational `orphans`. The script is the source of truth for those; don't re-derive them. Add the judgment it can't make:
+   - **Remediation suggestions.** For each over-cap file, suggest split / promote / trim (per `ws-update`'s remediation order). For broken links, locate the nearest-named page as the likely target. Orphans are facts, not errors — flag only ones that look unintentional.
+   - **Frontmatter completeness** — only on pages that already carry frontmatter, only when the wiki uses a schema; mixed adoption is allowed.
+   - **Structural prompts** — a page ≥80% of its cap with several distinct H2 sections is split-ready; a space whose index lists many accreted siblings wants a sub-space; an opt-in `hot.md` near its cap wants distilling into cold pages.
+6. **Bounded repair (close-out).** After reporting, run exactly one `audit --fix` for the safe structural repairs (insert missing headings, register unlisted owned children), then re-audit and report the delta. Once, no loop. Malformed entries, broken links, stale entries, and over-cap files are author intent — they stay reported for the user (offer to fix them as a normal edit if the user says go).
+7. **Normalize: tags.** Only when `_meta/taxonomy.md` exists at the scope root. Over the scope's own pages (children spaces keep their own taxonomies — leave them out): flag non-canonical tags, apply alias mappings the taxonomy defines, flag over-tagged (>5) and untagged pages. Unknown tags on 2+ pages: suggest adding to the taxonomy; one-offs: suggest the closest canonical tag.
+8. **Normalize: cross-links.** Build a registry of scope-own pages (names, titles, frontmatter aliases when present). Scan bodies for unlinked first mentions of registry entries and wrap the strongest matches as wikilinks — at most 2 new links per page, never inside code blocks or frontmatter, no self-links. Prefer inline linking; a trailing `## Related` section is the fallback when no natural mention exists.
+9. **Colorize.** Only when `.obsidian/` exists: [references/colorize.md](references/colorize.md).
+10. **Log** one `TEND` line per the core block when `log.md` exists, and close with the report.
 
 ## Output
 
-Structured per mode: status table, audit report with counts and file paths, normalize tables (tags normalized, links added), colorize summary (mode, group count, backup path).
-
-## Logging
-
-Append a structured entry via the CLI when `log.md` exists at the **scope root** (the wiki for default operations; the targeted space if the user named one — per CONVENTIONS / Per-space convention auto-detection):
-
-```sh
-wiki-spaces space log TEND --field mode=<status|audit|normalize|colorize|full> --field issues_found=N --field fixed=M
-```
-
-The CLI prepends the ISO-8601 UTC timestamp; you supply only the operation name and the key=value pairs. Use `--raw "<full line>"` for custom shapes. Logging is opt-in: when `log.md` is absent, the call refuses unless `--create` is passed. Add `--wiki <path>` when the scope is a named sub-space.
+Per mode: a status table; an audit report quoting the script's findings plus your suggestions; normalize tables (tag → action, link added → where); a colorize summary (groups written, backup path). End the full sweep with the one-line delta: `issues before → after; left for you: <n>`.

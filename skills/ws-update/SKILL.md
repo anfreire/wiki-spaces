@@ -1,94 +1,96 @@
 ---
 name: ws-update
-description: Create or update content in the user's canonical wiki. Use when the user says "update wiki", "sync project", "save this", "capture this", "store this research", or wants to distill knowledge from a project, conversation, or research session.
+description: Create or update content in the user's canonical wiki. Use when the user says "update wiki", "sync project", "save this", "capture this", "store this research", or wants to distill knowledge from a project, conversation, or research session. When a session produced durable knowledge worth keeping, offer once at a natural wrap-up — never per-turn.
 ---
 
 # Wiki Update
 
-Extract durable knowledge from the current source (project, conversation, or research) and place it in the user's canonical wiki. Apply the noise filter when the wiki is a knowledge-capture use case (per CONVENTIONS / Noise filter); merge before creating; respect whatever conventions the wiki has adopted.
+Extract durable knowledge from the current source — a project, the conversation, a research session — and place it in the user's wiki. Merge before creating, respect the conventions the wiki has adopted, and keep every file inside its size cap.
 
-## Defers to
+<!-- ws:core -->
+## The wiki model
 
-- Spec: `AGENTS.md` at the wiki-spaces repo (path in `~/.config/wiki-spaces/config` `repo` key).
-- Conventions: `CONVENTIONS.md` at the same repo. Cited sections below: Categorical layout, Frontmatter schema, Page template, Provenance markers, Linking rules, Noise filter, `.manifest.json`.
-- Markdown syntax: kepano's `obsidian-markdown` skill — installed alongside this one in your harness's skills directory.
-- Deeper docs: `references/SETUP.md` (initialization), `references/MOUNT.md` (mounting external wikis as spaces), `references/EXAMPLES.md` (canonical topology examples) — at the wiki-spaces repo.
-- Traversal model: contract-first per AGENTS.md / The navigation contract. Use `wiki-spaces space list` / `wiki-spaces space files` for structured traversal — these reflect `## Spaces`, malformed-href policy, and external trust scope deterministically.
+A wiki is a folder whose `index.md` carries a `## Spaces` heading. `## Spaces` is the navigation contract: every space directly inside is listed there as `- [label](path/index.md) — description`, and tools traverse only what it lists. Spaces nest recursively; each space is itself a wiki one level down. Plain folders (no `index.md`) just group files. The markdown dialect is Obsidian — wikilinks, frontmatter, callouts, embeds; the companion `obsidian-markdown` and `obsidian-bases` skills cover the syntax.
+
+## Resolving the wiki
+
+Resolution order: an explicit path from the user → the nearest CWD-ancestor folder that is a wiki → the `wiki` key in `~/.config/wiki-spaces/config`. The user's words override the mechanics: "my wiki" means the configured one even when CWD sits inside another wiki (a company repo, say). When a CWD wiki and a different configured wiki both exist, announce which root you resolved; ask once if intent is ambiguous. Never silently operate on the wrong wiki.
+
+## The bundled script
+
+`scripts/ws.py` sits next to this SKILL.md — stdlib python3, zero dependencies. Invoke it by absolute path (your working directory is usually elsewhere):
+
+- `python3 <skill-dir>/scripts/ws.py list --wiki <root>` — spaces reachable via the `## Spaces` contract (`--external` to cross mounts).
+- `… files --wiki <root>` — markdown files reachable via the contract.
+- `… grep <pattern> [-i] --wiki <root>` — regex line search over those files; prints `rel:line: text`, exits 1 on no match.
+- `… check-size <target> [--stdin] --wiki <root>` — cap verdict for a file; pipe planned content with `--stdin` to check before writing.
+- `… audit [--fix] --wiki <root>` — drift, broken wikilinks, over-cap files; `--fix` only inserts missing `## Spaces` headings and registers unlisted owned child spaces.
+
+Trust the script's output over re-deriving structure by hand; it is the deterministic view of the contract.
+
+## Trust scope and size discipline
+
+Owned vs external is relative to the resolved root: anything under `shared/`, a foreign-origin git submodule, or a symlink escaping the tree is external. Reads cross owned spaces by default and enter external ones only when the user explicitly asks. Writes stay inside the targeted space; any other space — owned or external — is written only on explicit instruction.
+
+Caps are UTF-8 bytes including frontmatter, keyed by basename: `index.md` 5000, `log.md` and `hot.md` 100000, any other `*.md` 15000; a wiki overrides them in `_meta/limits.md` with plain `basename: bytes` lines (the literal name `*.md` re-caps the content-page catch-all). Run `check-size` before writing. An overflow is a signal to split, promote, or trim — never to truncate.
+
+Conventions are opt-in per wiki. Read the markers present at the scope root — `log.md`, `_meta/taxonomy.md`, `_meta/limits.md`, frontmatter on pages, `_template.md`, `hot.md`, `.obsidian/`, `.git` — and degrade gracefully when one is absent. If `log.md` exists, append one line per operation:
+
+```sh
+printf '%s <OP> <details>\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> <root>/log.md
+```
+<!-- /ws:core -->
 
 ## Initialization
 
-When step 1 of the procedure finds no usable wiki (no config key set AND no CWD ancestor is a wiki), drive the interactive scaffold inline before doing anything else. Follow [`references/SETUP.md` § Branch A](../../references/SETUP.md) — read it from the repo (the `repo` config key points at it once installed; the canonical raw GitHub URL is the fallback when `repo` is unknown). The full briefing is one page; follow it verbatim. Keep the interview to two exchanges (gather, confirm), run every command yourself, and return to step 1 of the Procedure once `wiki-spaces init` has registered the wiki.
-
-An **invalid** configured `wiki` (path set but missing on disk, not absolute, lacks `index.md`, or for read commands lacks `## Spaces`) is a hard stop, not an inline-setup trigger — surface the error to the user and ask them to fix the config (`wiki-spaces doctor` is the diagnostic). Same for an invalid explicit path the user typed. Inline setup is reserved for the genuinely-no-wiki case.
+When nothing resolves — no explicit path, no CWD-ancestor wiki, no valid config — set one up inline before doing anything else: follow [references/init.md](references/init.md). Keep the interview to two exchanges (gather, confirm), run every command yourself, and resume the original request once the wiki exists. A configured path that is broken (missing on disk, no `index.md`, not absolute) is a hard stop, not a setup trigger — surface it and let the user decide.
 
 ## Procedure
 
-1. **Resolve the target wiki** per [`CONVENTIONS.md` / Discovery via config](../../CONVENTIONS.md#discovery-via-config) — explicit path → `wiki` config key → nearest CWD ancestor whose `index.md` contains `## Spaces` → inline setup (run [`## Initialization`](#initialization), then resume). When CWD was the source (config missing), mention once in the confirmation: "Wrote to the wiki at `<path>` (found via CWD; no config registered). Run `wiki-spaces init <path>` to make this the default target."
-2. **Detect adopted conventions at the SCOPE root** (the canonical wiki for default operation; the targeted space if the user named one): `_meta/taxonomy.md`, `.manifest.json`, frontmatter (scan content pages until one with frontmatter is found, or confirm none), categorical layout (any top-level folder at the SCOPE root other than `_meta/`, `_archives/`, `.git/`, or hidden directories). Templates (`_template.md`) are detected later, at write time, by walking up from the chosen destination — see step 7. Spaces are autonomous — never inherit detection from a parent. Skip steps that depend on absent conventions.
-3. **Detect mode.** Mode comes from the user's intent and the content; CWD is a hint that disambiguates *which* project when the intent is already project-scoped, never a mode-detection trigger on its own.
+1. **Resolve the wiki** (core block). Announce the root when it came from CWD or could be ambiguous; "save to my wiki" from inside a company repo means the configured wiki, not the repo.
+2. **Detect conventions at the scope root** — the wiki root by default, the targeted space if the user named one. Spaces are autonomous; never inherit detection from a parent. Skip every step whose marker is absent.
+3. **Detect the mode** from the user's intent — CWD only disambiguates *which* project when intent is already project-scoped:
    | Mode | Trigger | Input |
    |---|---|---|
-   | Project sync | "update wiki for <project>", "sync this project", explicit project naming | project files, git log |
-   | Conversation capture | "save this", "capture this", "file this" | current conversation |
-   | Research capture | "store this research", "add to knowledge base" | research findings from the session |
-4. **Extract knowledge** per mode:
-   - **Project sync.** Identify the project from CWD. If `.manifest.json` is present and the project has a prior `last_commit_synced`, run `git log <last_commit>..HEAD --oneline` and only consider changed files. If nothing distillable, report "nothing to update" and stop. Scan for: architecture decisions and rationale, patterns discovered, tool/API wiring, key abstractions, trade-offs, experiment results.
-   - **Conversation capture.** Extract durable conclusions, decisions, findings. Ignore logistics. Write conclusions directly; never summarize the chat ("X works by..." not "the user asked about X and we discussed...").
-   - **Research capture.** Identify what was researched (tool, concept, technique). Extract findings that took effort and would be expensive to re-derive.
-5. **Apply the noise filter** per CONVENTIONS / Noise filter — *only* for knowledge-capture wikis (research notes, developer notebooks, technical wikis where the goal is "store what was hard to derive"). Skip the filter entirely for content-store wikis (recipes, journals, runbooks, contact lists, curricula) where every entry is intentional regardless of derivation cost. In either case, **deduplicate against existing pages before creating new ones — but do not rely on `index.md` to enumerate them.** `## Items` is non-contractual (tools never write it), so `index.md` is an unreliable index of what's on disk. Run the `ws-search` candidate pass instead — enumerate consumer-visible pages via `wiki-spaces space files --json` (the contract walker; respects `## Spaces`, hides unregistered drift) and rank by filename / path-segment / frontmatter overlap with the content being captured. When a near-match exists, prefer merging into the existing page (with an `updated:` bump) over creating a new one.
-6. **Classify and place.** Compute placement candidates via the three-step classifier:
+   | Project sync | "sync this project", explicit project naming | project files, git log |
+   | Conversation capture | "save this", "capture this" | the current conversation |
+   | Research capture | "store this research" | findings from the session |
+4. **Extract knowledge.** Project sync: architecture decisions and their rationale, patterns, tool/API wiring, trade-offs, results — from the project's files and recent git history. Conversation: durable conclusions and decisions, written as facts ("X works by…"), never chat summary. Research: what took effort and would be expensive to re-derive.
+5. **Filter and deduplicate.** For knowledge-capture wikis apply the noise filter: answerable from the code? skip; answerable by a quick search? skip; needed in 3 months? keep. Content-store wikis (recipes, journals, runbooks) skip the filter — every entry is intentional. Either way, enumerate existing pages via `files` and rank by filename / path / frontmatter overlap: when a near-match exists, **merge into it instead of creating a sibling**.
+6. **Place.** Run `list` for registered spaces (labels + descriptions are placement hints) and check top-level plain folders. Match content to a candidate semantically: project-scoped content goes under the project-grouping space (`projects/<name>/…` or whatever the wiki calls it); global concepts go to the topical folder even when captured inside a project. Several equally plausible candidates, or none → ask. Flat wiki → write at the root. Slugs: lowercase, hyphenated, ≤50 chars.
+7. **Check size before every write.** Materialize the full projected content (for an edit, apply it in memory first), then:
+   ```sh
+   python3 <skill-dir>/scripts/ws.py check-size <target> --stdin --wiki <root> <<'EOF'
+   <projected content>
+   EOF
+   ```
+   On `over`, pick the remediation in order — never truncate, never ignore:
+   1. **Split** — the page has H2 sections that read as distinct topics → move sections out to siblings; the page becomes a hub linking them.
+   2. **Promote** — the page has become a hub of sub-topics or accreted siblings → turn it into a space: [references/promote.md](references/promote.md).
+   3. **Trim** — the page is genuinely dense → merge or drop the weakest entries now, not "later".
+   An over-cap `index.md` is different: push detail down into child pages and keep entries to one line each — an index is navigation, not content.
+8. **Write.** New pages: nearest ancestor `_template.md` if present, else the wiki's page shape (frontmatter only where the wiki already uses it). Mark non-source claims `%%inferred%%`, conflicting sources `%%ambiguous%%`. Add up to 2 wikilinks on first natural mentions. Updates: merge, preserve manual content, bump `updated:` if frontmatter is in use, never overwrite unrelated sections. On a project sync, ensure the project's hub page records the repo path in `~`-contracted form — `repo:` or an entry under `sources:` where the wiki uses frontmatter, else a single plain line — so a later session can map the checkout back to its page. More than ~10 pages changing → show the plan and ask first.
+9. **Keep the contract.** Created a new space, removed one, or moved pages? Update `## Spaces` per [Space operations](#space-operations) below. `## Items` sections are optional human curation — maintain one where the index already has it.
+10. **Close out.** Run `audit`. If it reports only safe structural drift (a missing heading, an unregistered owned child), run exactly one `audit --fix`, re-audit, and report the delta — once, no loop. Other findings are reported, not auto-repaired; when they fall outside this sync's write scope, suggest a `ws-tend` pass to the user — suggestion only, never run it yourself. Then log an `UPDATE` line per the core block and confirm:
+    ```
+    Updated wiki (<root>):
+    - Created: <paths>   - Updated: <paths>
+    - Mode: <mode>       - Audit: <clean | findings>
+    ```
 
-   1. **Registered owned spaces.** Run `wiki-spaces space list --json` to enumerate every owned space the contract knows about, with `label` + `description` per entry. Wiki-root-relative paths with no `/` are top-level candidates.
-   2. **External paths to exclude.** Run `wiki-spaces space list --include-external --include-boundaries --json` and collect the `path` of every entry where `external` is true. This includes external boundary folders WITHOUT `index.md` (foreign submodules, escaping symlinks) — the deterministic exclusion list per AGENTS.md trust-scope contract.
-   3. **Plain top-level folders.** `ls -1d <wiki>/*/` (or the harness's directory listing). Exclude reserved names (`_meta/`, `_archives/`, `.git/`, `.obsidian/`, anything starting with `.`) AND every top-level path from step 2's external set.
-   4. **Classify each remaining top-level folder.** Appears in step 1 → registered space (placement candidate with description). Otherwise contains `index.md` → drift (SKIP — `space audit` will report it). Otherwise → plain folder (placement candidate, name-only).
+## Space operations
 
-   Steps 1–4 are deterministic mechanics: when in doubt, follow them verbatim. The result is `(folder, description-or-name)` candidates from owned spaces only.
-
-   Match the incoming content to a candidate by semantic fit, folder names first and descriptions to disambiguate. CWD is a hint, never a trigger: the user's intent and the content itself decide project-vs-global; CWD only resolves *which* project's name to use when the intent is already project-scoped.
-   - **Project-scoped content** — when the user's intent makes the content clearly about a specific project, look for a project-grouping candidate (a folder whose description mentions per-project content, or whose name matches `projects/` / `clients/` / `work/` or similar). Place under `<that-folder>/<project-name>/...`, creating the project sub-space if missing. If no project-grouping folder exists in the layout, ask the user whether to create one (and which name) or to write the content globally.
-   - **Global content** — pick the best-fitting candidate: a sourdough recipe → a folder named or described for recipes; a character bio → `characters/`; a Python typing pattern → `concepts/` or `notes/`, whichever the wiki uses. A global concept captured from a project CWD still goes here, not under the project folder.
-   - **Multiple candidates equally plausible** — pick the more specific if descriptions disambiguate; otherwise surface the candidates to the user before writing.
-   - **No candidate fits** — ask the user. If the content represents a recurring kind, offer to create a new folder; if that folder gets its own `index.md`, its `## Spaces` entry flows through step 8.
-   - **Flat wiki (no folders at all)** — write at the wiki root or ask.
-
-   Slugs are lowercase, hyphen-separated, ≤50 chars, descriptive. Mounting an external wiki as a space (e.g., `<wiki>/shared/team-foo/`) is a separate flow — see `references/MOUNT.md`.
-7. **Size discipline (pre-write check).** Before writing any page, materialize the FULL projected post-write content as a string (for an Edit, apply the edit in memory first), then ask the CLI for the verdict instead of computing the cap yourself: pipe the projected text into `wiki-spaces space check-size <scope-rel-path> --wiki <scope-root>`. The CLI reads the projected content from the pipe (or pass `--projected-file <path>`); piping the content is all that's needed. Always pass `--wiki <scope-root>` (the wiki for default operation; the targeted space if the user named one — the same scope root detected in steps 2 and 9) with a scope-root-relative path, so the CLI's cap helper reads THAT space's `_meta/limits.md`. Without it the resolver prefers the configured/CWD wiki and checks the cap at the wrong scope, silently bypassing a nested space's own per-space caps — the same scope-root rule the Logging section and ws-tend's audit step already follow. It prints `OK <chars>/<cap> (cap: …)`, `OK-SHRINKING <chars>/<cap> (cap: …)` (the shrinking-write escape hatch — projected size is smaller than the current on-disk size, so a legacy-bloat page can still get smaller), or `OVER <chars>/<cap> (cap: …)` and exits 1 on `OVER`. The cap source is part of the verdict so you can see why the cap is what it is (built-in default vs. user override in `_meta/limits.md`). Use the verdict — DO NOT recompute the math yourself; the CLI shares the helper that framework writers use, so verdicts are guaranteed consistent. On `OVER`, do NOT silently truncate; surface the projected size and the cap to the producer and pick a remediation in this order:
-   1. **Split** — if the page has H2 boundaries that read as distinct topics, split sections out as new siblings (or children of a new space; see step 2). Move the relevant H2 sections verbatim; the original page becomes a hub with in-body wikilinks to the new pages.
-   2. **Promote, then split by hand** — when the page is genuinely a hub of multiple distinct topics, run `wiki-spaces space promote <path>` to turn it into `<path>/index.md`, then move the H2 sections into sibling content files under the new space yourself. The CLI handles the mechanical move and link rewrites; splitting content is authorship judgment.
-   3. **Summarize** — only when neither split nor promote applies (the page IS already dense). Identify entries to merge or remove; the rejection forces consolidation now, not "later." This is the size discipline that prevents day-30 bloat.
-
-   Proactively (not just on rejection): `wiki-spaces space audit --json` surfaces `promote_candidates` — `split_ready` (a page ≥80% of its cap with ≥2 H2 sections) and `hub` (a space with many accreted siblings). Act on these to split *before* the next write hits the hard cap.
-
-   For `index.md` rejection specifically: never use `space promote` (refused by the CLI on `index.md`). Instead, push detail down into a relevant child space's `index.md` or a new content page, or collapse verbose `## Items` entries to wikilink-only references.
-
-8. **Write pages.**
-   - **New pages.** Use the closest `_template.md` if any; otherwise the page template from CONVENTIONS if frontmatter is in use; otherwise plain markdown. Apply provenance markers (per CONVENTIONS) on inferred or ambiguous claims when in use. Add up to 2 relevant wikilinks per CONVENTIONS / Linking rules.
-   - **Updates.** Merge new info; preserve manual content; update `updated:` timestamp; deduplicate `sources:`. Don't overwrite unrelated sections.
-   - **Write cap.** If more than ~10 pages would change, summarize the plan and ask before writing.
-9. **Update tracking.** Per CONVENTIONS / `index.md`, `## Spaces` is the exhaustive navigation contract:
-   - **`## Spaces` (exhaustive, required).** If you created a new space (a folder with `index.md` containing `## Spaces`), prefer the CLI: `wiki-spaces space add <relative-path>` creates the folder, writes a minimal `index.md` (with `## Spaces` from t=0), and updates the nearest ancestor's `## Spaces` automatically — auto-inserting the section into any ancestor whose `index.md` lacks it. Use `wiki-spaces space remove <relative-path>` to delete in symmetric fashion. No prior setup required: `space add`, `space remove`, `space mount`, and `space promote` all maintain the navigation contract for you. If the CLI is unavailable entirely, do it manually — but walk the **whole chain**, not just the nearest ancestor, or you'll leave drift. Starting at the new space and stepping up one folder at a time: skip plain folders (no `index.md`); at every ancestor with `index.md` insert `## Spaces` if missing AND register the child you came from in it. Stop after registering at the wiki root. Registering only the nearest ancestor while an intermediate ancestor stays unregistered upward breaks the exhaustive-`## Spaces` contract — strict consumers would surface the intermediate as drift. When you remove a contained space whose entry is listed, remove that entry; the chain helper doesn't unwind upward because the parent stays a space.
-   - **`.manifest.json` (opt-in; user must scaffold first).** When the file is present, update it via `wiki-spaces manifest set <entry-id> key=value …` — the CLI handles `fcntl.flock`, atomic-tempfile-replace, and JSON-coerces typed values (`pages_in_vault=12` → int, `last_commit_synced=null` → None) so you don't embed the lock dance per call. Refuse on absent: if `.manifest.json` does not exist, the user has not opted in — pass `--create` only when the user has explicitly opted in this session (otherwise let the call refuse). Refuse on schema-invalid: the CLI surfaces malformed JSON rather than overwriting it. Read via `manifest get <entry-id>` (returns one entry as JSON) or `manifest list` (every entry ID, sorted) before writing if you need to merge against the existing value.
-10. **Confirm + health check.** Report what changed in the format below, then run a quick `wiki-spaces space audit` to surface any drift, broken wikilinks, malformed frontmatter, size-approaching pages, or duplicate aliases the write created or revealed. Most updates are clean; an audit pass at close turns up the few that aren't (e.g. a wikilink that no longer resolves because a page was renamed) before they bite a downstream search. **Bounded self-correction:** if that audit reports only safe structural drift (a missing `## Spaces`, an unregistered on-disk child), run exactly one `space audit --fix` then re-audit and report the delta — once, no recursion. `--fix` never repairs malformed entries/frontmatter (author intent); leave those reported.
-
-```
-Updated wiki:
-- Created: <paths>
-- Updated: <paths>
-- Mode: <project_sync|conversation|research>
-- Audit: <findings or "clean">
-```
-
-## Promote to space
-
-A `.md` file that has grown into multiple distinct topics, accreted siblings, or now represents a recurring kind is a candidate for promotion to its own space. Triggers: the page exceeds ~300 lines of body, carries 3+ H2 sections covering distinct sub-topics, sibling pages have accreted around the topic, or new content's intent makes the page a hub. Run `wiki-spaces space promote <path>` (wiki-root-relative; `--dry-run` to preview) for the mechanical move — it relocates the file to `<basename>/index.md`, rewrites the links pointing at it, seeds `## Spaces`, and registers the new space in the nearest ancestor. See [`references/PROMOTE.md`](../../references/PROMOTE.md) for the full criteria, step-by-step procedure, atomicity guarantees, and refusal conditions.
-
-## Logging
-
-Append a structured entry via the CLI when `log.md` exists at the **scope root** (the wiki for default operations; the targeted space if the user named one — per CONVENTIONS / Per-space convention auto-detection):
+**Create a space** (a folder that needs first-class navigation status):
 
 ```sh
-wiki-spaces space log UPDATE --field mode=<mode> --field project=<name|-> --field pages_updated=X --field pages_created=Y
+mkdir -p <root>/<path> && printf '# <Title>\n\n## Spaces\n' > <root>/<path>/index.md
+python3 <skill-dir>/scripts/ws.py audit --fix --wiki <root>   # registers it up the chain
 ```
 
-The CLI prepends the ISO-8601 UTC timestamp; you supply only the operation name and the key=value pairs. Use `--raw "<full line>"` for custom shapes. Logging is opt-in: when `log.md` is absent, the call refuses; pass `--create` only when the user explicitly opted into logging this session (or run `init <wiki> --with log.md` once). Add `--wiki <path>` when the scope is a named sub-space. The CLI handles atomic locked append and automatic rotation — see [`CONVENTIONS.md` / `log.md`](../../CONVENTIONS.md#logmd).
+`audit --fix` registers the new space in its nearest ancestor's `## Spaces` (inserting the heading where missing). Add a ` — description` to the generated entry by hand — descriptions are placement hints for every later operation.
+
+**Remove a space**: confirm with the user (prefer moving content to `_archives/` over deletion), delete the folder, remove its entry from the parent's `## Spaces`, then `audit` to verify nothing dangles.
+
+**Mount someone else's space** (clone / submodule / symlink, lands under `shared/` by convention): [references/mount.md](references/mount.md).
+
+**Promote a page into a space** (the riskiest manual operation — snapshot first): [references/promote.md](references/promote.md). Triggers: ~3+ H2 sections covering distinct sub-topics, accreted siblings (`strategy.md`, `strategy-backtest.md`…), or an over-cap hub page.

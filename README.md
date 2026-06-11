@@ -1,99 +1,52 @@
 # wiki-spaces
 
-A minimal nestable wiki — a folder with `index.md` and a `## Spaces` navigation contract, for any use case. Research, recipes, code notes, writing, team docs, a personal life wiki — your shape, your call.
+A wiki your AI agent keeps for you. The whole format is a folder whose `index.md` carries a `## Spaces` heading — spaces nest recursively, every file lives under a byte cap, and three skills run the lifecycle (find, capture, maintain) while you work. Research, recipes, code notes, writing, team docs, a personal life wiki: your shape, your call.
 
-Markdown flavor is **Obsidian** — wikilinks, frontmatter, callouts, embeds, comments, Bases. One dialect across the spec, the skills, and the tools. Non-Obsidian renderers (GitHub preview, vanilla VS Code, plain markdown viewers) display the content but will not render Obsidian-specific syntax (provenance comments, embeds, `.base` files) the way Obsidian does — view your wiki in Obsidian for full fidelity.
+Built for AI coding harnesses with filesystem access — Claude Code, Codex, Cursor, Copilot, Gemini CLI, OpenCode, Kiro. Browser-only assistants can't reach your files and are out of scope. The markdown dialect is Obsidian — wikilinks, frontmatter, callouts, embeds, Bases — though plain CommonMark always works; view in Obsidian for full fidelity.
 
-## Audience
-
-wiki-spaces is built for **AI coding harnesses with filesystem access** — Claude Code, Codex, Cursor, Copilot, Gemini CLI, OpenCode, and Kiro. Browser-only AI assistants (ChatGPT in a tab, Claude.ai web) are out of scope: they can't reach the filesystem to read or write your wiki. If your AI lives in a browser, this isn't the tool.
-
-The *shape* of the wiki — research notes, recipes, journal, team reference, anything — is yours. The *harness* that drives it is what wiki-spaces assumes you have.
-
-## Install
-
-Installing gives your agent the reference skills plus a scaffolded, registered wiki. **Letting an agent do it is the recommended path** — setup is a short interview, and an agent runs the steps end to end without fat-fingering a path or a flag.
-
-### Let your AI agent do it (recommended)
-
-Paste this to your coding agent (Claude Code, Codex, Cursor, Copilot, Gemini CLI):
-
-```
-Install and set up wiki-spaces for me by following the instructions here:
-https://raw.githubusercontent.com/anfreire/wiki-spaces/main/references/SETUP.md
-```
-
-The agent reads [`SETUP.md`](references/SETUP.md), asks what the wiki is for and where it should live, infers a layout, links the skills into your harness, scaffolds the wiki, and writes the config — confirming the plan with you before it runs anything.
-
-### Manual
+## Quick start
 
 ```bash
-uvx wiki-spaces install                  # link skills into detected harnesses
-uvx wiki-spaces init ~/Documents/Wiki              # scaffold a fresh wiki + register it
-uvx wiki-spaces init ~/notes --adopt     # OR adopt an existing folder of notes
-uvx wiki-spaces doctor --no-net          # verify
+npx skills add anfreire/wiki-spaces
+npx skills add kepano/obsidian-skills --skill obsidian-markdown --skill obsidian-bases
 ```
 
-`install` writes every skill once into the hub directory (`~/.agents/skills/`) — this hub is read directly by Codex, Gemini CLI, OpenCode, Copilot, and Cursor. For harnesses without hub support — like Claude Code and Kiro — the installer creates per-skill aliases in their native directories (`~/.claude/skills/` and `~/.kiro/skills/` respectively). See [`HARNESS_INTEGRATION.md`](references/HARNESS_INTEGRATION.md) for details on supported harnesses. For a permanent install, run `pip install wiki-spaces` or `uv tool install wiki-spaces`, then drop the `uvx` prefix.
+Then paste this to your agent:
 
-`init` always emits `## Spaces` in the new wiki's `index.md` from t=0 so the `space` subcommands work immediately. `--adopt` walks the existing folder, registers every nested folder containing `index.md` in its ancestor's `## Spaces`, and inserts `## Spaces` into any pre-existing index that lacks the heading (the v1 navigation contract — a wiki is a folder with `index.md` AND `## Spaces`). After adoption every folder carries both, so audit reports zero drift on day 1. External subtrees (`shared/`, foreign submodules, escaping symlinks) are skipped with a per-skip notice; pass `--include-external` to override.
-
-Once a wiki exists, the `space` subcommands manage its structure:
-
-```bash
-uvx wiki-spaces space add projects/foo   # create a space + register it
-uvx wiki-spaces space audit              # audit drift, broken links, orphans
-uvx wiki-spaces space mount <url> --mode submodule              # mount an external space (default path: shared/<basename>/)
+```text
+Set up my wiki with the ws-update skill.
 ```
 
-`space add`, `space remove`, `space mount`, and `space promote` auto-insert `## Spaces` when missing — the CLI maintains the contract for you. `wiki-spaces init` writes `## Spaces` from t=0 so the first write command lands clean.
+A short interview, then it builds the wiki — location, folders, opt-ins, git — or adopts a folder of notes you already have. From then on the skills act on their own initiative: `ws-search` brings stored context when it would help, `ws-update` offers to capture durable work at wrap-ups, `ws-tend` keeps the structure healthy on request.
 
-### No tooling at all
+The first install line carries the three reference skills (72+ harnesses via [vercel-labs/skills](https://github.com/vercel-labs/skills)); the second adds [kepano](https://github.com/kepano)'s companions for Obsidian syntax depth — recommended, not required.
 
-```sh
-mkdir -p ~/Documents/Wiki && printf '# My Wiki\n\n## Spaces\n\n' > ~/Documents/Wiki/index.md
-```
+| Skill | Job |
+|---|---|
+| `ws-search` | Find content across your spaces; answer from what's stored, citing pages. |
+| `ws-update` | Capture conversations, sync projects, save research — merge before create, split before overflow. |
+| `ws-tend` | Audit structure, normalize tags, cross-link pages. |
 
-A folder with `index.md` + `## Spaces` is already a complete wiki — the whole spec is one page, [`AGENTS.md`](AGENTS.md). The skills still work on it (they discover the wiki from your current directory), though they lean on the `wiki-spaces` CLI for cap checks, audit, and structural edits and fall back to manual procedures without it — installing it makes them most effective. Run `wiki-spaces init` later to register the wiki for config-based discovery.
+Each skill bundles `scripts/ws.py` — Python standard library only, zero dependencies — for traversal, size checks, and audit/repair. The whole spec is one page — [AGENTS.md](AGENTS.md) — and the skills discover your wiki from the working directory or `~/.config/wiki-spaces/config`.
 
-### Skill source paths
+## How it works
 
-Users with their own skill-management scripts bypass `install.py` and read the source directories directly. The two canonical roots are:
+- **Spaces are the unit.** A space is a folder with `index.md` and a `## Spaces` heading — and every space is itself a wiki one level down. Trees nest without limit; any folder anywhere (a repo root, a teammate's share) can be one. Sharing a space is sharing a folder: mount it as a subdirectory, symlink, submodule, or clone.
+- **`## Spaces` is the navigation contract.** It exhaustively lists the spaces directly inside; tools traverse only what it lists. `ws.py audit --fix` detects and repairs drift.
+- **Size caps force curation.** Per-file byte caps (5,000 for an `index.md`, 15,000 for a page) make the agent split, promote, or trim instead of hoarding — never truncate. Day 30 is better than day 0.
+- **Trust scope protects sharing.** Owned spaces are read freely; anything under `shared/`, a foreign-origin submodule, or an escaping symlink is external — read on request, written only on explicit instruction.
 
-- `<repo>/skills/*/` — `ws-search`, `ws-update`, `ws-tend`
-- `<repo>/vendor/kepano/*/` — `obsidian-markdown`, `obsidian-bases`
-
-`<repo>` is the source checkout or the share dir written by `wiki-spaces install` (`~/.local/share/wiki-spaces/` for packaged installs). Copy, symlink, or aggregate however your tooling prefers.
-
-## What you get
-
-Three reference skills your AI agent uses to work with the wiki:
-
-- `ws-search` — find content
-- `ws-update` — capture / save / sync, with per-file size discipline (hard caps at write time, see [`CONVENTIONS.md` § `_meta/limits.md`](CONVENTIONS.md))
-- `ws-tend` — audit, normalize tags, cross-link
+Opt-in conventions — frontmatter, taxonomy, templates, an append-only log, custom caps — are cataloged in [CONVENTIONS.md](CONVENTIONS.md).
 
 ## Search at scale
 
-`ws-search` works out of the box with grep / ripgrep, which is fine for personal/team wikis up to a few hundred pages. For larger vaults, install [`qmd`](https://github.com/tobi/qmd) — the markdown-aware MCP backend Andrej Karpathy references in the canonical [LLM-wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). See [`CONVENTIONS.md` § Recommended search backends](CONVENTIONS.md#recommended-search-backends).
-
-## Learn more
-
-- [`AGENTS.md`](AGENTS.md) — the spec, one page
-- [`CONVENTIONS.md`](CONVENTIONS.md) — opt-in conventions catalog
-- [`references/EXAMPLES.md`](references/EXAMPLES.md) — topology examples per use case
-- [`references/MOUNT.md`](references/MOUNT.md) — mount external spaces into your wiki
-
-## Dependencies
-
-Python `>=3.11`. [`uv`](https://docs.astral.sh/uv/) recommended (handles Python provisioning). `git` optional.
+The bundled `ws.py grep` — deterministic and trust-scope-aware — carries a wiki to a few hundred pages. Past that, [qmd](https://github.com/tobi/qmd) adds markdown-aware BM25 + semantic search — the backend Andrej Karpathy references in his [LLM-wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f).
 
 ## Prior art
 
-- Andrej Karpathy's [LLM Wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
-- [Ar9av/obsidian-wiki](https://github.com/Ar9av/obsidian-wiki) — broader framework wiki-spaces extracts from
-- [kepano](https://github.com/kepano) — vendored `obsidian-markdown` and `obsidian-bases` skills (MIT-licensed; see [`vendor/kepano/LICENSE`](vendor/kepano/LICENSE))
+- Andrej Karpathy's [LLM wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
+- [kepano](https://github.com/kepano) — creator of the companion Obsidian skills
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE).
+MIT. See [LICENSE](LICENSE).

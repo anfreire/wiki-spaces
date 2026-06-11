@@ -4,6 +4,43 @@ All notable changes to wiki-spaces are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [3.0.0] — 2026-06-10
+
+### Removed
+
+- Python package, CLI, installer, and doctor command.
+- Manifest machinery and the `.manifest.json` file.
+- Vendored kepano skills from the core repository.
+- Log rotation and glob-based size cap tables.
+- The `repo` configuration key.
+- PyPI distribution.
+
+### Added
+
+- Bundled `ws.py` script duplicated inside each of the three skill
+  directories: deterministic traversal (`list`, `files`), trust-scoped
+  regex search (`grep`), cap verdicts (`check-size`), and bounded repair
+  (`audit --fix`).
+- Distribution via `npx skills add anfreire/wiki-spaces` (companions:
+  `npx skills add kepano/obsidian-skills --skill obsidian-markdown
+  --skill obsidian-bases`).
+- Byte-based, basename-keyed size cap model; `_meta/limits.md` overrides
+  per basename, with the literal `*.md` re-capping the content-page
+  catch-all.
+- Detached wiki discovery and conflict announcement when multiple wikis
+  are found; an unusable configured `wiki` key is reported with its
+  reason, never skipped silently.
+- Self-contained skills that manage their own operations.
+
+### Changed
+
+- The `## Spaces` contract is now maintained directly by the skills.
+- `ws-update` suggests a `ws-tend` pass when audit findings fall outside the
+  sync's write scope (suggestion only, never auto-run).
+- Size caps are enforced via a detect-and-repair model.
+- The `log.md` file is demoted to optional append-only notes with no rotation.
+- Kepano skills are now installed as a companion package.
+
 ## [2.0.0] — 2026-06-04
 
 ### Removed

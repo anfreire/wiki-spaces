@@ -1,57 +1,64 @@
 ---
 name: ws-search
-description: Search the user's canonical wiki for stored knowledge. Use when the user asks "what do I know about X", "find Y in the wiki", or before doing external research that the wiki may already cover.
+description: Search the user's canonical wiki for stored knowledge. Use when the user asks "what do I know about X", "find Y in the wiki", before doing external research the wiki may already cover, or when stored context could help the current task and the user hasn't asked — offer once.
 ---
 
 # Wiki Search
 
-Find content in the user's canonical wiki and answer using only what's stored. Cite pages with `[[wikilinks]]`. Report gaps explicitly when the wiki doesn't cover the topic.
+Find content in the user's wiki and answer from what's stored. Cite pages so the user can jump to them. Report gaps explicitly when the wiki doesn't cover the topic — never pad the answer with knowledge the wiki doesn't hold.
 
-## Defers to
+<!-- ws:core -->
+## The wiki model
 
-- Spec: `AGENTS.md` at the wiki-spaces repo (path in `~/.config/wiki-spaces/config` `repo` key).
-- Conventions: `CONVENTIONS.md` at the same repo. Cited sections below: `index.md`, Frontmatter schema, Retrieval primitives.
-- Markdown syntax: kepano's `obsidian-markdown` skill — installed alongside this one in your harness's skills directory.
-- Deeper docs: `references/` at the wiki-spaces repo for setup, examples, mounting playbooks.
-- Traversal model: contract-first per AGENTS.md / The navigation contract. Use `wiki-spaces space list` / `wiki-spaces space files` for structured traversal — these reflect `## Spaces`, malformed-href policy, and external trust scope deterministically.
+A wiki is a folder whose `index.md` carries a `## Spaces` heading. `## Spaces` is the navigation contract: every space directly inside is listed there as `- [label](path/index.md) — description`, and tools traverse only what it lists. Spaces nest recursively; each space is itself a wiki one level down. Plain folders (no `index.md`) just group files. The markdown dialect is Obsidian — wikilinks, frontmatter, callouts, embeds; the companion `obsidian-markdown` and `obsidian-bases` skills cover the syntax.
+
+## Resolving the wiki
+
+Resolution order: an explicit path from the user → the nearest CWD-ancestor folder that is a wiki → the `wiki` key in `~/.config/wiki-spaces/config`. The user's words override the mechanics: "my wiki" means the configured one even when CWD sits inside another wiki (a company repo, say). When a CWD wiki and a different configured wiki both exist, announce which root you resolved; ask once if intent is ambiguous. Never silently operate on the wrong wiki.
+
+## The bundled script
+
+`scripts/ws.py` sits next to this SKILL.md — stdlib python3, zero dependencies. Invoke it by absolute path (your working directory is usually elsewhere):
+
+- `python3 <skill-dir>/scripts/ws.py list --wiki <root>` — spaces reachable via the `## Spaces` contract (`--external` to cross mounts).
+- `… files --wiki <root>` — markdown files reachable via the contract.
+- `… grep <pattern> [-i] --wiki <root>` — regex line search over those files; prints `rel:line: text`, exits 1 on no match.
+- `… check-size <target> [--stdin] --wiki <root>` — cap verdict for a file; pipe planned content with `--stdin` to check before writing.
+- `… audit [--fix] --wiki <root>` — drift, broken wikilinks, over-cap files; `--fix` only inserts missing `## Spaces` headings and registers unlisted owned child spaces.
+
+Trust the script's output over re-deriving structure by hand; it is the deterministic view of the contract.
+
+## Trust scope and size discipline
+
+Owned vs external is relative to the resolved root: anything under `shared/`, a foreign-origin git submodule, or a symlink escaping the tree is external. Reads cross owned spaces by default and enter external ones only when the user explicitly asks. Writes stay inside the targeted space; any other space — owned or external — is written only on explicit instruction.
+
+Caps are UTF-8 bytes including frontmatter, keyed by basename: `index.md` 5000, `log.md` and `hot.md` 100000, any other `*.md` 15000; a wiki overrides them in `_meta/limits.md` with plain `basename: bytes` lines (the literal name `*.md` re-caps the content-page catch-all). Run `check-size` before writing. An overflow is a signal to split, promote, or trim — never to truncate.
+
+Conventions are opt-in per wiki. Read the markers present at the scope root — `log.md`, `_meta/taxonomy.md`, `_meta/limits.md`, frontmatter on pages, `_template.md`, `hot.md`, `.obsidian/`, `.git` — and degrade gracefully when one is absent. If `log.md` exists, append one line per operation:
+
+```sh
+printf '%s <OP> <details>\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> <root>/log.md
+```
+<!-- /ws:core -->
 
 ## Procedure
 
-1. **Resolve the target wiki** per [`CONVENTIONS.md` / Discovery via config](../../CONVENTIONS.md#discovery-via-config) — explicit path → `wiki` config key → nearest CWD ancestor whose `index.md` contains `## Spaces` → inline setup. When step 3 (CWD) was the source, mention once in the response: "Operating on the wiki at `<path>` (found via CWD; no config registered)." When all three miss, drive the setup flow inline via [`ws-update/SKILL.md` § Initialization](../ws-update/SKILL.md#initialization), then resume from step 1 with the user's original query.
-2. **Detect adopted conventions at the SCOPE root** (the canonical wiki for default operation; the targeted space if the user named one) by presence: frontmatter schema (scan content pages until one with frontmatter is found, or confirm none), `_meta/taxonomy.md` (for tag matching), `log.md` (for logging). Spaces are autonomous — never inherit detection from a parent.
-3. **Choose the search mode.**
-   - **Quick lookup** — triggered by an agent checking before external research, or user says "quick answer", "just check", "do I have anything on X". Stops at step 5.1 (no page bodies read). Prefix the answer: `Quick lookup: summaries only; page bodies not read.`
-   - **Deep query** — default for user questions. Full retrieval below.
-4. **Pick a search backend** per CONVENTIONS / Retrieval primitives § Recommended search backends. Prefer in this order:
-   - A markdown-aware search MCP installed in the harness (**qmd** is the recommended primary — BM25 + semantic + hybrid + rerank, MCP and CLI surfaces, referenced by Andrej Karpathy in the canonical LLM-wiki gist).
-   - The harness's native file-search tool, when it understands markdown structure.
-   - Ripgrep (`rg`) or the harness's grep tool as a universal fallback.
+1. **Resolve the wiki** (core block above). Announce the root when it came from CWD or could be ambiguous. No wiki anywhere → say so and offer to set one up via `ws-update`.
+2. **Map the terrain.** Run `list` for the space shape and `files` for the page inventory. Both are cheap; run them before any content search. External mounts stay out unless the user asked — if mounts exist and look relevant, say so and offer to cross them.
+3. **Pick the depth.** "Just check", "do I have anything on X", or an agent pre-research probe → quick lookup: rank candidates structurally (step 4), read nothing, answer from names/summaries and say so. A real question → deep query: continue through step 6.
+4. **Rank candidates structurally.** Match the query against space labels and descriptions (`## Spaces` entries), file names, and path segments. When frontmatter is in use, `summary`, `aliases`, and `tags` rank pages without reading bodies.
+5. **Search content** when structure alone doesn't settle it, cheapest first:
+   1. A markdown-aware search backend when available (e.g. the qmd MCP — BM25 + semantic over markdown).
+   2. `… grep '<term>' -i --wiki <root>` — the universal fallback, always bundled; searches exactly the trust-scoped page set (no `shared/`, foreign submodules, or `_archives/`), `--external` only when the user asked.
+6. **Read the top hits fully.** Pages are cap-bounded, so whole files are affordable. Prefer 2–4 full pages over a dozen snippets.
+7. **Answer from the wiki only.** Cite every claim's page with a wikilink (`[[path/to/page]]`). Carry over `%%inferred%%` / `%%ambiguous%%` provenance markers when the wiki uses them. Name what the wiki lacks as a gap, then offer to research and capture it via `ws-update`.
+8. **Log** one `SEARCH` line per the core block when `log.md` exists.
 
-   Don't gate retrieval on any specific backend. If qmd is available, use it for the index and section passes below; otherwise grep is fine. Traversal stays contract-first regardless: enumerate `.md` files via `wiki-spaces space files` (step 5.1) — the backend ranks within that set; it doesn't replace it.
-
-5. **Cost-ordered retrieval** per CONVENTIONS / Retrieval primitives. Use the cheapest primitive that answers; escalate only when it cannot.
-   1. **Index pass.** Build the candidate set. Where frontmatter is in use, grep the frontmatter fields (`title`, `tags`, `aliases`, `summary`) across pages — a fast signal that surfaces and ranks likely candidates. **Walk the wiki via the navigation contract** using `wiki-spaces space files` (add `--include-external` when the user opted in at step 6) to enumerate every consumer-visible `.md` file, ranked by filename and path-segment match. Per AGENTS.md the contract is exhaustive: unregistered on-disk content is treated as drift and is NOT consumer-visible — if the user is missing knowledge they wrote, run `wiki-spaces space audit` to surface drift, then `--fix` to register. Malformed `## Spaces` entries are silently skipped by the walker; audit surfaces them. Collect the top 5–10 candidates overall: exact title/alias > tag match > summary/path match. *(Quick lookup stops here — candidates only, no page bodies read.)*
-   2. **Section pass.** For each top candidate: grep with context (e.g., `grep -A 10 -B 2 "<term>" <file>` or your harness's equivalent grep tool). If this gives a clear answer, skip to step 7.
-   3. **Full read.** At most 3 candidates. Follow one wikilink hop only when needed.
-6. **Default scope is the wiki and the owned spaces inside it.** Per AGENTS.md trust scope (read operations cross owned spaces by default), search descends through owned spaces — typically `projects/<name>/` and anything else the user created. *External* spaces (anything under `<wiki>/shared/`, git submodules with foreign origins, symlinks resolving outside the wiki tree — see CONVENTIONS / Owned vs external) are excluded unless the user explicitly names one or asks to include all. CWD is a hint — if the user is in a project space and asks "what's been said here?", scope to that space.
-7. **Answer.** Cite pages using `[[wikilinks]]`. If sources contradict, present both. If the wiki has no coverage, say so explicitly — never infer an answer from absence. Suggest external research only if appropriate.
-
-Format:
+## Output
 
 ```
-Based on the wiki:
-<answer with [[wikilinks]]>
-
-Pages consulted: [[page-a]], [[page-b]]
-Gaps: <what's missing>
+From your wiki (<root>):
+- <finding> — [[page]]
+- <finding> — [[page]]
+Gaps: <topics the wiki doesn't cover, or "none">
 ```
-
-## Logging
-
-When `log.md` exists at the **scope root** (the wiki for default operations; the targeted space if the user named one — per CONVENTIONS / Per-space convention auto-detection), append a structured entry via the CLI:
-
-```sh
-wiki-spaces space log SEARCH --field query="<the question>" --field result_pages=N --field mode=quick
-```
-
-The CLI prepends the ISO-8601 UTC timestamp; you supply only the operation name and the key=value pairs. Use `--raw "<full line>"` for custom shapes. Logging is opt-in: when `log.md` is absent, `space log` refuses unless `--create` is passed, so call this only after confirming presence (or pass `--create` if the user opted in mid-session). Add `--wiki <path>` when the scope is a named sub-space.

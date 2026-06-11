@@ -2,20 +2,18 @@
 
 ## What this space is
 
-The wiki-spaces project: a minimal nestable wiki spec, an opt-in conventions catalog, three reference skills, and a per-harness installer. This repo is itself a wiki-spaces wiki — its own canonical example.
+The wiki-spaces project: a one-page spec, an opt-in conventions catalog, and three self-contained reference skills installable via `npx skills add anfreire/wiki-spaces`. This repo is itself a wiki-spaces wiki — its own canonical example.
 
-A wiki is a folder with `index.md` whose contents include a `## Spaces` heading. Spaces inside it recurse. Sharing a wiki means sharing a folder; the receiver mounts it as a subdir, symlink, or submodule — and from their perspective, it becomes a space inside theirs. See [`AGENTS.md`](AGENTS.md) for the spec.
+A wiki is a folder with `index.md` whose contents include a `## Spaces` heading. Spaces inside it recurse. Sharing a wiki means sharing a folder; the receiver mounts it as a subdir, symlink, submodule, or clone — and from their perspective, it becomes a space inside theirs. See [`AGENTS.md`](AGENTS.md) for the spec.
 
 ## Items
 
 - [AGENTS.md](AGENTS.md) — the spec (LLM contract)
 - [CONVENTIONS.md](CONVENTIONS.md) — opt-in conventions catalog
 - [README.md](README.md) — install and orientation
+- [CHANGELOG.md](CHANGELOG.md) — release history
 - [LICENSE](LICENSE) — MIT
 
 ## Spaces
 
 - [skills/](skills/index.md) — the three reference skills
-- [vendor/](vendor/index.md) — pinned upstream (kepano/obsidian-skills)
-- [references/](references/index.md) — agent-facing setup, examples, mounting playbooks
-- [scripts/](scripts/index.md) — Python+uv installer and sync tooling
