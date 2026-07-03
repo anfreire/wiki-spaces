@@ -26,10 +26,10 @@ Zero contained spaces is a fine wiki, meaning `## Spaces` is just empty. Deep ne
 
 ## The navigation contract
 
-`## Spaces` is the navigation contract. It's **exhaustive**, meaning every space directly inside this one must be listed there. Tools traverse via this list and rely on it being complete.
+`## Spaces` is the navigation contract. It's **exhaustive**, meaning every space directly inside this one must be listed there — plain folders and heading-less `index.md` dirs group transparently, so a space beneath them lists at its nearest real ancestor. Tools traverse via this list and rely on it being complete. An entry is a markdown bullet (any marker; skills write `-`), its href a CommonMark destination — percent-encoded where the name demands it, as in `my%20space/index.md` — so a space's folder name must survive one: `[](){}` cannot appear, and the audit names offenders as unregistrable.
 
 - **Maintenance**: The skills maintain `## Spaces` when creating, removing, mounting, or promoting spaces. No CLI commands exist to perform writes.
-- **Repair**: The bundled `scripts/ws.py audit [--fix]` serves as the repair surface. It detects drift, broken links, orphans, and over-cap files. Running it with `--fix` inserts missing headings and registers unlisted owned child spaces only.
+- **Repair**: The bundled `scripts/ws.py audit [--fix]` serves as the repair surface. It detects drift, broken links, over-cap and unreadable files, registered mounts that stopped being wikis, and orphans. Running it with `--fix` completes half-declared owned spaces — it registers an unlisted valid child space and inserts the heading a registered child lacks — and never promotes an undeclared folder: a coincidental `index.md` (a docs site inside a repo-root wiki, say) is reported, not rewritten.
 
 ## Size discipline
 
@@ -40,9 +40,9 @@ Caps are measured in UTF-8 bytes, including frontmatter. The default limits are 
 - `hot.md`: 100,000 bytes
 - Any other `*.md` file: 15,000 bytes
 
-You can override these defaults via `_meta/limits.md` using plain `basename: bytes` lines. The literal name `*.md` re-caps the catch-all for content pages — it is a reserved name, not a glob; patterns and paths are not supported.
+You can override these defaults via `_meta/limits.md` using plain `basename: bytes` lines. Any space can carry its own `_meta/limits.md`; the nearest one at or above a file governs it — closest ancestor wins, the same rule `_template.md` uses — and the lookup never crosses a trust boundary, so an external space answers to its own limits or the defaults, never the host's, and a path outside the wiki answers to the defaults alone. The literal name `*.md` re-caps the catch-all for content pages — it is a reserved name, not a glob; patterns and paths are not supported.
 
-Skills check file sizes before writing by running `scripts/ws.py check-size`. An overflow is a signal to split, promote, or trim the content, never to truncate it. A write that shrinks an over-cap file toward its cap is progress, not a new violation. The audit tool catches any size violations that slip through. This is a detect-and-repair model, not write-time CLI enforcement.
+Skills check file sizes before writing by running `scripts/ws.py check-size`; convention appends (`log.md`) lean on the audit backstop instead. An overflow is a signal about shape, not just size: distill the page or reshape the space that holds it — never truncate. A write that shrinks an over-cap file toward its cap is progress, not a new violation — `check-size` reports it `ok` and says so. The audit tool catches any size violations that slip through. This is a detect-and-repair model, not write-time CLI enforcement.
 
 ## Discovery
 
@@ -56,11 +56,11 @@ When a current working directory wiki and the canonical wiki both exist but diff
 
 ## Sharing & nesting
 
-What you share is always a space. Your whole wiki is just the top-most space, and a single nested space is the same thing one level down. Sharing a space means sharing its folder. The receiver mounts it however they prefer, such as a subdirectory, symlink, git submodule, or clone. It then lands as a space inside their tree.
+What you share is always a space. Your whole wiki is just the top-most space, and a single nested space is the same thing one level down. Sharing a space means sharing its folder. The receiver mounts it however they prefer, such as a subdirectory, symlink, git submodule, or clone. It then lands as a space inside their tree. The skills carry both procedures: mounting someone's space and sharing out one of yours.
 
 Detached spaces are first-class. Any folder anywhere can be a wiki, such as a company repository keeping one at its root. Wikis relate via mounts.
 
-**Trust scope.** Trust scope is relative to the resolved root. Tools distinguish owned spaces from external spaces. External spaces are defined as anything under `shared/`, a foreign-origin git submodule, or a symlink whose realpath escapes the resolved root.
+**Trust scope.** Trust scope is relative to the resolved root. Tools distinguish owned spaces from external spaces. External spaces are defined as anything under a folder named `shared/` at any depth, a foreign-origin git submodule, or a symlink whose realpath escapes the resolved root or lands in external scope. All three rules apply at any depth — every space is a wiki one level down, so a nested space's mounts get the same fence the root's do.
 
 - **Read operations**: Search, audit, and status cross owned spaces by default. External spaces are visited only when the user explicitly asks.
 - **Write operations**: Writes stay within the targeted space by default. Other spaces, whether owned or external, are written to only with explicit instruction.
@@ -76,6 +76,7 @@ The conventions catalog includes:
 - `log.md`: Optional append-only notes. It records one ISO-8601-timestamped line per operation, with no rotation and no structured-field promises.
 - `_meta/taxonomy.md`: Taxonomy definitions.
 - `_meta/limits.md`: Custom size limits.
+- `_meta/ignore.md`: Folder names the walk skips.
 - `frontmatter`: Metadata block at the top of files.
 - `_template.md`: Template for new files.
 - `hot.md`: Frequently updated notes.

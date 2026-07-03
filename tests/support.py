@@ -49,8 +49,9 @@ def write(path: Path, text: str) -> None:
 
 
 def build_demo(root: Path) -> None:
-    """The shared fixture: nested spaces, drift, a stale entry, an external
-    mount, a broken wikilink, over-cap files, and an orphan."""
+    """The shared fixture: nested spaces, drift, a stale entry, a
+    half-declared space (registered, bare index), an external mount, a
+    broken wikilink, over-cap files, and an orphan."""
     write(root / "index.md", (
         "# Demo wiki\n"
         "\n"
@@ -63,6 +64,7 @@ def build_demo(root: Path) -> None:
         "- [alpha/](alpha/index.md) — first space\n"
         "- [beta/](beta/index.md)\n"
         "- [missing/](missing/index.md) — points nowhere\n"
+        "- [halfway/](halfway/index.md) — registered, heading pending\n"
         "- [shared/team/](shared/team/index.md) — external mount\n"
     ))
     write(root / "notes.md", (
@@ -104,4 +106,5 @@ def build_demo(root: Path) -> None:
     write(root / "beta" / "gamma" / "index.md", "# Gamma\n\n## Spaces\n")
     write(root / "unregistered" / "index.md", "# Unregistered\n\n## Spaces\n")
     write(root / "bare" / "index.md", "# Bare\n")
+    write(root / "halfway" / "index.md", "# Halfway\n")
     write(root / "shared" / "team" / "index.md", "# Team\n\n## Spaces\n")

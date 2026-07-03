@@ -4,6 +4,127 @@ All notable changes to wiki-spaces are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Overflow guidance no longer leads with "split". An overflow is diagnosed
+  — bloat → distill; growth → reshape the space (siblings under a hub,
+  promotion, a regrouped layout) — with continuation filenames
+  (`topic-2.md`, `topic-more.md`) named as the anti-pattern. `ws-update`
+  step 7 carries the procedure; the spec, README, core blocks, `ws-tend`,
+  `init.md`, and both `ws.py` verdict strings follow it.
+- `shared/` classifies as external at any depth, matching the any-depth
+  semantics of the submodule and symlink rules — a nested space's mounts
+  get the same fence the root's do.
+- Size caps resolve per space: the nearest `_meta/limits.md` at or above a
+  file wins (the `_template.md` rule), and the lookup never crosses a
+  trust boundary — an external space answers to its own limits or the
+  defaults, never the host's. `check-size` verdicts no longer depend on
+  which root resolved.
+- `audit --fix` report lines read `fixed` / `fix-skipped` (previously
+  `~` / `!` under one `fixed` prefix), and a case-variant heading
+  (`## spaces`) is reported with a rename hint instead of having a second
+  heading inserted next to it.
+- `audit --fix` follows one completion rule: it completes a half-declared
+  space — registers an unlisted valid child, inserts the heading a
+  registered child lacks — and never promotes an undeclared folder; a
+  coincidental `index.md` (a docs site, say) is reported, not rewritten.
+  Bare and plain dirs group transparently — a space beneath them
+  registers at its nearest real ancestor — and an entry crossing another
+  space's boundary is declined: that space owns the deeper listing.
+- Near-miss heading detection generalized from the case-variant special
+  case to the class: `## spaces`, `## Spaces ##`, and `##Spaces` all get
+  the rename hint, and repair defers on each.
+- Dot-prefixed names are reserved at any depth for files as well as
+  folders — Obsidian cannot display dotfiles either.
+- `check-size --stdin` reports a planned write that shrinks an over-cap
+  file as `ok … shrinking write is progress` (exit 0): the spec's
+  shrinking-write allowance is now expressible by the tool.
+
+### Added
+
+- Stderr advisory channel in `ws.py`: `list`, `files`, `grep`, and
+  `check-size` announce the resolved root (`wiki: …`); walks emit `note:`
+  lines for skipped external paths, spaces unreachable via `## Spaces`,
+  unreadable files, and external `check-size` targets. Stdout stays pure
+  data.
+- New audit findings: `mount` (a registered external mount that is no
+  longer a wiki — watched by the *default* audit; interior findings still
+  need `--external`), broken relative markdown links alongside wikilinks,
+  and `unreadable` (non-UTF-8) files. Findings inside external spaces are
+  marked `[external]` under `--external`.
+- `references/share.md` in ws-update — the producer side of sharing:
+  verify a space stands alone, pick snapshot / repo / two-way sync, carve
+  it into its own repo, optionally re-mount it as your own consumer.
+- `_meta/ignore.md` convention: folder names the filesystem walk skips
+  (one per line, nearest-file lookup like `limits.md`, trust-boundary
+  fenced) — the reserved set is user-extensible, so a repo-root wiki can
+  silence `node_modules`-style vendor trees without hardcoded lists. A
+  contract-registered space is still reached.
+- New audit findings: `duplicate entry`, `a second ## Spaces heading`,
+  `unregistrable child name` (a folder whose name cannot survive a
+  contract entry — `[](){}`), and, under `--external`, `missing entry`
+  drift for a mounted external space nobody registered (`--fix` never
+  registers those; mount.md's by-hand step stands).
+- The audit emits the same stderr walk advisories the data commands do
+  (skipped external paths, unlistable directories) — silence never means
+  "looked everywhere" on any command now.
+- `## Items` documented in CONVENTIONS.md: human navigation, not
+  contract; drift there surfaces through the broken-link scan.
+
+### Fixed
+
+- `## Spaces` hrefs are read as CommonMark destinations: percent-encoding
+  decodes on read (Obsidian writes `my%20space/index.md`), every check
+  runs on the decoded name, and `audit --fix` writes encoded hrefs — a
+  folder name with a space registers dialect-valid instead of surfacing
+  as stale-plus-missing and being "repaired" with a link no renderer
+  follows. The audit's unregistrable verdict asks the same encode/decode
+  round-trip the fix verifies before writing.
+- An entry rides any markdown bullet marker (`-`, `*`, `+`), matching the
+  spec's "an entry is a markdown bullet" — a `*` or `+` entry no longer
+  drops its space off the contract silently, with `--fix` appending a
+  duplicate `-` entry beneath it. Skills keep writing `-`; a non-entry
+  bullet of any marker is flagged malformed.
+- `init.md`'s adopt path ensures the adopted root itself carries
+  `## Spaces` before the first audit — an existing heading-less
+  `index.md` dead-ended setup with `not a wiki`.
+- A registered mount that was not a valid wiki was invisible: silently
+  dropped from traversal and absent from the default audit.
+- A nested space's `_meta/limits.md` was ignored; the same file could be
+  `over` from the root and `ok` from the space.
+- `audit --external` findings advertised `(audit --fix inserts it)` on
+  external files that `--fix` correctly refuses to touch; external
+  contract findings now say the owner repairs them.
+- Trust scope now holds at every git boundary: a nested checkout's
+  foreign-origin submodule classified as owned — `grep` read it without
+  `--external` and `audit --fix` could write into it. A submodule is
+  foreign when its URL differs from the origin of the repo that
+  *declares* it, at any depth, whichever root resolved; quoted
+  `.gitmodules` values are unwrapped.
+- `audit --fix` wrote contract entries its own parser rejects (folder
+  names carrying `[](){}`), reported them as `fixed`, and the malformed
+  bullet then blocked every later registration in that index. Entries now
+  round-trip through the parser before writing; an offending name is an
+  `unregistrable` finding, never a block on its siblings.
+- `## Spaces` inside YAML frontmatter counted as the contract for
+  classification while the link scan ignored it; every reader of a
+  document now starts after the frontmatter block.
+- Dangling relative links escaping the root (`../gone.md`) passed the
+  broken-link scan silently; all relative targets are now checked on
+  disk. Wikilinks to assets (`[[report.pdf]]`) were false-positive broken
+  and are exempt like embeds; indented code blocks are no longer scanned;
+  ambiguous wikilinks credited only their first match as incoming.
+- Deep nesting died with a raw `RecursionError` near 1000 levels; the
+  walkers are iterative, so depth is bounded by the filesystem, not the
+  interpreter.
+- `check-size` on a target outside the wiki applied the host's
+  `_meta/limits.md`; out-of-tree paths answer to the defaults alone.
+- A registration rewrite converted a CRLF `index.md` wholesale to LF;
+  repairs now probe and preserve the file's line endings, and
+  `write_atomic` no longer lets the platform translate newlines.
+
 ## [3.0.0] — 2026-06-10
 
 ### Removed

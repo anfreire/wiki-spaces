@@ -1,6 +1,6 @@
 # wiki-spaces
 
-A wiki your AI agent keeps for you. The whole format is a folder whose `index.md` carries a `## Spaces` heading — spaces nest recursively, every file lives under a byte cap, and three skills run the lifecycle (find, capture, maintain) while you work. Research, recipes, code notes, writing, team docs, a personal life wiki: your shape, your call.
+A wiki your AI agent keeps for you. The whole format is a folder whose `index.md` carries a `## Spaces` heading — spaces nest recursively, every page lives under a byte cap, and three skills run the lifecycle (find, capture, maintain) while you work. Research, recipes, code notes, writing, team docs, a personal life wiki: your shape, your call.
 
 Built for AI coding harnesses with filesystem access — Claude Code, Codex, Cursor, Copilot, Gemini CLI, OpenCode, Kiro. Browser-only assistants can't reach your files and are out of scope. The markdown dialect is Obsidian — wikilinks, frontmatter, callouts, embeds, Bases — though plain CommonMark always works; view in Obsidian for full fidelity.
 
@@ -24,7 +24,7 @@ The first install line carries the three reference skills (72+ harnesses via [ve
 | Skill | Job |
 |---|---|
 | `ws-search` | Find content across your spaces; answer from what's stored, citing pages. |
-| `ws-update` | Capture conversations, sync projects, save research — merge before create, split before overflow. |
+| `ws-update` | Capture conversations, sync projects, save research — merge before create, reshape before overflow. |
 | `ws-tend` | Audit structure, normalize tags, cross-link pages. |
 
 Each skill bundles `scripts/ws.py` — Python standard library only, zero dependencies — for traversal, size checks, and audit/repair. The whole spec is one page — [AGENTS.md](AGENTS.md) — and the skills discover your wiki from the working directory or `~/.config/wiki-spaces/config`.
@@ -33,7 +33,7 @@ Each skill bundles `scripts/ws.py` — Python standard library only, zero depend
 
 - **Spaces are the unit.** A space is a folder with `index.md` and a `## Spaces` heading — and every space is itself a wiki one level down. Trees nest without limit; any folder anywhere (a repo root, a teammate's share) can be one. Sharing a space is sharing a folder: mount it as a subdirectory, symlink, submodule, or clone.
 - **`## Spaces` is the navigation contract.** It exhaustively lists the spaces directly inside; tools traverse only what it lists. `ws.py audit --fix` detects and repairs drift.
-- **Size caps force curation.** Per-file byte caps (5,000 for an `index.md`, 15,000 for a page) make the agent split, promote, or trim instead of hoarding — never truncate. Day 30 is better than day 0.
+- **Size caps force curation.** Per-file byte caps (5,000 for an `index.md`, 15,000 for a page) make the agent distill the page or reshape the space instead of hoarding — never truncate. Day 30 is better than day 0.
 - **Trust scope protects sharing.** Owned spaces are read freely; anything under `shared/`, a foreign-origin submodule, or an escaping symlink is external — read on request, written only on explicit instruction.
 
 Opt-in conventions — frontmatter, taxonomy, templates, an append-only log, custom caps — are cataloged in [CONVENTIONS.md](CONVENTIONS.md).

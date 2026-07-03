@@ -71,7 +71,9 @@ Size discipline is default-on. It's configured via this file. Caps are enforced 
 | `hot.md` | 100000 |
 | `*.md` | 15000 |
 
-Shrinking writes are always allowed. Size checks run via `python3 scripts/ws.py check-size` before writes. The `scripts/ws.py audit` command flags over-cap files after the fact. Plain `basename: bytes` lines configure the limits file; the literal name `*.md` re-caps the catch-all row above. Non-matching lines are ignored. No glob patterns, paths, or first-match-wins chains are supported — `*.md` is a reserved name, not a glob.
+Shrinking writes are always allowed — `check-size --stdin` reports a planned write that shrinks an over-cap file as `ok … shrinking write is progress`. Size checks run via `python3 scripts/ws.py check-size` before writes. The `scripts/ws.py audit` command flags over-cap files after the fact. Plain `basename: bytes` lines configure the limits file; the literal name `*.md` re-caps the catch-all row above. Non-matching lines are ignored. No glob patterns, paths, or first-match-wins chains are supported — `*.md` is a reserved name, not a glob.
+
+Any space can carry its own `_meta/limits.md`. The nearest one at or above a file governs it — closest ancestor wins, the same rule `_template.md` uses. The lookup never crosses a trust boundary: an external space answers to its own limits or the defaults, never the host's. A limits file under `shared/` sits on the external side of the fence and covers mounts beneath it that lack their own; a path outside the wiki answers to the defaults alone.
 
 Example:
 ```
@@ -82,6 +84,19 @@ custom-page.md: 8000
 ```
 
 If absent, the defaults apply.
+
+### `_meta/ignore.md`
+
+Folder names the filesystem walk skips, one plain name per line — the user-extensible sibling of the built-in reserved names (`_archives/`, `_meta/`, dot-dirs). `#` lines are comments; paths and globs are not supported. The nearest file at or above a folder governs it (the `limits.md` rule), and the lookup never crosses a trust boundary.
+
+```
+# vendor trees a repo-root wiki drags in
+node_modules
+target
+dist
+```
+
+Ignoring silences implicit discovery only: `files`, `grep`, and `audit` stop descending into a matching folder, but a space explicitly registered in `## Spaces` is still reached through the contract. If absent, only the built-in reserved names are skipped.
 
 ### Frontmatter schema
 
@@ -127,6 +142,20 @@ If absent, the colorize step is skipped.
 ### `.git`
 
 Presence of `.git` indicates the wiki is a git repository. Skills can surface git status in reports. Automatic commits or pushes are never performed. If absent, git context is skipped.
+
+---
+
+## `## Items` sections
+
+An optional curated section in a space's `index.md`, listing notable files as ordinary markdown links:
+
+```markdown
+## Items
+
+- [notes.md](notes.md) — top notes
+```
+
+It is human navigation, not contract: tools traverse only `## Spaces`, and drift in `## Items` surfaces through the audit's broken-link scan, not as registration findings. Skills maintain one only where the index already has it. If absent, files are found by traversal alone.
 
 ---
 
@@ -177,7 +206,7 @@ Folder convention for placing pages by kind. Example folders:
 | Developer notebook | `concepts/`, `entities/`, `skills/`, `projects/` |
 | Research wiki | `papers/`, `topics/`, `methods/` |
 
-Reserved top-level folder names:
+Reserved folder names, honored at any depth:
 
 | Name | Behavior |
 |---|---|
@@ -186,6 +215,8 @@ Reserved top-level folder names:
 | `_meta/` | Configuration files. |
 | `.obsidian/` | Obsidian configuration. |
 | `.git/` | Hidden directory, skipped. |
+
+Dot-prefixed names are reserved at any depth, files and folders alike — Obsidian cannot display them either. Extend the skipped set per space with [`_meta/ignore.md`](#_metaignoremd).
 
 If absent, pages are written flat at the root.
 

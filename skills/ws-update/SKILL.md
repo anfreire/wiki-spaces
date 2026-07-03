@@ -24,17 +24,17 @@ Resolution order: an explicit path from the user → the nearest CWD-ancestor fo
 - `… files --wiki <root>` — markdown files reachable via the contract.
 - `… grep <pattern> [-i] --wiki <root>` — regex line search over those files; prints `rel:line: text`, exits 1 on no match.
 - `… check-size <target> [--stdin] --wiki <root>` — cap verdict for a file; pipe planned content with `--stdin` to check before writing.
-- `… audit [--fix] --wiki <root>` — drift, broken wikilinks, over-cap files; `--fix` only inserts missing `## Spaces` headings and registers unlisted owned child spaces.
+- `… audit [--fix] --wiki <root>` — drift, broken links, over-cap or unreadable files, unhealthy mounts; `--fix` completes half-declared owned spaces (registers unlisted valid children, inserts the heading a registered child lacks) and never promotes an undeclared folder.
 
-Trust the script's output over re-deriving structure by hand; it is the deterministic view of the contract.
+Trust the script's output over re-deriving structure by hand; it is the deterministic view of the contract. Stdout is data; stderr carries the resolved root and `note:` advisories naming whatever a walk skipped — relay them when they could change the answer.
 
 ## Trust scope and size discipline
 
-Owned vs external is relative to the resolved root: anything under `shared/`, a foreign-origin git submodule, or a symlink escaping the tree is external. Reads cross owned spaces by default and enter external ones only when the user explicitly asks. Writes stay inside the targeted space; any other space — owned or external — is written only on explicit instruction.
+Owned vs external is relative to the resolved root: anything under a folder named `shared/` (at any depth), a foreign-origin git submodule, or a symlink escaping the tree is external. Reads cross owned spaces by default and enter external ones only when the user explicitly asks. Writes stay inside the targeted space; any other space — owned or external — is written only on explicit instruction.
 
-Caps are UTF-8 bytes including frontmatter, keyed by basename: `index.md` 5000, `log.md` and `hot.md` 100000, any other `*.md` 15000; a wiki overrides them in `_meta/limits.md` with plain `basename: bytes` lines (the literal name `*.md` re-caps the content-page catch-all). Run `check-size` before writing. An overflow is a signal to split, promote, or trim — never to truncate.
+Caps are UTF-8 bytes including frontmatter, keyed by basename: `index.md` 5000, `log.md` and `hot.md` 100000, any other `*.md` 15000. A `_meta/limits.md` of plain `basename: bytes` lines overrides them — the nearest one at or above the file wins, like `_template.md`, and the literal name `*.md` re-caps the content-page catch-all. Run `check-size` before writing — a write that shrinks an over-cap file reports `ok`, progress. An overflow is a signal about shape, not just size: distill the page or reshape the space — never truncate.
 
-Conventions are opt-in per wiki. Read the markers present at the scope root — `log.md`, `_meta/taxonomy.md`, `_meta/limits.md`, frontmatter on pages, `_template.md`, `hot.md`, `.obsidian/`, `.git` — and degrade gracefully when one is absent. If `log.md` exists, append one line per operation:
+Conventions are opt-in per wiki. Read the markers present at the scope root — `log.md`, `_meta/taxonomy.md`, `_meta/limits.md`, `_meta/ignore.md`, frontmatter on pages, `_template.md`, `hot.md`, `.obsidian/`, `.git` — and degrade gracefully when one is absent. If `log.md` exists, append one line per operation:
 
 ```sh
 printf '%s <OP> <details>\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> <root>/log.md
@@ -64,14 +64,14 @@ When nothing resolves — no explicit path, no CWD-ancestor wiki, no valid confi
    <projected content>
    EOF
    ```
-   On `over`, pick the remediation in order — never truncate, never ignore:
-   1. **Split** — the page has H2 sections that read as distinct topics → move sections out to siblings; the page becomes a hub linking them.
-   2. **Promote** — the page has become a hub of sub-topics or accreted siblings → turn it into a space: [references/promote.md](references/promote.md).
-   3. **Trim** — the page is genuinely dense → merge or drop the weakest entries now, not "later".
-   An over-cap `index.md` is different: push detail down into child pages and keep entries to one line each — an index is navigation, not content.
+   Editing an already-over-cap file smaller reports `ok … shrinking write is progress` — write it, then keep distilling toward the cap. On `over`, the content outgrew its shape — never truncate, never ignore. Re-read the page and its space's index, diagnose why it overflowed, then act:
+   - **Bloat** — padding, near-duplicates, prose pasted in raw, entries you wouldn't re-create today → distill: merge, tighten, drop. The cap exists to force exactly this judgment.
+   - **Growth** — genuinely distinct topics sharing one file → reshape the space to what it would look like had it been designed for today's content: sibling pages with self-standing names under a hub, a promotion into a space ([references/promote.md](references/promote.md)), or a regrouped layout — a new sub-space, pages moved to better homes.
+   Both can apply — distill first, then reshape what remains. Update every index you touch so the result reads as designed, not divided. Filenames like `topic-2.md` or `topic-more.md` mean a file was split without rethinking the space — never ship them.
+   An over-cap `index.md` is navigation debt: push detail down into child pages and keep entries to one line each — an index is navigation, not content.
 8. **Write.** New pages: nearest ancestor `_template.md` if present, else the wiki's page shape (frontmatter only where the wiki already uses it). Mark non-source claims `%%inferred%%`, conflicting sources `%%ambiguous%%`. Add up to 2 wikilinks on first natural mentions. Updates: merge, preserve manual content, bump `updated:` if frontmatter is in use, never overwrite unrelated sections. On a project sync, ensure the project's hub page records the repo path in `~`-contracted form — `repo:` or an entry under `sources:` where the wiki uses frontmatter, else a single plain line — so a later session can map the checkout back to its page. More than ~10 pages changing → show the plan and ask first.
-9. **Keep the contract.** Created a new space, removed one, or moved pages? Update `## Spaces` per [Space operations](#space-operations) below. `## Items` sections are optional human curation — maintain one where the index already has it.
-10. **Close out.** Run `audit`. If it reports only safe structural drift (a missing heading, an unregistered owned child), run exactly one `audit --fix`, re-audit, and report the delta — once, no loop. Other findings are reported, not auto-repaired; when they fall outside this sync's write scope, suggest a `ws-tend` pass to the user — suggestion only, never run it yourself. Then log an `UPDATE` line per the core block and confirm:
+9. **Keep the contract.** Created a new space, removed one, or moved pages? Update `## Spaces` per [Space operations](#space-operations) below. `## Items` sections are optional human curation — maintain one where the index already has it. Then check the shape you're leaving: every entry description still true, no name that only makes sense historically — reorganize now when the fix is small, and surface bigger reshapes as the close-out's `ws-tend` suggestion.
+10. **Close out.** Run `audit`. If it reports only safe structural drift (an unregistered valid child, a registered child missing its heading), run exactly one `audit --fix`, re-audit, and report the delta — once, no loop. An undeclared bare index (`not a space until it carries ## Spaces`) is a promotion decision, not drift — surface it, act only on the user's call. Other findings are reported, not auto-repaired; when they fall outside this sync's write scope, suggest a `ws-tend` pass to the user — suggestion only, never run it yourself. Then log an `UPDATE` line per the core block and confirm:
     ```
     Updated wiki (<root>):
     - Created: <paths>   - Updated: <paths>
@@ -92,5 +92,7 @@ python3 <skill-dir>/scripts/ws.py audit --fix --wiki <root>   # registers it up 
 **Remove a space**: confirm with the user (prefer moving content to `_archives/` over deletion), delete the folder, remove its entry from the parent's `## Spaces`, then `audit` to verify nothing dangles.
 
 **Mount someone else's space** (clone / submodule / symlink, lands under `shared/` by convention): [references/mount.md](references/mount.md).
+
+**Share a space of yours** (verify it stands alone, pick snapshot / repo / two-way sync, optionally re-mount it as your own consumer): [references/share.md](references/share.md).
 
 **Promote a page into a space** (the riskiest manual operation — snapshot first): [references/promote.md](references/promote.md). Triggers: ~3+ H2 sections covering distinct sub-topics, accreted siblings (`strategy.md`, `strategy-backtest.md`…), or an over-cap hub page.

@@ -24,17 +24,17 @@ Resolution order: an explicit path from the user → the nearest CWD-ancestor fo
 - `… files --wiki <root>` — markdown files reachable via the contract.
 - `… grep <pattern> [-i] --wiki <root>` — regex line search over those files; prints `rel:line: text`, exits 1 on no match.
 - `… check-size <target> [--stdin] --wiki <root>` — cap verdict for a file; pipe planned content with `--stdin` to check before writing.
-- `… audit [--fix] --wiki <root>` — drift, broken wikilinks, over-cap files; `--fix` only inserts missing `## Spaces` headings and registers unlisted owned child spaces.
+- `… audit [--fix] --wiki <root>` — drift, broken links, over-cap or unreadable files, unhealthy mounts; `--fix` completes half-declared owned spaces (registers unlisted valid children, inserts the heading a registered child lacks) and never promotes an undeclared folder.
 
-Trust the script's output over re-deriving structure by hand; it is the deterministic view of the contract.
+Trust the script's output over re-deriving structure by hand; it is the deterministic view of the contract. Stdout is data; stderr carries the resolved root and `note:` advisories naming whatever a walk skipped — relay them when they could change the answer.
 
 ## Trust scope and size discipline
 
-Owned vs external is relative to the resolved root: anything under `shared/`, a foreign-origin git submodule, or a symlink escaping the tree is external. Reads cross owned spaces by default and enter external ones only when the user explicitly asks. Writes stay inside the targeted space; any other space — owned or external — is written only on explicit instruction.
+Owned vs external is relative to the resolved root: anything under a folder named `shared/` (at any depth), a foreign-origin git submodule, or a symlink escaping the tree is external. Reads cross owned spaces by default and enter external ones only when the user explicitly asks. Writes stay inside the targeted space; any other space — owned or external — is written only on explicit instruction.
 
-Caps are UTF-8 bytes including frontmatter, keyed by basename: `index.md` 5000, `log.md` and `hot.md` 100000, any other `*.md` 15000; a wiki overrides them in `_meta/limits.md` with plain `basename: bytes` lines (the literal name `*.md` re-caps the content-page catch-all). Run `check-size` before writing. An overflow is a signal to split, promote, or trim — never to truncate.
+Caps are UTF-8 bytes including frontmatter, keyed by basename: `index.md` 5000, `log.md` and `hot.md` 100000, any other `*.md` 15000. A `_meta/limits.md` of plain `basename: bytes` lines overrides them — the nearest one at or above the file wins, like `_template.md`, and the literal name `*.md` re-caps the content-page catch-all. Run `check-size` before writing — a write that shrinks an over-cap file reports `ok`, progress. An overflow is a signal about shape, not just size: distill the page or reshape the space — never truncate.
 
-Conventions are opt-in per wiki. Read the markers present at the scope root — `log.md`, `_meta/taxonomy.md`, `_meta/limits.md`, frontmatter on pages, `_template.md`, `hot.md`, `.obsidian/`, `.git` — and degrade gracefully when one is absent. If `log.md` exists, append one line per operation:
+Conventions are opt-in per wiki. Read the markers present at the scope root — `log.md`, `_meta/taxonomy.md`, `_meta/limits.md`, `_meta/ignore.md`, frontmatter on pages, `_template.md`, `hot.md`, `.obsidian/`, `.git` — and degrade gracefully when one is absent. If `log.md` exists, append one line per operation:
 
 ```sh
 printf '%s <OP> <details>\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> <root>/log.md
@@ -44,7 +44,7 @@ printf '%s <OP> <details>\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> <root>/log.md
 ## Procedure
 
 1. **Resolve the wiki** (core block above). Announce the root when it came from CWD or could be ambiguous. No wiki anywhere → say so and offer to set one up via `ws-update`.
-2. **Map the terrain.** Run `list` for the space shape and `files` for the page inventory. Both are cheap; run them before any content search. External mounts stay out unless the user asked — if mounts exist and look relevant, say so and offer to cross them.
+2. **Map the terrain.** Run `list` for the space shape and `files` for the page inventory. Both are cheap; run them before any content search. External mounts stay out unless the user asked — the stderr `note:` lines say how many were skipped and which spaces are unreachable; when a skipped or unreachable space could hold the answer, say so and offer to cross or repair it.
 3. **Pick the depth.** "Just check", "do I have anything on X", or an agent pre-research probe → quick lookup: rank candidates structurally (step 4), read nothing, answer from names/summaries and say so. A real question → deep query: continue through step 6.
 4. **Rank candidates structurally.** Match the query against space labels and descriptions (`## Spaces` entries), file names, and path segments. When frontmatter is in use, `summary`, `aliases`, and `tags` rank pages without reading bodies.
 5. **Search content** when structure alone doesn't settle it, cheapest first:

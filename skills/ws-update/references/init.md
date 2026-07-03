@@ -44,10 +44,11 @@ Adopting an existing folder — the wiki *is* that folder; touch as little as po
 ```sh
 WIKI=/path/they/gave
 [ -f "$WIKI/index.md" ] || printf '# %s\n\n## Spaces\n' "$(basename "$WIKI")" > "$WIKI/index.md"
+grep -q '^## Spaces' "$WIKI/index.md" || printf '\n## Spaces\n' >> "$WIKI/index.md"   # the root must be a wiki before the audit can run
 python3 <skill-dir>/scripts/ws.py audit --fix --wiki "$WIKI"   # heading + registration for every nested space
 ```
 
-`audit --fix` inserts `## Spaces` where missing and registers every pre-existing nested space in its ancestor — zero day-1 drift. Reorganizing their files into new folders is a separate follow-up, only if they asked.
+`audit --fix` registers every valid pre-existing nested space in its ancestor. A folder whose `index.md` lacks the heading is reported, never promoted — where the confirmed layout says it is a space, add `## Spaces` to it yourself and run one more `audit --fix`; where it is repo furniture (a docs site, a vendor tree), leave it untouched and list noisy folder names in `_meta/ignore.md`. Reorganizing their files into new folders is a separate follow-up, only if they asked.
 
 Register the canonical pointer (skip if they called this wiki secondary):
 
@@ -60,6 +61,6 @@ If the config already has a `wiki` line, edit that line instead of appending.
 
 ## 4. Verify and confirm
 
-Run `python3 <skill-dir>/scripts/ws.py audit --wiki "$WIKI"` — a fresh scaffold is clean in milliseconds; an adoption may surface findings (over-cap imports, broken links). Present findings with the remediation order from the skill (split / promote / trim; `_meta/limits.md` override only when a page is intentionally that size). Close with: "Your wiki is at `<path>` — ask me to search it, save to it, or audit it from anywhere."
+Run `python3 <skill-dir>/scripts/ws.py audit --wiki "$WIKI"` — a fresh scaffold is clean in milliseconds; an adoption may surface findings (over-cap imports, broken links). Present findings with the skill's overflow procedure (distill the page or reshape the space; `_meta/limits.md` override only when a page is intentionally that size). Close with: "Your wiki is at `<path>` — ask me to search it, save to it, or audit it from anywhere."
 
 In the same close, offer the companions once: `npx skills add kepano/obsidian-skills --skill obsidian-markdown --skill obsidian-bases` adds Obsidian syntax depth (callouts, embeds, Bases) — run it only on a yes. The ws skills work fully without it.

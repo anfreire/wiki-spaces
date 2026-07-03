@@ -8,7 +8,7 @@ Someone shares a space — their whole wiki or a subtree; both are just folders 
 | Read-only reference (someone else's wiki, a snapshot) | git clone |
 | Local folder of your own, mounted for convenience | symlink |
 
-Mount under `shared/<name>/` by convention — that path classifies as external, which is what gives the read-only-by-default semantics. A clone placed elsewhere (say `projects/<name>/`) classifies as **owned** and writable; only do that deliberately.
+Mount under `shared/<name>/` by convention — a `shared/` segment classifies as external at any depth, which is what gives the read-only-by-default semantics, and it works the same inside a nested space (`projects/x/shared/<name>/`). A clone placed outside any `shared/` (say `projects/<name>/`) classifies as **owned** and writable; only do that deliberately.
 
 ## Before mounting
 
@@ -33,5 +33,7 @@ Verify the source is a wiki: `index.md` exists **and** carries `## Spaces`. If n
 ## After mounting
 
 The mounted space is autonomous: its own conventions, its own caps, its own log. Reads enter it only when the user asks (`--external` on the script); writes require explicit instruction — and for git mounts, push rights are the upstream's backstop, not the primary gate.
+
+The default `audit` keeps watching the entry itself: a mount that stops looking like a wiki (say, upstream loses its `## Spaces` heading) is reported as a `mount` finding. `audit --external` also flags a mounted space you forgot to register (`missing entry … register mounts by hand` — `--fix` never registers external spaces). Findings *inside* the mount still need `--external`, and repairs there belong to its owner.
 
 Pitfalls worth remembering: cloners of a wiki with submodules need `git clone --recursive`; GitHub release ZIPs ship empty submodule folders; after `git submodule update --remote`, the new SHA is local until the parent's pointer is committed and pushed.
