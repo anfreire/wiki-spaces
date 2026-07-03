@@ -78,6 +78,39 @@ class TraversalTests(unittest.TestCase):
             rels = self.rels(ws.walk_spaces(self.root, include_external=True))
             self.assertIn("mounted", rels)
 
+    def test_symlink_mount_ignores_never_inherit_the_hosts_list(self):
+        # `_meta/ignore.md` rides the same nearest-file lookup as limits,
+        # and the same fence: the host's list stops at the mount.
+        support.write(self.root / "_meta" / "ignore.md", "assets\n")
+        with tempfile.TemporaryDirectory() as outside:
+            target = Path(outside).resolve() / "elsewhere"
+            support.write(target / "index.md", "# E\n\n## Spaces\n")
+            support.write(target / "assets" / "page.md", "# P\n")
+            os.symlink(target, self.root / "mounted")
+            index = self.root / "index.md"
+            support.write(index, index.read_text(encoding="utf-8")
+                          + "- [mounted/](mounted/index.md)\n")
+            rels = self.rels(ws.walk_files(self.root, include_external=True))
+            self.assertIn("mounted/assets/page.md", rels)
+            self.assertNotIn("alpha/assets/deep.md", rels)  # host list holds
+
+    def test_entry_through_a_symlinked_middle_segment_is_external(self):
+        # A multi-segment href may group through plain folders; when a
+        # middle segment is a symlink out of the tree, the child is
+        # external — opt-in only, like every other mount.
+        with tempfile.TemporaryDirectory() as outside:
+            target = Path(outside).resolve() / "elsewhere"
+            support.write(target / "sub" / "index.md", "# S\n\n## Spaces\n")
+            os.symlink(target, self.root / "tunnel")
+            index = self.root / "index.md"
+            support.write(index, index.read_text(encoding="utf-8")
+                          + "- [tunnel/sub/](tunnel/sub/index.md)\n")
+            self.assertNotIn("tunnel/sub",
+                             self.rels(ws.walk_spaces(self.root)))
+            marked = {rel: ext for rel, _p, ext
+                      in ws.walk_spaces(self.root, include_external=True)}
+            self.assertTrue(marked.get("tunnel/sub"))
+
     def test_nested_shared_is_external_at_any_depth(self):
         # Every space is a wiki one level down — its `shared/` mounts get
         # the same fence the root's do.

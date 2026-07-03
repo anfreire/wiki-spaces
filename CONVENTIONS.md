@@ -2,7 +2,7 @@
 
 This catalog lists the opt-in conventions a wiki can adopt. Every section is independent. Pick the markers that fit your vault. Skills degrade where a marker is absent. The spec defines `index.md` with a `## Spaces` heading as the required floor. Everything here is layered on top.
 
-Skills are LLM-driven procedures that read these markers and degrade gracefully. They're self-contained after installation. A bundled read-mostly script `scripts/ws.py` per skill handles local operations.
+Skills are LLM-driven procedures that read these markers and degrade gracefully. They're self-contained after installation. A bundled read-only script `scripts/ws.py` per skill handles local operations.
 
 Obsidian-flavored markdown is the wire format. Syntax facts (wikilinks, frontmatter, callouts, embeds, comments, Bases) live in the kepano skills.
 

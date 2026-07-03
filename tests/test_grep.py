@@ -35,7 +35,8 @@ class GrepTests(unittest.TestCase):
         self.assertEqual(r.stdout, "")
         r = self.grep("Team", "--external")
         self.assertEqual(r.returncode, 0)
-        self.assertIn("shared/team/index.md:1: # Team", r.stdout)
+        # An external match carries the same marker `files` prints.
+        self.assertIn("shared/team/index.md:1: # Team [external]", r.stdout)
 
     def test_ignore_case_flag(self):
         self.assertEqual(self.grep("alpha notes").returncode, 1)

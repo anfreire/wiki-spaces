@@ -1,5 +1,6 @@
-"""Audit findings and the bounded --fix: drift, contract violations, broken
-wikilinks, over-cap files, orphan reporting, and what --fix may touch."""
+"""Audit findings: drift, contract violations (including entries crossing
+a space boundary), broken wikilinks, over-cap files, orphan reporting —
+and the read-only guarantee: no command writes to a wiki."""
 import os
 import tempfile
 import unittest
@@ -24,14 +25,16 @@ class AuditTests(unittest.TestCase):
         r = self.audit()
         self.assertEqual(r.returncode, 1)
         out = r.stdout
-        # Unregistered + bare = undeclared: reported, never a fix target.
+        # Unregistered + bare = undeclared: a promotion decision, reported.
         self.assertIn("contract bare/index.md: no ## Spaces heading (not a "
                       "space until it carries ## Spaces", out)
         self.assertNotIn("missing entry for bare/", out)
-        # Registered + bare = half-declared: the completion-rule fix target.
+        # Registered + bare = half-declared: the heading is the named repair.
         self.assertIn("contract halfway/index.md: no ## Spaces heading "
-                      "(registered — audit --fix inserts the heading)", out)
-        self.assertIn("drift index.md: missing entry for unregistered/", out)
+                      "(registered — add the ## Spaces heading to complete "
+                      "it)", out)
+        self.assertIn("drift index.md: missing entry for unregistered/ — "
+                      "add: - [unregistered/](unregistered/index.md)", out)
         self.assertIn("drift index.md: stale entry missing/", out)
         self.assertIn("broken notes.md: [[nope]]", out)
         self.assertIn("over-cap big.md:", out)
@@ -78,96 +81,148 @@ class AuditTests(unittest.TestCase):
                       + "\nAlso [the orphan](orphan.md).\n")
         self.assertNotIn("orphan.md", self.audit().stdout)
 
-    def test_fix_completes_half_declared_spaces_only(self):
-        r = self.audit("--fix")
-        # Registered + bare: the heading is inserted (parent declared it).
-        self.assertIn("fixed halfway/index.md: inserted ## Spaces heading",
-                      r.stdout)
-        self.assertTrue(ws.has_spaces(
-            (self.root / "halfway" / "index.md").read_text(encoding="utf-8")))
-        # Valid + unlisted: registered (the child declared itself).
-        self.assertIn("fixed index.md: registered unregistered/", r.stdout)
-        index = (self.root / "index.md").read_text(encoding="utf-8")
-        self.assertIn("- [unregistered/](unregistered/index.md)", index)
-        # Undeclared (bare + unregistered): never promoted, never registered.
-        self.assertNotIn("fixed bare/", r.stdout)
-        self.assertEqual(
-            (self.root / "bare" / "index.md").read_text(encoding="utf-8"),
-            "# Bare\n")
-        self.assertNotIn("- [bare/](bare/index.md)", index)
-        # Stale entries and broken links are reported, never auto-removed.
-        self.assertIn("drift index.md: stale entry missing/", r.stdout)
-        self.assertIn("- [missing/](missing/index.md)", index)
-        self.assertEqual(r.returncode, 1)
-
-    def test_fix_refuses_registration_next_to_malformed_bullet(self):
+    def test_boundary_crossing_entry_is_reported(self):
+        # The walk declines an entry through another space's boundary; the
+        # audit judges entries through the same rule and names the repair.
+        # This exact shape was once manufactured by an automated repair
+        # and blessed as "ok" — it must never be invisible again.
         index = self.root / "index.md"
-        before = index.read_text(encoding="utf-8") + "- broken bullet\n"
-        support.write(index, before)
-        r = self.audit("--fix")
-        self.assertIn("malformed bullet", r.stdout)
-        after = index.read_text(encoding="utf-8")
-        self.assertNotIn("unregistered/index.md", after)
+        support.write(index, index.read_text(encoding="utf-8")
+                      + "- [beta/gamma/](beta/gamma/index.md)\n")
+        r = self.audit()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("contract index.md: entry beta/gamma/ crosses the "
+                      "boundary of beta/ — remove it; beta/index.md owns "
+                      "the deeper listing", r.stdout)
 
-    def test_fix_never_writes_external_spaces(self):
-        support.write(self.root / "shared" / "team" / "index.md", "# Team\n")
-        before = (self.root / "shared" / "team" / "index.md").read_text(
-            encoding="utf-8")
-        r = self.audit("--fix", "--external")
-        after = (self.root / "shared" / "team" / "index.md").read_text(
-            encoding="utf-8")
-        self.assertEqual(before, after)
-        self.assertIn("contract shared/team/index.md: no ## Spaces heading",
-                      r.stdout)
+    def test_adoption_repairs_converge_in_any_order(self):
+        # Registered-bare dir over a valid deep space: the adoption shape.
+        # Applying BOTH round-1 findings at once (the worst order) leaves
+        # a state round 2 names precisely; following it converges.
+        support.write(self.root / "docs" / "index.md", "# Docs\n")
+        support.write(self.root / "docs" / "guide" / "index.md",
+                      "# Guide\n\n## Spaces\n")
+        index = self.root / "index.md"
+        support.write(index, index.read_text(encoding="utf-8")
+                      + "- [docs/](docs/index.md)\n")
+        one = self.audit().stdout
+        self.assertIn("contract docs/index.md: no ## Spaces heading "
+                      "(registered", one)
+        self.assertIn("drift index.md: missing entry for docs/guide/ — "
+                      "add: - [docs/guide/](docs/guide/index.md)", one)
+        # Apply both at once: heading into docs, deep entry at the root.
+        support.write(self.root / "docs" / "index.md",
+                      "# Docs\n\n## Spaces\n")
+        support.write(index, index.read_text(encoding="utf-8")
+                      + "- [docs/guide/](docs/guide/index.md)\n")
+        two = self.audit().stdout
+        self.assertIn("entry docs/guide/ crosses the boundary of docs/", two)
+        self.assertIn("drift docs/index.md: missing entry for guide/ — "
+                      "add: - [guide/](guide/index.md)", two)
+        # Apply round 2: drop the crossing entry, register guide in docs.
+        support.write(index, index.read_text(encoding="utf-8").replace(
+            "- [docs/guide/](docs/guide/index.md)\n", ""))
+        support.write(self.root / "docs" / "index.md",
+                      "# Docs\n\n## Spaces\n\n- [guide/](guide/index.md)\n")
+        final = self.audit()
+        self.assertNotIn("docs", final.stdout)   # converged; demo findings remain
+        rels = support.run_ws("list", "--wiki", str(self.root)).stdout
+        self.assertIn("docs/guide", rels)
+
+    def test_missing_entry_suggestion_pastes_to_convergence(self):
+        # The printed entry is computed by the same encode/decode round-trip
+        # the parser applies — pasting it verbatim resolves the drift,
+        # whatever the folder name.
+        for name in ("notes (2024)", "a[b", "my space", "50% off"):
+            with self.subTest(name=name):
+                support.write(self.root / name / "index.md",
+                              "# N\n\n## Spaces\n")
+                out = self.audit().stdout
+                tag = f"missing entry for {name}/ — add: "
+                line = next(l for l in out.splitlines() if tag in l)
+                entry = line.split(" — add: ", 1)[1]
+                index = self.root / "index.md"
+                support.write(index, index.read_text(encoding="utf-8")
+                              + entry + "\n")
+                self.assertNotIn(name, self.audit().stdout)
+                r = support.run_ws("list", "--wiki", str(self.root))
+                self.assertIn(name, r.stdout)
+
+    def test_dotslash_and_title_hrefs_resolve(self):
+        # `./x/index.md` and a CommonMark link title are trivial dialect:
+        # normalized on read, never findings.
+        support.write(self.root / "dot" / "index.md", "# D\n\n## Spaces\n")
+        support.write(self.root / "titled" / "index.md",
+                      "# T\n\n## Spaces\n")
+        index = self.root / "index.md"
+        support.write(index, index.read_text(encoding="utf-8")
+                      + '- [dot/](./dot/index.md)\n'
+                      + '- [titled/](titled/index.md "Titled")\n')
+        out = self.audit().stdout
+        self.assertNotIn("dot", out)
+        self.assertNotIn("titled", out)
+        rels = support.run_ws("list", "--wiki", str(self.root)).stdout
+        self.assertIn("dot", rels)
+        self.assertIn("titled", rels)
+
+    def test_a_dir_named_index_md_is_unregistrable(self):
+        # The one name no entry can carry: its href would read as a page.
+        support.write(self.root / "plain" / "index.md" / "index.md",
+                      "# X\n\n## Spaces\n")
+        self.assertIn("contract index.md: unregistrable child name: "
+                      "plain/index.md/ — the name does not survive a "
+                      "contract entry; rename it", self.audit().stdout)
+
+    def test_fix_flag_is_gone(self):
+        # The write path was removed whole; the flag must not linger.
+        r = self.audit("--fix")
+        self.assertEqual(r.returncode, 2)
 
     @unittest.skipIf(getattr(os, "geteuid", lambda: 1)() == 0,
-                     "permission denial is a no-op as root")
-    def test_fix_reports_a_failed_write_and_moves_on(self):
-        # A write the filesystem refuses is a reported repair failure with
-        # its cause, not a traceback; the run and its exit code survive.
-        halfway = self.root / "halfway"
-        halfway.chmod(0o555)
-        self.addCleanup(halfway.chmod, 0o755)
-        r = self.audit("--fix")
-        self.assertIn("fix-skipped halfway/index.md: write failed:", r.stdout)
-        self.assertNotIn("Traceback", r.stderr)
-        self.assertEqual(r.returncode, 1)
-        self.assertFalse(ws.has_spaces(
-            (halfway / "index.md").read_text(encoding="utf-8")))
+                     "permission checks are a no-op as root")
+    def test_every_command_runs_on_a_sealed_tree(self):
+        # The subtraction's contract: no command writes to a wiki. Seal
+        # the whole tree read-only; every command still answers, and no
+        # file changes.
+        before = {p: p.stat().st_mtime_ns
+                  for p in self.root.rglob("*") if p.is_file()}
+        self.addCleanup(self._unseal)
+        self._seal()
+        for cmd in (("audit",), ("audit", "--external"), ("list",),
+                    ("files",), ("grep", "Alpha")):
+            r = support.run_ws(*cmd, "--wiki", str(self.root))
+            self.assertIn(r.returncode, (0, 1), cmd)
+            self.assertNotIn("Traceback", r.stderr, cmd)
+        self._unseal()
+        after = {p: p.stat().st_mtime_ns
+                 for p in self.root.rglob("*") if p.is_file()}
+        self.assertEqual(before, after)
 
-    def test_fix_preserves_file_mode(self):
-        index = self.root / "index.md"
-        index.chmod(0o604)
-        r = self.audit("--fix")
-        self.assertIn("fixed index.md: registered", r.stdout)
-        self.assertEqual(index.stat().st_mode & 0o777, 0o604)
+    def _dirs(self):
+        return [self.root, *[p for p in self.root.rglob("*") if p.is_dir()]]
 
-    def test_fix_respects_the_index_cap(self):
-        limits = self.root / "_meta" / "limits.md"
-        support.write(limits, "index.md: 50\n")
-        index = self.root / "index.md"
-        before = index.read_text(encoding="utf-8")
-        r = self.audit("--fix")
-        self.assertIn("would exceed cap", r.stdout)
-        self.assertEqual(index.read_text(encoding="utf-8"), before)
+    def _seal(self):
+        for d in self._dirs():
+            d.chmod(0o555)
+
+    def _unseal(self):
+        for d in self._dirs():
+            try:
+                d.chmod(0o755)
+            except OSError:
+                pass
 
     def test_registered_mount_health_is_watched_by_default(self):
         # A registered mount that stops being a wiki surfaces in the
         # DEFAULT audit — the entry is ours to watch even though the
-        # interior is not — and --fix never repairs it.
+        # interior is not.
         support.write(self.root / "shared" / "nota" / "index.md",
                       "# Not a wiki\n")
         index = self.root / "index.md"
         support.write(index, index.read_text(encoding="utf-8")
                       + "- [shared/nota/](shared/nota/index.md)\n")
-        r = self.audit()
         self.assertIn("mount shared/nota/: registered but not a wiki",
-                      r.stdout)
-        self.audit("--fix")
-        self.assertEqual(
-            (self.root / "shared" / "nota" / "index.md")
-            .read_text(encoding="utf-8"),
-            "# Not a wiki\n")
+                      self.audit().stdout)
 
     def test_broken_relative_markdown_link_is_reported(self):
         support.write(self.root / "_archives" / "old.md", "# Old\n")
@@ -185,10 +240,10 @@ class AuditTests(unittest.TestCase):
         self.assertIn("unreadable bad.md: not UTF-8", r.stdout)
         self.assertEqual(r.returncode, 1)
 
-    def test_near_miss_heading_is_hinted_and_fix_defers(self):
+    def test_near_miss_heading_gets_the_rename_hint(self):
         # A registered child carrying a near-miss heading is half-declared,
-        # but the repair defers to a rename — the author almost certainly
-        # meant the contract, and a second heading next to it helps nobody.
+        # and the repair is a rename — the author almost certainly meant
+        # the contract.
         index = self.root / "index.md"
         support.write(index, index.read_text(encoding="utf-8")
                       + "- [low/](low/index.md)\n- [hash/](hash/index.md)\n")
@@ -202,14 +257,6 @@ class AuditTests(unittest.TestCase):
         self.assertIn('contract hash/index.md: no ## Spaces heading '
                       '(carries "## Spaces ##" — rename it to ## Spaces)',
                       r.stdout)
-        r = self.audit("--fix")
-        self.assertIn('fix-skipped low/index.md: carries "## spaces"',
-                      r.stdout)
-        self.assertIn('fix-skipped hash/index.md: carries "## Spaces ##"',
-                      r.stdout)
-        for name in ("low", "hash"):
-            text = (self.root / name / "index.md").read_text(encoding="utf-8")
-            self.assertNotIn("\n## Spaces\n", text)
 
     def test_external_caps_never_inherit_the_hosts_limits(self):
         # The host's table caps tiny.md at 10 bytes; across the trust
@@ -223,6 +270,25 @@ class AuditTests(unittest.TestCase):
         out = self.audit("--external").stdout
         self.assertNotIn("over-cap shared/team/tiny.md", out)
         self.assertNotIn("over-cap shared/team/wide.md", out)
+
+    def test_symlink_mount_caps_never_inherit_the_hosts_limits(self):
+        # Same fence, third rule: a symlink-mounted space answers to its
+        # own limits (m1) or the defaults (m2, whose tiny.md the host's
+        # 10-byte override must not reach) — never the host's table.
+        with tempfile.TemporaryDirectory() as outside:
+            m1 = Path(outside).resolve() / "m1"
+            support.write(m1 / "index.md", "# M1\n\n## Spaces\n")
+            support.write(m1 / "_meta" / "limits.md", "*.md: 30000\n")
+            support.write(m1 / "wide.md", "# W\n" + "y" * 16000 + "\n")
+            m2 = Path(outside).resolve() / "m2"
+            support.write(m2 / "index.md", "# M2\n\n## Spaces\n")
+            support.write(m2 / "tiny.md",
+                          "# Well over ten bytes, fine by the defaults\n")
+            os.symlink(m1, self.root / "mnt")
+            os.symlink(m2, self.root / "mnt2")
+            out = self.audit("--external").stdout
+            self.assertNotIn("over-cap mnt/wide.md", out)
+            self.assertNotIn("over-cap mnt2/tiny.md", out)
 
     def test_external_findings_are_marked(self):
         support.write(self.root / "shared" / "team" / "big.md",
@@ -239,61 +305,6 @@ class AuditTests(unittest.TestCase):
             r = support.run_ws("audit", "--wiki", str(clean))
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertEqual(r.stdout.splitlines()[-1], "ok")
-
-    def test_unregistrable_child_name_is_named_and_fix_refuses(self):
-        # A folder name the contract cannot carry is a rename-this finding,
-        # not eternal drift — and --fix must never write an entry its own
-        # parser rejects. Two runs converge: same findings, no writes.
-        support.write(self.root / "notes (2024)" / "index.md",
-                      "# N\n\n## Spaces\n")
-        before = (self.root / "index.md").read_text(encoding="utf-8")
-        first = self.audit("--fix")
-        self.assertIn("contract index.md: unregistrable child name: "
-                      "notes (2024)/", first.stdout)
-        self.assertNotIn("registered notes (2024)/", first.stdout)
-        self.assertNotIn("missing entry for notes (2024)/", first.stdout)
-        self.assertNotIn("malformed", first.stdout)
-        second = self.audit("--fix")
-        self.assertNotIn("fixed ", second.stdout)   # converged in one pass
-        self.assertIn("unregistrable child name: notes (2024)/",
-                      second.stdout)
-        self.assertNotIn("malformed", second.stdout)
-        after = (self.root / "index.md").read_text(encoding="utf-8")
-        self.assertNotIn("notes (2024)", after)
-        # The registrable sibling was not blocked by the odd name.
-        self.assertIn("- [unregistered/](unregistered/index.md)", after)
-        self.assertEqual(after.replace(
-            "- [unregistered/](unregistered/index.md)\n", ""), before)
-
-    def test_fix_registers_a_name_needing_encoding(self):
-        # A folder name a raw CommonMark destination cannot carry is
-        # registered percent-encoded — dialect-valid, and the entry
-        # round-trips through the parser back to the disk name.
-        support.write(self.root / "my space" / "index.md",
-                      "# M\n\n## Spaces\n")
-        r = self.audit("--fix")
-        self.assertIn("fixed index.md: registered my space/", r.stdout)
-        index = (self.root / "index.md").read_text(encoding="utf-8")
-        self.assertIn("- [my space/](my%20space/index.md)", index)
-        self.assertNotIn("(my space/index.md)", index)
-        # The written entry resolves: no stale, no missing, converged.
-        out = self.audit().stdout
-        self.assertNotIn("my space", out)
-        self.assertNotIn("my%20space", out)
-
-    def test_unregistrable_is_exactly_what_encoding_cannot_carry(self):
-        # `a%20b` looks odd but registers (encoded once more); `a[b`
-        # cannot survive an entry and stays a rename-this finding — the
-        # audit asks the same round-trip the fix verifies before writing.
-        support.write(self.root / "a%20b" / "index.md", "# A\n\n## Spaces\n")
-        support.write(self.root / "a[b" / "index.md", "# B\n\n## Spaces\n")
-        r = self.audit("--fix")
-        self.assertIn("fixed index.md: registered a%20b/", r.stdout)
-        self.assertIn("contract index.md: unregistrable child name: a[b/",
-                      r.stdout)
-        index = (self.root / "index.md").read_text(encoding="utf-8")
-        self.assertIn("- [a%20b/](a%2520b/index.md)", index)
-        self.assertNotIn("a[b", index)
 
     def test_any_bullet_marker_carries_an_entry(self):
         # CommonMark bullets are `-`, `*`, `+` — an entry rides any of
@@ -332,14 +343,11 @@ class AuditTests(unittest.TestCase):
 
     def test_frontmatter_heading_is_not_the_contract(self):
         # `## Spaces` inside YAML frontmatter is metadata, not a heading:
-        # the dir is bare (and undeclared here), so nothing promotes it.
+        # the dir is bare (and undeclared here).
         support.write(self.root / "fm" / "index.md",
                       "---\ntitle: x\n## Spaces\n---\n\n# Real body.\n")
-        r = self.audit("--fix")
-        self.assertIn("contract fm/index.md: no ## Spaces heading", r.stdout)
-        self.assertNotIn("fixed fm/", r.stdout)
-        text = (self.root / "fm" / "index.md").read_text(encoding="utf-8")
-        self.assertNotIn("# Real body.\n- [", text)
+        self.assertIn("contract fm/index.md: no ## Spaces heading",
+                      self.audit().stdout)
 
     def test_asset_wikilinks_are_exempt(self):
         notes = self.root / "notes.md"
@@ -360,6 +368,29 @@ class AuditTests(unittest.TestCase):
         self.assertIn("broken notes.md: (../nowhere.md)", out)
         self.assertNotIn("(../beside.md)", out)
 
+    def test_path_qualified_wikilink_resolves_by_suffix(self):
+        # `[[assets/deep]]` from the root names alpha/assets/deep.md by
+        # its path tail — resolution is index-backed, not a page sweep.
+        notes = self.root / "notes.md"
+        support.write(notes, notes.read_text(encoding="utf-8")
+                      + "\nDown: [[assets/deep]].\n")
+        out = self.audit().stdout
+        self.assertNotIn("assets/deep", out)   # resolved, not broken
+
+    def test_wikilink_case_mismatch_resolves_like_obsidian(self):
+        # The dialect resolves wikilinks case-insensitively: [[readme]]
+        # names README.md, stem and path-qualified forms alike. Relative
+        # markdown links keep filesystem semantics — the disk decides.
+        support.write(self.root / "README.md", "# Readme\n")
+        notes = self.root / "notes.md"
+        support.write(notes, notes.read_text(encoding="utf-8")
+                      + "\nSee [[readme]] and [[Assets/DEEP]].\n")
+        out = self.audit().stdout
+        self.assertNotIn("[[readme]]", out)            # resolved, not broken
+        self.assertNotIn("DEEP", out)
+        self.assertNotIn("README.md", out)             # credited, not orphan
+        self.assertIn("broken notes.md: [[nope]]", out)  # missing still breaks
+
     def test_indented_code_is_not_scanned(self):
         notes = self.root / "notes.md"
         support.write(notes, notes.read_text(encoding="utf-8")
@@ -378,27 +409,24 @@ class AuditTests(unittest.TestCase):
         files = support.run_ws("files", "--wiki", str(self.root))
         self.assertNotIn("node_modules", files.stdout)
 
-    def test_crlf_registration_preserves_line_endings(self):
-        index = self.root / "index.md"
-        crlf = index.read_text(encoding="utf-8").replace("\n", "\r\n")
-        index.write_bytes(crlf.encode("utf-8"))
-        r = self.audit("--fix")
-        self.assertIn("fixed index.md: registered unregistered/", r.stdout)
-        raw = index.read_bytes().decode("utf-8")
-        self.assertIn("- [unregistered/](unregistered/index.md)\r\n", raw)
-        self.assertNotRegex(raw, r"[^\r]\n")
+    def test_ignore_md_names_folders_not_files(self):
+        # The convention's contract is folder names; a page whose basename
+        # matches an entry stays visible to files, grep, and the audit.
+        support.write(self.root / "_meta" / "ignore.md",
+                      "notes.md\nassets\n")
+        files = support.run_ws("files", "--wiki", str(self.root)).stdout
+        self.assertIn("notes.md", files.splitlines())       # file: kept
+        self.assertNotIn("alpha/assets/deep.md",
+                         files.splitlines())                # folder: skipped
 
     def test_unregistered_external_mount_is_drift_under_external(self):
         support.write(self.root / "shared" / "loose" / "index.md",
                       "# Loose\n\n## Spaces\n")
         out = self.audit().stdout
         self.assertNotIn("shared/loose", out)   # default audit stays out
-        r = self.audit("--external", "--fix")
+        r = self.audit("--external")
         self.assertIn("drift index.md: missing entry for shared/loose/ "
                       "(register mounts by hand) [external]", r.stdout)
-        self.assertNotIn("registered shared/loose/", r.stdout)
-        index = (self.root / "index.md").read_text(encoding="utf-8")
-        self.assertNotIn("shared/loose", index)
 
 
 if __name__ == "__main__":

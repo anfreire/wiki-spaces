@@ -34,6 +34,6 @@ Verify the source is a wiki: `index.md` exists **and** carries `## Spaces`. If n
 
 The mounted space is autonomous: its own conventions, its own caps, its own log. Reads enter it only when the user asks (`--external` on the script); writes require explicit instruction — and for git mounts, push rights are the upstream's backstop, not the primary gate.
 
-The default `audit` keeps watching the entry itself: a mount that stops looking like a wiki (say, upstream loses its `## Spaces` heading) is reported as a `mount` finding. `audit --external` also flags a mounted space you forgot to register (`missing entry … register mounts by hand` — `--fix` never registers external spaces). Findings *inside* the mount still need `--external`, and repairs there belong to its owner.
+The default `audit` keeps watching the entry itself: a mount that stops looking like a wiki (say, upstream loses its `## Spaces` heading) is reported as a `mount` finding. `audit --external` also flags a mounted space you forgot to register (`missing entry … register mounts by hand`). Findings *inside* the mount still need `--external`, and repairs there belong to its owner.
 
 Pitfalls worth remembering: cloners of a wiki with submodules need `git clone --recursive`; GitHub release ZIPs ship empty submodule folders; after `git submodule update --remote`, the new SHA is local until the parent's pointer is committed and pushed.

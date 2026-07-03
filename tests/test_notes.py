@@ -34,19 +34,23 @@ class NotesTests(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("unregistered/", r.stderr)
 
-    def test_skipped_externals_are_counted(self):
+    def test_skipped_externals_are_named(self):
+        # A count would hide a user's own folder named `shared/` — the
+        # skipped paths are named, so nothing is captured silently.
         r = support.run_ws("list", "--wiki", str(self.root))
-        self.assertIn("external path(s) skipped", r.stderr)
+        self.assertIn("external, skipped (--external to include): "
+                      "shared/team/", r.stderr)
         r = support.run_ws("list", "--external", "--wiki", str(self.root))
-        self.assertNotIn("external path(s) skipped", r.stderr)
+        self.assertNotIn("external, skipped", r.stderr)
 
     def test_audit_names_what_its_walk_skipped(self):
         # Silence never means "looked everywhere" — the audit's walk emits
         # the same advisories the data commands do.
         r = support.run_ws("audit", "--wiki", str(self.root))
-        self.assertIn("external path(s) skipped", r.stderr)
+        self.assertIn("external, skipped", r.stderr)
+        self.assertIn("shared/", r.stderr)
         r = support.run_ws("audit", "--external", "--wiki", str(self.root))
-        self.assertNotIn("external path(s) skipped", r.stderr)
+        self.assertNotIn("external, skipped", r.stderr)
 
     def test_unreadable_files_are_named_by_grep(self):
         (self.root / "bad.md").write_bytes(b"\xff\xfe nope\n")

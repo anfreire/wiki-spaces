@@ -45,10 +45,10 @@ Adopting an existing folder — the wiki *is* that folder; touch as little as po
 WIKI=/path/they/gave
 [ -f "$WIKI/index.md" ] || printf '# %s\n\n## Spaces\n' "$(basename "$WIKI")" > "$WIKI/index.md"
 grep -q '^## Spaces' "$WIKI/index.md" || printf '\n## Spaces\n' >> "$WIKI/index.md"   # the root must be a wiki before the audit can run
-python3 <skill-dir>/scripts/ws.py audit --fix --wiki "$WIKI"   # heading + registration for every nested space
+python3 <skill-dir>/scripts/ws.py audit --wiki "$WIKI"   # findings name every repair
 ```
 
-`audit --fix` registers every valid pre-existing nested space in its ancestor. A folder whose `index.md` lacks the heading is reported, never promoted — where the confirmed layout says it is a space, add `## Spaces` to it yourself and run one more `audit --fix`; where it is repo furniture (a docs site, a vendor tree), leave it untouched and list noisy folder names in `_meta/ignore.md`. Reorganizing their files into new folders is a separate follow-up, only if they asked.
+Apply the audit's findings as edits, re-running it between rounds until the structural ones are gone: paste each `missing entry` line into the index it names; where the confirmed layout says a bare folder is a space, add `## Spaces` to its index (the next round then registers whatever lives beneath it, and flags any entry the new boundary invalidates); where it is repo furniture (a docs site, a vendor tree), leave it untouched and list noisy folder names in `_meta/ignore.md`. Each round re-derives from disk, so the repairs converge in any order. Reorganizing their files into new folders is a separate follow-up, only if they asked.
 
 Register the canonical pointer (skip if they called this wiki secondary):
 

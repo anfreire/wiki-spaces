@@ -18,13 +18,13 @@ Resolution order: an explicit path from the user → the nearest CWD-ancestor fo
 
 ## The bundled script
 
-`scripts/ws.py` sits next to this SKILL.md — stdlib python3, zero dependencies. Invoke it by absolute path (your working directory is usually elsewhere):
+`scripts/ws.py` sits next to this SKILL.md — stdlib python3 (3.9+), zero dependencies. Invoke it by absolute path (your working directory is usually elsewhere):
 
 - `python3 <skill-dir>/scripts/ws.py list --wiki <root>` — spaces reachable via the `## Spaces` contract (`--external` to cross mounts).
 - `… files --wiki <root>` — markdown files reachable via the contract.
 - `… grep <pattern> [-i] --wiki <root>` — regex line search over those files; prints `rel:line: text`, exits 1 on no match.
 - `… check-size <target> [--stdin] --wiki <root>` — cap verdict for a file; pipe planned content with `--stdin` to check before writing.
-- `… audit [--fix] --wiki <root>` — drift, broken links, over-cap or unreadable files, unhealthy mounts; `--fix` completes half-declared owned spaces (registers unlisted valid children, inserts the heading a registered child lacks) and never promotes an undeclared folder.
+- `… audit --wiki <root>` — drift, entries crossing a space boundary, broken links, over-cap or unreadable files, unhealthy mounts. Findings name the repair (a `missing entry` prints the exact line to add); apply repairs as ordinary edits and re-run the audit to verify — the script never writes.
 
 Trust the script's output over re-deriving structure by hand; it is the deterministic view of the contract. Stdout is data; stderr carries the resolved root and `note:` advisories naming whatever a walk skipped — relay them when they could change the answer.
 
@@ -71,7 +71,7 @@ When nothing resolves — no explicit path, no CWD-ancestor wiki, no valid confi
    An over-cap `index.md` is navigation debt: push detail down into child pages and keep entries to one line each — an index is navigation, not content.
 8. **Write.** New pages: nearest ancestor `_template.md` if present, else the wiki's page shape (frontmatter only where the wiki already uses it). Mark non-source claims `%%inferred%%`, conflicting sources `%%ambiguous%%`. Add up to 2 wikilinks on first natural mentions. Updates: merge, preserve manual content, bump `updated:` if frontmatter is in use, never overwrite unrelated sections. On a project sync, ensure the project's hub page records the repo path in `~`-contracted form — `repo:` or an entry under `sources:` where the wiki uses frontmatter, else a single plain line — so a later session can map the checkout back to its page. More than ~10 pages changing → show the plan and ask first.
 9. **Keep the contract.** Created a new space, removed one, or moved pages? Update `## Spaces` per [Space operations](#space-operations) below. `## Items` sections are optional human curation — maintain one where the index already has it. Then check the shape you're leaving: every entry description still true, no name that only makes sense historically — reorganize now when the fix is small, and surface bigger reshapes as the close-out's `ws-tend` suggestion.
-10. **Close out.** Run `audit`. If it reports only safe structural drift (an unregistered valid child, a registered child missing its heading), run exactly one `audit --fix`, re-audit, and report the delta — once, no loop. An undeclared bare index (`not a space until it carries ## Spaces`) is a promotion decision, not drift — surface it, act only on the user's call. Other findings are reported, not auto-repaired; when they fall outside this sync's write scope, suggest a `ws-tend` pass to the user — suggestion only, never run it yourself. Then log an `UPDATE` line per the core block and confirm:
+10. **Close out.** Run `audit`. Apply the safe structural repairs yourself, re-auditing between rounds until they are gone: add the exact entry line a `missing entry` finding prints, insert the heading a *registered* bare child lacks, and remove an entry flagged as crossing another space's boundary (registering the space where the finding says it belongs). An undeclared bare index (`not a space until it carries ## Spaces`) is a promotion decision, not drift — surface it, act only on the user's call. Other findings are reported, not auto-repaired; when they fall outside this sync's write scope, suggest a `ws-tend` pass to the user — suggestion only, never run it yourself. Then log an `UPDATE` line per the core block and confirm:
     ```
     Updated wiki (<root>):
     - Created: <paths>   - Updated: <paths>
@@ -84,10 +84,9 @@ When nothing resolves — no explicit path, no CWD-ancestor wiki, no valid confi
 
 ```sh
 mkdir -p <root>/<path> && printf '# <Title>\n\n## Spaces\n' > <root>/<path>/index.md
-python3 <skill-dir>/scripts/ws.py audit --fix --wiki <root>   # registers it up the chain
 ```
 
-`audit --fix` registers the new space in its nearest ancestor's `## Spaces` (inserting the heading where missing). Add a ` — description` to the generated entry by hand — descriptions are placement hints for every later operation.
+Then register it in its parent space's `## Spaces` (the nearest ancestor with the heading): add `- [<name>/](<name>/index.md) — description`, percent-encoding the href where the name demands it (`my%20space/index.md`) — descriptions are placement hints for every later operation. Run `audit` to verify; its `missing entry` finding prints the exact line if in doubt.
 
 **Remove a space**: confirm with the user (prefer moving content to `_archives/` over deletion), delete the folder, remove its entry from the parent's `## Spaces`, then `audit` to verify nothing dangles.
 

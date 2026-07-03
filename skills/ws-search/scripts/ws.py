@@ -8,19 +8,19 @@ This script hands a skill deterministic facts about one:
   files       markdown files reachable via the contract
   grep        regex line search over the files the contract reaches
   check-size  cap verdict for one file, before or after writing
-  audit       detect contract drift, broken links (wikilink and relative
-              markdown), over-cap and unreadable files, and registered
-              mounts that stopped being wikis; --fix completes
-              half-declared owned spaces — it registers an unlisted valid
-              child space and inserts the heading a registered child
-              lacks — and never promotes an undeclared folder
+  audit       detect contract drift (including an entry that lists
+              through another space's boundary), broken links (wikilink
+              and relative markdown), over-cap and unreadable files, and
+              registered mounts that stopped being wikis; every finding
+              names its repair — applying it is the caller's edit, never
+              this script's
 
 Stdout is data. Stderr carries the resolved root and `note:` advisories
 naming what a walk skipped (external paths, unreachable spaces,
-unreadable files) — silence never means "looked everywhere". Stdlib
-only, zero dependencies, read-mostly (`audit --fix` is the one write
-path). Exit codes: 0 clean, 1 findings (for grep, no match), 2 cannot
-operate.
+unreadable files) — silence never means "looked everywhere". Stdlib-only
+python3 (3.9+), zero dependencies, read-only: no command writes to a
+wiki. Exit
+codes: 0 clean, 1 findings (for grep, no match), 2 cannot operate.
 
 The copies bundled with ws-search, ws-update, and ws-tend must stay
 byte-identical; the wiki-spaces repo pins that with a test.
@@ -32,7 +32,6 @@ import os
 import posixpath
 import re
 import sys
-import tempfile
 from functools import lru_cache
 from pathlib import Path
 from typing import NamedTuple, NoReturn
@@ -42,22 +41,27 @@ from urllib.parse import unquote
 DEFAULT_CAPS = {"index.md": 5000, "log.md": 100000, "hot.md": 100000}
 DEFAULT_MD_CAP = 15000
 RESERVED_NAMES = {"_archives", "_meta"}
+# Hub and convention pages (CONVENTIONS.md's own basenames) sit outside
+# the orphan check — they are entry points, not citation targets.
 ORPHAN_EXEMPT = {"index.md", "log.md", "hot.md", "_template.md"}
-HREF_METACHARS = "[](){}"
-# An entry's href is a CommonMark destination: percent-encode what cannot
-# appear raw there (`%` itself first, so encoding round-trips through the
+# An entry's href is percent-encoded, so any folder name survives the
+# entry grammar: encode what would break or blur the `[label](href)`
+# shape (`%` itself first, so encoding round-trips through the
 # percent-decode every read applies).
-HREF_ENCODE = {"%": "%25", " ": "%20", "#": "%23", "<": "%3C", ">": "%3E"}
+HREF_ENCODE = {"%": "%25", " ": "%20", "#": "%23", "<": "%3C", ">": "%3E",
+               "(": "%28", ")": "%29", "[": "%5B", "]": "%5D",
+               "{": "%7B", "}": "%7D", '"': "%22", "\n": "%0A", "\r": "%0D"}
 
 # A traversal node: (root-relative posix path, filesystem path, external?).
 Node = tuple[str, Path, bool]
 
 # An entry rides any markdown bullet marker; skills write the canonical
-# `-`. The description separator admits em dash, en dash, and hyphen —
-# the three are near-indistinguishable on screen and writers emit all
-# of them.
+# `-`. A trailing quoted link title is tolerated and ignored. The
+# description separator admits em dash, en dash, and hyphen — the three
+# are near-indistinguishable on screen and writers emit all of them.
 ENTRY_RE = re.compile(
-    r"^\s*[-*+]\s+\[([^\]]+)\]\(([^)]+)\)(?:\s*[—–\-]+\s*(.*))?$")
+    r'^\s*[-*+]\s+\[([^\]]+)\]\(\s*([^)]+?)(?:\s+"[^"]*")?\s*\)'
+    r"(?:\s*[—–\-]+\s*(.*))?$")
 BULLET_RE = re.compile(r"^\s*[-*+]\s+\S")
 WIKILINK_RE = re.compile(r"(!?)\[\[([^\]]+)\]\]")
 MD_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
@@ -68,8 +72,11 @@ NEAR_MISS_RE = re.compile(r"^##\s*spaces\s*#*\s*$", re.IGNORECASE)
 
 
 def read_text(path: Path) -> str | None:
+    """utf-8-sig: a BOM is byte-order metadata, not content — decoding
+    drops it so no reader mistakes it for the first character. Byte
+    counts (caps) come from the filesystem and keep it."""
     try:
-        return path.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError):
         return None
 
@@ -101,40 +108,6 @@ def _rel_parts(path: Path, root: Path) -> tuple[str, ...] | None:
     if not p.startswith(r + os.sep):
         return None
     return tuple(p[len(r) + 1:].split(os.sep))
-
-
-def write_atomic(path: Path, text: str) -> None:
-    """Durable atomic write: temp file, fsync, replace, then fsync the
-    parent so the rename survives a crash (best-effort where a directory
-    cannot be opened, e.g. Windows). The original file's mode is carried
-    over — mkstemp's 0600 must not leak onto the replaced file."""
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".ws-")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
-            fh.write(text)
-            fh.flush()
-            os.fsync(fh.fileno())
-        try:
-            os.chmod(tmp, os.stat(path).st_mode)
-        except OSError:
-            pass
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-    try:
-        dirfd = os.open(str(path.parent), os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(dirfd)
-    except OSError:
-        pass
-    finally:
-        os.close(dirfd)
 
 
 # ---------- markdown primitives ----------
@@ -279,17 +252,18 @@ def parse_spaces(text: str) -> tuple[list[tuple[str, str]], list[str]]:
 
 def normalize_href(href: str) -> str | None:
     """`## Spaces` href -> child directory, or None when unregistrable:
-    empty, absolute, `..`, reserved segment, or a markdown metacharacter.
-    The href is a CommonMark destination, so percent-encoding is decoded
-    first (Obsidian writes `my%20space/index.md`) and every check runs on
-    the decoded name — the one the filesystem knows."""
+    empty, absolute, escaping (`..`), or a reserved segment. The href is
+    percent-encoded (Obsidian writes `my%20space/index.md`), so it is
+    decoded first and every check runs on the decoded name — the one the
+    filesystem knows. Trivial equivalents (`./x`, `a//b`, a trailing
+    slash) normalize instead of failing."""
     h = unquote(href.strip())
     if not h or h.startswith("/"):
         return None
+    h = posixpath.normpath(h)
     if h.endswith("/index.md"):
         h = h[: -len("/index.md")]
-    h = h.rstrip("/")
-    if h in ("", ".") or any(c in h for c in HREF_METACHARS):
+    if h in ("", "."):
         return None
     parts = h.split("/")
     if any(p == ".." or is_reserved(p) for p in parts):
@@ -298,8 +272,10 @@ def normalize_href(href: str) -> str | None:
 
 
 def encode_href(name: str) -> str:
-    """A directory name as a CommonMark destination — the write-side
-    inverse of the decode every href read applies."""
+    """A directory name as a contract-entry destination — the inverse of
+    the decode every href read applies. Any name survives: what would
+    break the entry grammar rides percent-encoded, so the audit's
+    suggested entries parse back to the disk name."""
     return "".join(HREF_ENCODE.get(c, c) for c in name)
 
 
@@ -398,18 +374,18 @@ class WalkNotes:
     def __init__(self) -> None:
         self.contract: set[tuple[int, int]] = set()
         self.unreachable: list[str] = []
-        self.external: int = 0
+        self.external: list[str] = []
         self.unreadable: list[str] = []
         self.denied: list[str] = []
 
     def emit(self) -> None:
         if self.unreachable:
             note("unreachable via ## Spaces (unlisted, bare, or listed past "
-                 "a space boundary; audit --fix registers owned spaces): "
+                 "a space boundary — audit names the repair): "
                  + ", ".join(sorted(set(self.unreachable))))
         if self.external:
-            note(f"{self.external} external path(s) skipped "
-                 "(--external to include)")
+            note("external, skipped (--external to include): "
+                 + ", ".join(sorted(set(self.external))))
         if self.unreadable:
             note("unreadable (not UTF-8), skipped: "
                  + ", ".join(sorted(self.unreadable)))
@@ -501,6 +477,22 @@ def _is_repo(path: Path) -> bool:
     return (path / ".git").exists()
 
 
+def _symlink_reason(path: Path, root: Path) -> str | None:
+    """Why a symlink at `path` leaves trust scope: unresolvable or
+    escaping the tree, or resolving into external scope. None for an
+    owned alias — a realpath that stays inside the tree and owned."""
+    target = safe_resolve(path)
+    root_real = safe_resolve(root)
+    if target is None or root_real is None or target.is_symlink():
+        return "symlink escapes the wiki tree"
+    trel = _rel_parts(target, root_real)
+    if trel is None:
+        return "symlink escapes the wiki tree"
+    if _scope_reason(trel, root):
+        return "symlink into external scope"
+    return None
+
+
 # Scope state per (root, parts-prefix): an explicit run-lifetime memo so
 # deep trees build each prefix once, iteratively — an lru_cache recursion
 # would hit the interpreter limit the walkers avoid, and a per-call scan
@@ -512,11 +504,15 @@ _SCOPE_STATE: dict[tuple[Path, tuple[str, ...]],
 def _scope_state(root: Path,
                  parts: tuple[str, ...]) -> tuple[str | None, Path, str]:
     """`(reason, declaring_repo, rel_inside_repo)` for root/<parts>. The
-    reason is sticky down the tree; `shared/` marks external at any depth
-    (every space is a wiki one level down, so a nested space's mounts
-    deserve the same fence); a submodule is foreign when its URL differs
-    from the origin of the repo that declares it — judged at every git
-    boundary on the path, whichever root resolved."""
+    reason is sticky down the tree, and every component is judged by the
+    three rules in this one resolver: `shared/` marks external at any
+    depth (every space is a wiki one level down, so a nested space's
+    mounts deserve the same fence); a submodule is foreign when its URL
+    differs from the origin of the repo that declares it — judged at
+    every git boundary on the path, whichever root resolved; a symlink
+    component whose realpath escapes the tree or lands in external scope
+    marks external from that point down, so scope, caps, ignores, and
+    advisories cannot disagree about a mount."""
     hit = _SCOPE_STATE.get((root, parts))
     if hit is not None:
         return hit
@@ -534,10 +530,14 @@ def _scope_state(root: Path,
                 state = ("under shared/", repo, rel)
             else:
                 rel = part if not rel else f"{rel}/{part}"
-                if rel in _foreign_submodules(repo):
+                cur = root.joinpath(*q)
+                sym = (_symlink_reason(cur, root) if cur.is_symlink()
+                       else None)
+                if sym is not None:
+                    state = (sym, repo, rel)
+                elif rel in _foreign_submodules(repo):
                     state = ("foreign-origin git submodule", repo, rel)
                 else:
-                    cur = root.joinpath(*q)
                     state = ((None, cur, "") if _is_repo(cur)
                              else (None, repo, rel))
         _SCOPE_STATE[(root, q)] = state
@@ -549,27 +549,29 @@ def _scope_reason(parts: tuple[str, ...], root: Path) -> str | None:
 
 
 def external_reason(path: Path, root: Path) -> str | None:
-    """Why `path` is external relative to the resolved root, or None."""
+    """Why `path` is external relative to the resolved root, or None.
+    Judged per path component through the one scope resolver, so a file
+    inside an external mount answers external however it is reached."""
     rel = _rel_parts(path, root)
     if rel is None:
         return "outside the wiki tree"
-    reason = _scope_reason(rel, root)
-    if reason:
-        return reason
-    if path.is_symlink():
-        target = safe_resolve(path)
-        root_real = safe_resolve(root)
-        if target is None or root_real is None or target.is_symlink():
-            return "symlink escapes the wiki tree"
-        trel = _rel_parts(target, root_real)
-        if trel is None:
-            return "symlink escapes the wiki tree"
-        if _scope_reason(trel, root):
-            return "symlink into external scope"
-    return None
+    return _scope_reason(rel, root)
 
 
 # ---------- traversal (the `## Spaces` contract) ----------
+
+def _boundary_space(space: Path, nd: str) -> str | None:
+    """The first intermediate segment of `nd` that is itself a space — an
+    entry through it lists what that space owns, so the walk declines the
+    href and the audit names it. None when `nd` only groups through plain
+    or bare folders. The walk and the audit judge entries through this
+    one function: what one declines, the other reports."""
+    parts = nd.split("/")
+    for k in range(1, len(parts)):
+        if is_wiki(space.joinpath(*parts[:k])):
+            return "/".join(parts[:k])
+    return None
+
 
 def walk_spaces(
     root: Path, include_external: bool = False,
@@ -585,9 +587,8 @@ def walk_spaces(
     is bounded by the filesystem, not the interpreter. `notes` collects
     what the walk declined: skipped externals, registered children failing
     the contract, entries crossing a space boundary."""
-    root_real = safe_resolve(root)
     root_id = _ident(root)
-    if root_real is None or root_id is None:
+    if root_id is None:
         return []
     visited = {root_id}
     out: list[Node] = []
@@ -605,9 +606,7 @@ def walk_spaces(
             if nd is None:
                 continue
             crel = nd if rel == "." else f"{rel}/{nd}"
-            parts = nd.split("/")
-            if len(parts) > 1 and any(is_wiki(space.joinpath(*parts[:k]))
-                                      for k in range(1, len(parts))):
+            if _boundary_space(space, nd) is not None:
                 if notes is not None:
                     notes.unreachable.append(crel + "/")
                 continue
@@ -616,18 +615,9 @@ def walk_spaces(
             if child_id is None:
                 continue
             ext = external or external_reason(child, root) is not None
-            if not ext and len(parts) > 1:
-                # A multi-segment href can tunnel out through a symlinked
-                # middle segment external_reason never sees; only then is
-                # a full resolve worth its per-component cost.
-                child_real = safe_resolve(child)
-                if child_real is None:
-                    continue
-                if _rel_parts(child_real, root_real) is None:
-                    ext = True
             if ext and not include_external:
                 if notes is not None:
-                    notes.external += 1
+                    notes.external.append(crel + "/")
                 continue
             if child_id in visited:
                 continue
@@ -648,8 +638,9 @@ def _descend(
 ) -> None:
     """The one directory descent under both views, iterative so depth is
     bounded by the filesystem, not the interpreter. Collects `.md` files
-    (realpath-deduped; reserved and `_meta/ignore.md`-listed names are
-    invisible at any depth, files and folders alike; external honored).
+    (realpath-deduped; reserved names are invisible at any depth, files
+    and folders alike; `_meta/ignore.md` skips the folders it names —
+    folders only, per its contract; external honored).
     With a `spaces` sink it records space-shaped dirs (an index.md, heading
     or not) and keeps descending — the audit's filesystem truth. Without
     one it stops at child-space boundaries — they belong to the contract
@@ -672,14 +663,14 @@ def _descend(
         # its own name).
         here = {}
         for c in children:
-            if (not (c.is_file() and c.suffix == ".md")
-                    or is_reserved(c.name) or c.name in ignored):
+            if not (c.is_file() and c.suffix == ".md") or is_reserved(c.name):
                 continue
             ext = dext
             if c.is_symlink() and external_reason(c, root) is not None:
                 if not include_external:
                     if notes is not None:
-                        notes.external += 1
+                        notes.external.append(
+                            c.name if drel == "." else f"{drel}/{c.name}")
                     continue
                 ext = True
             cr = _ident(c)
@@ -706,7 +697,7 @@ def _descend(
                 continue
             if ext and not include_external:
                 if notes is not None:
-                    notes.external += 1
+                    notes.external.append(crel + "/")
                 continue
             cres = _ident(c)
             if cres is None or cres in seen:
@@ -892,25 +883,36 @@ def link_scan(
     `[[links]]` that resolve to no known page (embeds `![[...]]` and
     asset-extension targets are exempt — they routinely name assets), and
     relative markdown links to `.md` files that exist neither in the walk
-    nor on disk. Incoming: wikilink and relative markdown-link targets,
-    for the orphan check. Unreadable: files that failed UTF-8 decoding and
-    were skipped. Code blocks and spans are stripped first; in index.md
-    the `## Spaces` body is contract, not content."""
+    nor on disk. Wikilink lookups casefold — the dialect resolves
+    `[[readme]]` to README.md; markdown links keep filesystem semantics,
+    the disk decides. Incoming: wikilink and relative markdown-link
+    targets, for the orphan check. Unreadable: files that failed UTF-8
+    decoding and were skipped. Code blocks and spans are stripped first;
+    in index.md the `## Spaces` body is contract, not content."""
     by_rel = {rel: path for rel, path, _ext in md_files}
+    by_fold = {}
     by_stem = {}
+    by_suffix = {}
     for rel in by_rel:
-        by_stem.setdefault(posixpath.basename(rel)[:-3], []).append(rel)
+        fold = rel.casefold()
+        by_fold.setdefault(fold, []).append(rel)
+        by_stem.setdefault(posixpath.basename(fold)[:-3], []).append(rel)
+        parts = fold.split("/")
+        for i in range(len(parts)):
+            by_suffix.setdefault("/".join(parts[i:]), []).append(rel)
 
     def resolve(target: str, page_rel: str) -> list[str]:
-        t = target if target.lower().endswith(".md") else target + ".md"
+        # Index-backed: one dict hit per form, never a sweep over pages.
+        # Every lookup casefolds, so case-mismatched links resolve the way
+        # the dialect resolves them.
+        t = (target if target.lower().endswith(".md")
+             else target + ".md").casefold()
         found = set()
-        if t in by_rel:
-            found.add(t)
-        here = posixpath.normpath(posixpath.join(posixpath.dirname(page_rel), t))
-        if here in by_rel:
-            found.add(here)
+        here = posixpath.normpath(
+            posixpath.join(posixpath.dirname(page_rel), t)).casefold()
+        found.update(by_fold.get(here, ()))
         if "/" in t:
-            found.update(k for k in by_rel if k.endswith("/" + t))
+            found.update(by_suffix.get(t, ()))
         else:
             found.update(by_stem.get(t[:-3], ()))
         return sorted(found)
@@ -957,11 +959,13 @@ def link_scan(
 class Findings(NamedTuple):
     """Contract findings, one channel per kind. `bare` rows carry
     `(rel, ext, near_miss, registered)`; entry rows carry `(rel, detail,
-    ext)`; `missing` and `unregistrable` rows carry the child's
-    externality; `mounts` rows carry `(rel, nd)`."""
+    ext)`; `crossing` rows carry `(rel, nd, boundary, ext)`; `missing`
+    and `unregistrable` rows carry the child's externality; `mounts`
+    rows carry `(rel, nd)`."""
     bare: list[tuple[str, bool, str | None, bool]]
     malformed: list[tuple[str, str, bool]]
     duplicate: list[tuple[str, str, bool]]
+    crossing: list[tuple[str, str, str, bool]]
     extra_heading: list[tuple[str, bool]]
     missing: list[tuple[str, str, bool]]
     unregistrable: list[tuple[str, str, bool]]
@@ -977,13 +981,15 @@ def space_findings(root: Path, space_dirs: list[Node]) -> Findings:
     the `## Spaces` heading is not a space — it is reported bare (with any
     near-miss heading it carries, and whether a parent has registered it),
     never treated as contract. Entry findings: malformed and unregistrable
-    hrefs, duplicates, dead second headings, stale entries (no index.md on
-    disk), and unhealthy mounts (a registered external child that is not a
-    wiki — the entry is ours to watch even though the interior is not).
-    Drift: an unlisted child space attaches to its nearest ancestor that
-    is a real space — bare and plain dirs group transparently on the way
-    up — and a child whose name cannot survive a contract entry is named
-    as unregistrable instead."""
+    hrefs, duplicates, entries crossing another space's boundary (the walk
+    declines them through the same rule — that space owns the deeper
+    listing), dead second headings, stale entries (no index.md on disk),
+    and unhealthy mounts (a registered external child that is not a wiki —
+    the entry is ours to watch even though the interior is not). Drift: an
+    unlisted child space attaches to its nearest ancestor that is a real
+    space — bare and plain dirs group transparently on the way up — and a
+    child whose name cannot survive a contract entry is named as
+    unregistrable instead."""
     texts = {path: read_text(path / "index.md")
              for _rel, path, _ext in space_dirs}
     true_spaces = {path for path, text in texts.items() if has_spaces(text)}
@@ -1005,7 +1011,7 @@ def space_findings(root: Path, space_dirs: list[Node]) -> Findings:
         if anc is not None:
             children.setdefault(anc, []).append((path, ext))
 
-    f = Findings([], [], [], [], [], [], [], [])
+    f = Findings([], [], [], [], [], [], [], [], [])
     targets: set[Path] = set()
     for rel, path, ext in sorted(space_dirs):
         text = texts[path]
@@ -1027,6 +1033,10 @@ def space_findings(root: Path, space_dirs: list[Node]) -> Findings:
                 f.duplicate.append((rel, nd, ext))
                 continue
             listed.add(nd)
+            boundary = _boundary_space(path, nd)
+            if boundary is not None:
+                f.crossing.append((rel, nd, boundary, ext))
+                continue
             child = path / nd
             targets.add(child)
             if not (child / "index.md").is_file():
@@ -1038,8 +1048,8 @@ def space_findings(root: Path, space_dirs: list[Node]) -> Findings:
             crel = child.relative_to(path).as_posix()
             if crel in listed:
                 continue
-            # The same round-trip the fix verifies before writing: a child
-            # is registrable exactly when its encoded href decodes back.
+            # The same round-trip the suggested entry rides: a child is
+            # registrable exactly when its encoded href decodes back.
             if normalize_href(encode_href(crel)) != crel:
                 f.unregistrable.append((rel, crel, child_ext))
             else:
@@ -1052,120 +1062,18 @@ def space_findings(root: Path, space_dirs: list[Node]) -> Findings:
     return f
 
 
-def _eol(path: Path) -> str:
-    """The line ending a rewrite must preserve — a repair never converts a
-    CRLF file wholesale. Probed from raw bytes: text reads translate
-    newlines away."""
-    try:
-        head = path.read_bytes()[:4096]
-    except OSError:
-        return "\n"
-    return "\r\n" if b"\r\n" in head else "\n"
+def _suggest_entry(crel: str) -> str:
+    """The exact entry a `missing entry` finding asks for — computed by
+    the same encode/normalize round-trip the audit validates names with,
+    so pasting it verbatim converges. A label the grammar cannot carry
+    raw (a `]`) rides encoded; hrefs always do."""
+    label = crel if "]" not in crel else encode_href(crel)
+    return f"- [{label}/]({encode_href(crel)}/index.md)"
 
 
-def fix_pass(
-    root: Path, space_dirs: list[Node],
-) -> tuple[list[str], list[str]]:
-    """The bounded repair, one rule: complete a half-declared space. A
-    valid child space nobody listed is registered in its nearest real
-    ancestor; a registered child whose index.md lacks the heading gets it
-    inserted. An undeclared folder is never promoted, external spaces are
-    never written, caps and malformed bullets are always respected, a
-    near-miss heading defers to a rename (the author's call), and every
-    written entry must round-trip through this script's own parser.
-    Returns `(applied, skipped)` report lines."""
-    done: list[str] = []
-    skipped: list[str] = []
-    findings = space_findings(root, space_dirs)
-    by_rel = {rel: path for rel, path, _ext in space_dirs}
-    owned_paths = {path for _rel, path, ext in space_dirs if not ext}
-
-    for rel, ext, near_miss, registered in findings.bare:
-        if ext or not registered:
-            continue
-        index = by_rel[rel] / "index.md"
-        text = read_text(index)
-        if text is None or has_spaces(text):
-            continue
-        if near_miss is not None:
-            skipped.append(f'{_ix(rel)}: carries "{near_miss}" — rename it '
-                           "to ## Spaces (the heading is exact)")
-            continue
-        cap = cap_for("index.md", caps_for_path(index, root))
-        eol = _eol(index)
-        new = (eol.join(text.splitlines())
-               + (eol if text.endswith("\n") or not text else "")
-               + eol + "## Spaces" + eol)
-        if cap is not None and len(new.encode("utf-8")) > cap:
-            skipped.append(f"{_ix(rel)}: heading insert would exceed cap {cap}")
-            continue
-        try:
-            write_atomic(index, new)
-        except OSError as exc:
-            skipped.append(f"{_ix(rel)}: write failed: {exc}")
-            continue
-        done.append(f"{_ix(rel)}: inserted ## Spaces heading")
-
-    by_space: dict[str, list[str]] = {}
-    for rel, crel, child_ext in findings.missing:
-        if not child_ext:
-            by_space.setdefault(rel, []).append(crel)
-    for rel in sorted(by_space):
-        path = by_rel[rel]
-        if path not in owned_paths:
-            continue
-        index = path / "index.md"
-        text = read_text(index)
-        if text is None or not has_spaces(text):
-            continue
-        _entries, bad = parse_spaces(text)
-        if bad:
-            skipped.append(f"{_ix(rel)}: malformed bullet in ## Spaces — "
-                           "repair it first, then re-run audit --fix")
-            continue
-        cap = cap_for("index.md", caps_for_path(index, root))
-        eol = _eol(index)
-        for crel in by_space[rel]:
-            if not has_spaces(read_text(path / crel / "index.md")):
-                skipped.append(f"{_ix(rel)}: not registering {crel}/ — child "
-                               "still lacks ## Spaces")
-                continue
-            entry = f"- [{crel}/]({encode_href(crel)}/index.md)"
-            m = ENTRY_RE.match(entry)
-            if m is None or normalize_href(m.group(2)) != crel:
-                skipped.append(f"{_ix(rel)}: cannot register {crel}/ — the "
-                               "name does not survive a contract entry")
-                continue
-            lines = text.splitlines()
-            head, start, end = find_section(lines)
-            at = start
-            for i in range(end - 1, start - 1, -1):
-                if lines[i].strip():
-                    at = i + 1
-                    break
-            else:
-                lines[head:head + 1] = [lines[head], ""]
-                at = head + 2
-            lines.insert(at, entry)
-            new = eol.join(lines) + (eol if text.endswith("\n") else "")
-            if cap is not None and len(new.encode("utf-8")) > cap:
-                skipped.append(f"{_ix(rel)}: registering {crel}/ would "
-                               f"exceed cap {cap}")
-                continue
-            try:
-                write_atomic(index, new)
-            except OSError as exc:
-                skipped.append(f"{_ix(rel)}: write failed: {exc}")
-                continue
-            text = new
-            done.append(f"{_ix(rel)}: registered {crel}/")
-    return done, skipped
-
-
-def cmd_audit(root: Path, include_external: bool, fix: bool) -> int:
+def cmd_audit(root: Path, include_external: bool) -> int:
     notes = WalkNotes()
     md, spaces = walk_owned(root, include_external, notes)
-    done, skipped = fix_pass(root, spaces) if fix else ([], [])
 
     f = space_findings(root, spaces)
     broken, incoming, unreadable = link_scan(md, root)
@@ -1190,39 +1098,41 @@ def cmd_audit(root: Path, include_external: bool, fix: bool) -> int:
         return " [external]" if ext else ""
 
     print(f"wiki: {root}")
-    print(f"spaces: {len(spaces)}  pages: {len(md)}")
-    for line in done:
-        print(f"fixed {line}")
-    for line in skipped:
-        print(f"fix-skipped {line}")
+    # A bare index.md dir is a finding, not a space — the header counts
+    # the dirs that actually carry the contract, the spec's vocabulary.
+    true_spaces = sum(1 for _rel, p, _e in spaces if is_wiki(p))
+    print(f"spaces: {true_spaces}  pages: {len(md)}")
     for rel, ext, near_miss, registered in f.bare:
         if ext:
             hint = " (external — its owner repairs it)"
         elif near_miss is not None:
             hint = f' (carries "{near_miss}" — rename it to ## Spaces)'
         elif registered:
-            hint = "" if fix else " (registered — audit --fix inserts the " \
-                                  "heading)"
+            hint = " (registered — add the ## Spaces heading to complete it)"
         else:
             hint = (" (not a space until it carries ## Spaces — add the "
-                    "heading or register it to promote)")
+                    "heading and register it to promote)")
         print(f"contract {_ix(rel)}: no ## Spaces heading{hint}")
     for rel, raw, ext in f.malformed:
         print(f"contract {_ix(rel)}: malformed entry: {raw}{space_mark(ext)}")
     for rel, nd, ext in f.duplicate:
         print(f"contract {_ix(rel)}: duplicate entry: {nd}/{space_mark(ext)}")
+    for rel, nd, boundary, ext in f.crossing:
+        print(f"contract {_ix(rel)}: entry {nd}/ crosses the boundary of "
+              f"{boundary}/ — remove it; {boundary}/index.md owns the "
+              f"deeper listing{space_mark(ext)}")
     for rel, ext in f.extra_heading:
         print(f"contract {_ix(rel)}: a second ## Spaces heading — the "
               f"contract reads only the first{space_mark(ext)}")
     for rel, crel, ext in f.unregistrable:
         print(f"contract {_ix(rel)}: unregistrable child name: {crel}/ — "
-              f"rename it ([](){{}} cannot appear in an entry)"
+              f"the name does not survive a contract entry; rename it"
               f"{space_mark(ext)}")
     for rel, crel, ext in f.missing:
         if ext:
             hint = " (register mounts by hand) [external]"
         else:
-            hint = "" if fix else " (audit --fix registers owned children)"
+            hint = f" — add: {_suggest_entry(crel)}"
         print(f"drift {_ix(rel)}: missing entry for {crel}/{hint}")
     for rel, nd, ext in f.stale:
         print(f"drift {_ix(rel)}: stale entry {nd}/ (no index.md on disk)"
@@ -1272,35 +1182,37 @@ def cmd_grep(
     root: Path, pattern: str, ignore_case: bool, include_external: bool,
 ) -> int:
     """Line matches as `rel:line: text` over the contract-reachable files —
-    the exact set `files` prints, so trust scope and reserved dirs hold."""
+    the exact set `files` prints, so trust scope and reserved dirs hold.
+    Under --external a match inside an external space carries the same
+    `[external]` marker `files` prints."""
     try:
         rx = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
     except re.error as exc:
         die(f"bad pattern: {exc}")
     notes = WalkNotes()
     matched = False
-    for rel, path, _ext in walk_files(root, include_external, notes):
+    for rel, path, ext in walk_files(root, include_external, notes):
         text = read_text(path)
         if text is None:
             notes.unreadable.append(rel)
             continue
+        mark = " [external]" if ext else ""
         for n, line in enumerate(text.splitlines(), 1):
             if rx.search(line):
                 matched = True
-                print(f"{rel}:{n}: {line.rstrip()}")
+                print(f"{rel}:{n}: {line.rstrip()}{mark}")
     notes.emit()
     return 0 if matched else 1
 
 
 def cmd_check_size(root: Path, target: str, use_stdin: bool) -> int:
-    path = Path(os.path.abspath(os.path.expanduser(target)))
+    p = Path(os.path.expanduser(target))
+    if not p.is_absolute():
+        p = root / p                    # relative targets are wiki paths,
+    path = Path(os.path.abspath(p))     # wherever the caller stands
     name = path.name
     if not use_stdin and path.is_dir():
         die(f"target is a directory: {target}")
-    reason = external_reason(path, root)
-    if reason is not None:
-        note(f"target is external ({reason}) — external spaces are "
-             "written only on explicit instruction")
     if use_stdin:
         size = len(sys.stdin.buffer.read())
     else:
@@ -1308,6 +1220,10 @@ def cmd_check_size(root: Path, target: str, use_stdin: bool) -> int:
             size = path.stat().st_size
         except OSError:
             die(f"no such file: {target} (pipe planned content with --stdin)")
+    reason = external_reason(path, root)
+    if reason is not None:
+        note(f"target is external ({reason}) — external spaces are "
+             "written only on explicit instruction")
     cap = cap_for(name, caps_for_path(path, root))
     if cap is None:
         print(f"ok {name}: {size} bytes, no cap")
@@ -1335,7 +1251,7 @@ def cmd_check_size(root: Path, target: str, use_stdin: bool) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="ws.py", description="wiki-spaces helper: deterministic traversal "
-        "and search, cap verdicts, and audit/repair for a wiki.")
+        "and search, cap verdicts, and a read-only audit for a wiki.")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     def command(
@@ -1359,15 +1275,12 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("-i", "--ignore-case", action="store_true",
                     help="case-insensitive match")
     sp = command("check-size", "cap verdict for one file")
-    sp.add_argument("target", help="file the content is (or will be) written to")
+    sp.add_argument("target", help="file the content is (or will be) written "
+                    "to (a relative path resolves from the wiki root)")
     sp.add_argument("--stdin", action="store_true",
                     help="measure stdin instead of the file on disk")
-    sp = command("audit", "detect drift, broken wikilinks, over-cap files",
-                 external=True)
-    sp.add_argument("--fix", action="store_true",
-                    help="complete half-declared owned spaces: register "
-                    "unlisted valid children, insert the heading a "
-                    "registered child lacks")
+    command("audit", "detect drift, broken wikilinks, over-cap files; "
+            "findings name the repair", external=True)
 
     args = parser.parse_args(argv)
     root = resolve_root(args.wiki)
@@ -1381,7 +1294,7 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_grep(root, args.pattern, args.ignore_case, args.external)
     if args.cmd == "check-size":
         return cmd_check_size(root, args.target, args.stdin)
-    return cmd_audit(root, args.external, args.fix)
+    return cmd_audit(root, args.external)
 
 
 if __name__ == "__main__":

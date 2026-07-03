@@ -18,13 +18,13 @@ Resolution order: an explicit path from the user → the nearest CWD-ancestor fo
 
 ## The bundled script
 
-`scripts/ws.py` sits next to this SKILL.md — stdlib python3, zero dependencies. Invoke it by absolute path (your working directory is usually elsewhere):
+`scripts/ws.py` sits next to this SKILL.md — stdlib python3 (3.9+), zero dependencies. Invoke it by absolute path (your working directory is usually elsewhere):
 
 - `python3 <skill-dir>/scripts/ws.py list --wiki <root>` — spaces reachable via the `## Spaces` contract (`--external` to cross mounts).
 - `… files --wiki <root>` — markdown files reachable via the contract.
 - `… grep <pattern> [-i] --wiki <root>` — regex line search over those files; prints `rel:line: text`, exits 1 on no match.
 - `… check-size <target> [--stdin] --wiki <root>` — cap verdict for a file; pipe planned content with `--stdin` to check before writing.
-- `… audit [--fix] --wiki <root>` — drift, broken links, over-cap or unreadable files, unhealthy mounts; `--fix` completes half-declared owned spaces (registers unlisted valid children, inserts the heading a registered child lacks) and never promotes an undeclared folder.
+- `… audit --wiki <root>` — drift, entries crossing a space boundary, broken links, over-cap or unreadable files, unhealthy mounts. Findings name the repair (a `missing entry` prints the exact line to add); apply repairs as ordinary edits and re-run the audit to verify — the script never writes.
 
 Trust the script's output over re-deriving structure by hand; it is the deterministic view of the contract. Stdout is data; stderr carries the resolved root and `note:` advisories naming whatever a walk skipped — relay them when they could change the answer.
 

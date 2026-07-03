@@ -1,5 +1,6 @@
 """Unit tests for ws.py primitives: section parsing, href normalization,
 cap tables, and the check-size verdict."""
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,8 +24,9 @@ class SectionTests(unittest.TestCase):
         self.assertEqual(ws.fenced_mask(lines), [True, True, True, True, False])
 
     def test_parse_spaces_entries_and_malformed(self):
-        # An entry rides any markdown bullet marker; any other
-        # bullet-shaped line is malformed, whatever its marker.
+        # An entry rides any markdown bullet marker; a trailing quoted
+        # link title is ignored; any other bullet-shaped line is
+        # malformed, whatever its marker.
         text = (
             "## Spaces\n"
             "\n"
@@ -34,6 +36,8 @@ class SectionTests(unittest.TestCase):
             "- [d/](d/index.md) - hyphen desc\n"
             "* [e/](e/index.md) — star bullet\n"
             "+ [f/](f/index.md)\n"
+            '- [g/](g/index.md "G title") — titled\n'
+            "- [my space/](my space/index.md)\n"
             "- [[wikilink-form]]\n"
             "- plain bullet\n"
             "* stray star\n"
@@ -42,7 +46,8 @@ class SectionTests(unittest.TestCase):
         entries, malformed = ws.parse_spaces(text)
         self.assertEqual([h for _l, h in entries],
                          ["a/index.md", "b/index.md", "c/index.md",
-                          "d/index.md", "e/index.md", "f/index.md"])
+                          "d/index.md", "e/index.md", "f/index.md",
+                          "g/index.md", "my space/index.md"])
         self.assertEqual(malformed, ["- [[wikilink-form]]", "- plain bullet",
                                      "* stray star"])
 
@@ -78,6 +83,19 @@ class SectionTests(unittest.TestCase):
         self.assertEqual(ws.extra_spaces_headings(
             "## Spaces\n```\n## Spaces\n```\n"), 0)
 
+    def test_read_text_strips_a_bom(self):
+        # A BOM is byte-order metadata, not content: with it stripped on
+        # decode, a BOM'd index still reads frontmatter-then-contract.
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "index.md"
+            p.write_bytes(b"\xef\xbb\xbf---\ntitle: x\n---\n\n## Spaces\n")
+            text = ws.read_text(p)
+            self.assertFalse(text.startswith("\ufeff"))
+            self.assertTrue(ws.has_spaces(text))
+            # A contract-lookalike inside frontmatter stays metadata.
+            p.write_bytes(b"\xef\xbb\xbf---\nt: x\n## Spaces\n---\nb\n")
+            self.assertFalse(ws.has_spaces(ws.read_text(p)))
+
     def test_strip_code_blanks_indented_blocks(self):
         stripped = ws.strip_code(
             "Prose [[kept]].\n\n    [[indent-ghost]]\n    more code\n\n"
@@ -94,21 +112,36 @@ class HrefTests(unittest.TestCase):
         self.assertEqual(ws.normalize_href("nested/b/index.md"), "nested/b")
 
     def test_rejects_unregistrable_shapes(self):
-        for href in ("", "/abs", "../up", "a/../b", "_meta/x", ".hidden/y",
-                     "a{b}", "self/..", ".", "./"):
+        for href in ("", "/abs", "../up", "_meta/x", ".hidden/y",
+                     "self/..", ".", "./"):
             self.assertIsNone(ws.normalize_href(href), href)
 
+    def test_trivial_equivalents_normalize(self):
+        # `./x`, doubled or dotted separators, and a trailing slash are
+        # the same path — normalized on read, never findings.
+        self.assertEqual(ws.normalize_href("./x/index.md"), "x")
+        self.assertEqual(ws.normalize_href("a//b/"), "a/b")
+        self.assertEqual(ws.normalize_href("a/./b"), "a/b")
+        self.assertEqual(ws.normalize_href("a/../b"), "b")
+
     def test_percent_encoding_decodes_to_the_disk_name(self):
-        # The href is a CommonMark destination: Obsidian writes
-        # `my%20space/index.md` for the `my space` folder.
+        # Obsidian writes `my%20space/index.md` for the `my space` folder;
+        # every check runs on the decoded name the filesystem knows.
         self.assertEqual(ws.normalize_href("my%20space/index.md"), "my space")
         self.assertEqual(ws.normalize_href("a%23b/"), "a#b")
+        self.assertEqual(ws.normalize_href("notes%20%282024%29/index.md"),
+                         "notes (2024)")
+        self.assertEqual(ws.normalize_href("a%5Bb/"), "a[b")
+        self.assertEqual(ws.normalize_href("a{b}"), "a{b}")
         # Decoding happens before validation — nothing smuggles through.
-        for href in ("%2E%2E/up", "%2Fabs", "a%5Bb", "_meta%2Fx"):
+        for href in ("%2E%2E/up", "%2Fabs", "_meta%2Fx"):
             self.assertIsNone(ws.normalize_href(href), href)
 
     def test_encode_href_round_trips_through_the_parser(self):
-        for name in ("plain", "my space", "a#b", "50% off", "a%20b"):
+        # Any folder name survives a contract entry: what would break the
+        # grammar rides percent-encoded.
+        for name in ("plain", "my space", "a#b", "50% off", "a%20b",
+                     "notes (2024)", "a[b", "a]b", "x{y}"):
             self.assertEqual(
                 ws.normalize_href(ws.encode_href(name) + "/index.md"), name)
 
@@ -189,6 +222,28 @@ class CapTests(unittest.TestCase):
             self.assertEqual(ws.cap_for("p.md", caps), 15000)
             self.assertEqual(ws.cap_for("index.md", caps), 5000)
 
+    def test_symlink_mount_caps_never_inherit_the_hosts_limits(self):
+        # The third externality rule gets the same fence the other two
+        # do: a symlink-mounted space answers to its own limits or the
+        # defaults, never the host's.
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td).resolve()
+            root = base / "host"
+            support.write(root / "index.md", "# H\n\n## Spaces\n")
+            support.write(root / "_meta" / "limits.md", "*.md: 90000\n")
+            support.write(base / "m1" / "index.md", "# M1\n\n## Spaces\n")
+            support.write(base / "m2" / "index.md", "# M2\n\n## Spaces\n")
+            support.write(base / "m2" / "_meta" / "limits.md", "*.md: 50\n")
+            os.symlink(base / "m1", root / "mnt")
+            os.symlink(base / "m2", root / "mnt2")
+
+            def cap(p):
+                return ws.cap_for("p.md", ws.caps_for_path(p, root))
+
+            self.assertEqual(cap(root / "p.md"), 90000)
+            self.assertEqual(cap(root / "mnt" / "p.md"), 15000)
+            self.assertEqual(cap(root / "mnt2" / "p.md"), 50)
+
 
 class CheckSizeTests(unittest.TestCase):
     def setUp(self):
@@ -229,6 +284,16 @@ class CheckSizeTests(unittest.TestCase):
                            "--wiki", str(self.root))
         self.assertEqual(r.returncode, 2)
 
+    def test_relative_target_resolves_from_the_wiki_root(self):
+        # A relative target is a wiki path, wherever the caller stands —
+        # resolving from CWD would misjudge externality and existence.
+        support.write(self.root / "page.md", "x" * 20)
+        r = support.run_ws("check-size", "page.md", "--wiki", str(self.root),
+                           cwd=self.root.parent)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("ok page.md", r.stdout)
+        self.assertNotIn("target is external", r.stderr)
+
     def test_verdict_is_root_independent(self):
         # A nested space's own limits govern its files no matter which
         # root the check resolves from.
@@ -248,6 +313,24 @@ class CheckSizeTests(unittest.TestCase):
                            "--wiki", str(self.root), stdin="x")
         self.assertEqual(r.returncode, 0)
         self.assertIn("target is external", r.stderr)
+
+    def test_symlink_mounted_verdict_is_root_independent(self):
+        # A file inside a symlink mount is external however it is
+        # reached: the mount's caps govern (not the host's), the note
+        # fires, and the verdict matches the mount resolved as its own
+        # root.
+        with tempfile.TemporaryDirectory() as outside:
+            target = Path(outside).resolve() / "elsewhere"
+            support.write(target / "index.md", "# E\n\n## Spaces\n")
+            support.write(target / "roomy.md", "x" * 17000)
+            os.symlink(target, self.root / "mnt")
+            r = support.run_ws("check-size", "mnt/roomy.md",
+                               "--wiki", str(self.root))
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("target is external", r.stderr)
+            r = support.run_ws("check-size", "roomy.md",
+                               "--wiki", str(target))
+            self.assertEqual(r.returncode, 1)
 
     def test_shrinking_write_toward_the_cap_is_progress(self):
         # CONVENTIONS: "Shrinking writes are always allowed." Over the cap

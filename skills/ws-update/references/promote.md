@@ -24,7 +24,7 @@ Any of: the page carries 3+ H2 sections that read as distinct sub-topics; siblin
    - Markdown links: `(<rel>/<stem>.md)` → `(<rel>/<stem>/index.md)` — recompute `<rel>` from each linking file's own directory; a link from a cousin directory needs a different prefix than a sibling's.
    - **Skip matches inside fenced code blocks and inline code spans** — they are examples, not links. Check each match's context before editing.
 5. **Fix the moved page's own outgoing relative links** — it now lives one level deeper, so every relative markdown link in it gains a `../` prefix. Wikilinks resolve by name and usually survive unchanged.
-6. **Register the new space** in the nearest ancestor's `## Spaces` (or run `audit --fix` to do it mechanically), with a ` — description` added by hand.
+6. **Register the new space** in the nearest ancestor's `## Spaces` — `- [<stem>/](<stem>/index.md) — description`; the audit's `missing entry` finding prints the exact line if in doubt.
 7. **Verify:** `python3 <skill-dir>/scripts/ws.py audit --wiki <root>` must report no broken wikilinks and no drift; re-run the step-2 search — every remaining match should be inside code blocks or inline code spans. Then `check-size` the new `index.md`.
 8. **On any surprise, restore the snapshot** (`git reset --hard` to the snapshot commit / `git stash pop` / copy back), report what blocked, and stop. A half-promoted page is worse than an over-cap one.
 
