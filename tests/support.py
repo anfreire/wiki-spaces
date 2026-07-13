@@ -46,8 +46,12 @@ def run_ws(*args, cwd=None, env_extra=None, stdin=None):
 
 
 def write(path: Path, text: str) -> None:
+    """Fixture writes pin LF endings: caps are byte counts and the golden
+    outputs state them exactly, so platform newline translation would
+    shift every size on Windows."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    with path.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
 
 
 _SYMLINKS: bool | None = None
