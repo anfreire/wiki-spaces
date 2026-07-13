@@ -10,6 +10,7 @@ A wiki is a folder with `index.md` whose contents include a `## Spaces` heading.
 
 - [AGENTS.md](AGENTS.md) — the spec (LLM contract)
 - [CONVENTIONS.md](CONVENTIONS.md) — opt-in conventions catalog
+- [HANDBOOK.md](HANDBOOK.md) — the repo's own bar: purpose, mindset, rules for every change
 - [README.md](README.md) — install and orientation
 - [CHANGELOG.md](CHANGELOG.md) — release history
 - [LICENSE](LICENSE) — MIT

@@ -1,4 +1,4 @@
 .
-alpha
+alpha — first space
 beta
 beta/gamma

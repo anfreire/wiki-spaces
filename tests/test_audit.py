@@ -1,6 +1,7 @@
 """Audit findings: drift, contract violations (including entries crossing
-a space boundary), broken wikilinks, over-cap files, orphan reporting —
-and the read-only guarantee: no command writes to a wiki."""
+a space boundary), over-cap and unreadable files — and the two guarantees
+the subtraction era added: no command writes to a wiki, and the script
+parses the contract, never the content."""
 import os
 import tempfile
 import unittest
@@ -36,33 +37,24 @@ class AuditTests(unittest.TestCase):
         self.assertIn("drift index.md: missing entry for unregistered/ — "
                       "add: - [unregistered/](unregistered/index.md)", out)
         self.assertIn("drift index.md: stale entry missing/", out)
-        self.assertIn("broken notes.md: [[nope]]", out)
         self.assertIn("over-cap big.md:", out)
         self.assertIn("over-cap tiny.md:", out)
+        # The fixture's dangling [[nope]] is content, not contract — the
+        # audit must not judge it.
+        self.assertNotIn("nope", out)
 
-    def test_orphans_are_informational(self):
-        support.write(self.root / "missing" / "index.md", "# M\n\n## Spaces\n")
-        support.write(self.root / "bare" / "index.md", "# B\n\n## Spaces\n")
-        support.write(self.root / "halfway" / "index.md",
-                      "# H\n\n## Spaces\n")
-        index = self.root / "index.md"
-        support.write(index, index.read_text(encoding="utf-8")
-                      + "- [bare/](bare/index.md)\n"
-                      + "- [unregistered/](unregistered/index.md)\n")
-        (self.root / "big.md").unlink()
-        (self.root / "tiny.md").unlink()
-        notes = self.root / "notes.md"
-        support.write(notes, "# Notes\n\nSee [[alpha-notes]].\n")
-        r = self.audit()
-        self.assertEqual(r.returncode, 0, r.stdout)
-        self.assertIn("orphan.md", r.stdout)   # still reported
-        self.assertIn("ok", r.stdout.splitlines()[-1])
-
-    def test_embeds_and_code_spans_are_exempt(self):
+    def test_content_is_never_scanned(self):
+        # The line the release draws: the script parses the contract,
+        # never the content. A page of dangling wikilinks, dead relative
+        # links, comment markers, and exotic YAML produces zero findings
+        # — meaning is the caller's to read and judge.
+        support.write(self.root / "gnarly.md", (
+            "---\ntags: {a: 1}\n---\n# G\n\n"
+            "[[nowhere]] and [dead](gone.md) and ![[ghost.png]]\n"
+            "%%[[half-comment]]\n"
+            "| [[table\\|alias]] |\n"))
         out = self.audit().stdout
-        self.assertNotIn("photo", out)
-        self.assertNotIn("fenced-ghost", out)
-        self.assertNotIn("span-ghost", out)
+        self.assertNotIn("gnarly", out)
 
     def test_spaces_section_is_contract_not_content(self):
         index = self.root / "index.md"
@@ -71,15 +63,6 @@ class AuditTests(unittest.TestCase):
         out = self.audit().stdout
         self.assertIn("contract index.md: malformed entry: - [[ghost-entry]]",
                       out)
-        self.assertNotIn("broken index.md", out)
-
-    def test_markdown_links_count_as_incoming(self):
-        # orphan.md gains one markdown link from notes.md and stops being
-        # an orphan; wikilinks are not the only citation form.
-        notes = self.root / "notes.md"
-        support.write(notes, notes.read_text(encoding="utf-8")
-                      + "\nAlso [the orphan](orphan.md).\n")
-        self.assertNotIn("orphan.md", self.audit().stdout)
 
     def test_boundary_crossing_entry_is_reported(self):
         # The walk declines an entry through another space's boundary; the
@@ -224,16 +207,6 @@ class AuditTests(unittest.TestCase):
         self.assertIn("mount shared/nota/: registered but not a wiki",
                       self.audit().stdout)
 
-    def test_broken_relative_markdown_link_is_reported(self):
-        support.write(self.root / "_archives" / "old.md", "# Old\n")
-        notes = self.root / "notes.md"
-        support.write(notes, notes.read_text(encoding="utf-8")
-                      + "\nSee [gone](gone.md) and [old](_archives/old.md).\n")
-        out = self.audit().stdout
-        self.assertIn("broken notes.md: (gone.md)", out)
-        # On disk in a reserved dir — outside the walk but not dangling.
-        self.assertNotIn("(_archives/old.md)", out)
-
     def test_unreadable_file_is_reported_and_counted(self):
         (self.root / "bad.md").write_bytes(b"\xff\xfe not utf-8\n")
         r = self.audit()
@@ -258,6 +231,19 @@ class AuditTests(unittest.TestCase):
                       '(carries "## Spaces ##" — rename it to ## Spaces)',
                       r.stdout)
 
+    def test_indented_contract_heading_is_accepted(self):
+        # `  ## Spaces` renders as a heading in the dialect — the dir is
+        # a space, walked and finding-free, not bare-with-a-hint.
+        support.write(self.root / "indent" / "index.md",
+                      "# I\n\n  ## Spaces\n")
+        index = self.root / "index.md"
+        support.write(index, index.read_text(encoding="utf-8")
+                      + "- [indent/](indent/index.md)\n")
+        out = self.audit().stdout
+        self.assertNotIn("contract indent/index.md", out)
+        rels = support.run_ws("list", "--wiki", str(self.root)).stdout
+        self.assertIn("indent", rels)
+
     def test_external_caps_never_inherit_the_hosts_limits(self):
         # The host's table caps tiny.md at 10 bytes; across the trust
         # boundary the mount's own limits (or the defaults) govern.
@@ -271,6 +257,7 @@ class AuditTests(unittest.TestCase):
         self.assertNotIn("over-cap shared/team/tiny.md", out)
         self.assertNotIn("over-cap shared/team/wide.md", out)
 
+    @support.needs_symlinks
     def test_symlink_mount_caps_never_inherit_the_hosts_limits(self):
         # Same fence, third rule: a symlink-mounted space answers to its
         # own limits (m1) or the defaults (m2, whose tiny.md the host's
@@ -284,8 +271,8 @@ class AuditTests(unittest.TestCase):
             support.write(m2 / "index.md", "# M2\n\n## Spaces\n")
             support.write(m2 / "tiny.md",
                           "# Well over ten bytes, fine by the defaults\n")
-            os.symlink(m1, self.root / "mnt")
-            os.symlink(m2, self.root / "mnt2")
+            support.symlink(m1, self.root / "mnt")
+            support.symlink(m2, self.root / "mnt2")
             out = self.audit("--external").stdout
             self.assertNotIn("over-cap mnt/wide.md", out)
             self.assertNotIn("over-cap mnt2/tiny.md", out)
@@ -334,6 +321,56 @@ class AuditTests(unittest.TestCase):
         self.assertIn("contract index.md: duplicate entry: alpha/",
                       self.audit().stdout)
 
+    def test_url_entry_is_malformed_not_stale(self):
+        # `- [b](https://…)` under ## Spaces once landed in the stale
+        # channel, whose named repair — remove the entry — would delete
+        # a bookmark. A URL is no wiki path: malformed, and the natural
+        # edit is moving the line to ## Items.
+        index = self.root / "index.md"
+        support.write(index, index.read_text(encoding="utf-8")
+                      + "- [b](https://example.com)\n")
+        out = self.audit().stdout
+        self.assertIn("malformed entry: unregistrable href: "
+                      "https://example.com", out)
+        self.assertNotIn("stale entry https", out)
+
+    def test_anchor_entry_is_malformed_not_stale(self):
+        # `- [jump](#top)` is the URL case's neighbor: a raw `#` marks a
+        # fragment, never a name (a name's `#` rides percent-encoded), so
+        # the stale channel — whose repair reads as "remove the line" —
+        # must not claim it.
+        index = self.root / "index.md"
+        support.write(index, index.read_text(encoding="utf-8")
+                      + "- [jump](#top)\n")
+        out = self.audit().stdout
+        self.assertIn("malformed entry: unregistrable href: #top", out)
+        self.assertNotIn("stale entry #top", out)
+
+    def test_file_entry_names_the_items_repair(self):
+        # `- [notes](notes.md)` names a file that exists — "stale …
+        # (no index.md on disk)" was factually wrong and its implied
+        # repair destructive. The finding now names the real edit.
+        index = self.root / "index.md"
+        support.write(index, index.read_text(encoding="utf-8")
+                      + "- [notes](notes.md)\n")
+        out = self.audit().stdout
+        self.assertIn("contract index.md: entry notes.md names a file, "
+                      "not a space — list files under ## Items instead",
+                      out)
+        self.assertNotIn("stale entry notes.md", out)
+
+    def test_h1_closes_the_spaces_section(self):
+        # Bullets under a later `# Appendix` are content, not entries —
+        # they once parsed as contract and produced findings whose named
+        # repairs would delete the user's lines.
+        index = self.root / "index.md"
+        support.write(index, index.read_text(encoding="utf-8")
+                      + "\n# Appendix\n\n- a reading list item\n"
+                      + "- [b](https://example.com)\n")
+        out = self.audit().stdout
+        self.assertNotIn("reading list", out)
+        self.assertNotIn("example.com", out)
+
     def test_second_spaces_heading_is_flagged(self):
         index = self.root / "index.md"
         support.write(index, index.read_text(encoding="utf-8")
@@ -348,56 +385,6 @@ class AuditTests(unittest.TestCase):
                       "---\ntitle: x\n## Spaces\n---\n\n# Real body.\n")
         self.assertIn("contract fm/index.md: no ## Spaces heading",
                       self.audit().stdout)
-
-    def test_asset_wikilinks_are_exempt(self):
-        notes = self.root / "notes.md"
-        support.write(notes, notes.read_text(encoding="utf-8")
-                      + "\nThe scan ([[report.pdf]]) names an asset.\n")
-        out = self.audit().stdout
-        self.assertNotIn("report.pdf", out)
-        self.assertIn("broken notes.md: [[nope]]", out)  # pages still checked
-
-    def test_dangling_upward_markdown_link_is_broken(self):
-        outside = self.root.parent / "beside.md"
-        support.write(outside, "# Beside\n")
-        self.addCleanup(outside.unlink)
-        notes = self.root / "notes.md"
-        support.write(notes, notes.read_text(encoding="utf-8")
-                      + "\nUp: [gone](../nowhere.md), [there](../beside.md).\n")
-        out = self.audit().stdout
-        self.assertIn("broken notes.md: (../nowhere.md)", out)
-        self.assertNotIn("(../beside.md)", out)
-
-    def test_path_qualified_wikilink_resolves_by_suffix(self):
-        # `[[assets/deep]]` from the root names alpha/assets/deep.md by
-        # its path tail — resolution is index-backed, not a page sweep.
-        notes = self.root / "notes.md"
-        support.write(notes, notes.read_text(encoding="utf-8")
-                      + "\nDown: [[assets/deep]].\n")
-        out = self.audit().stdout
-        self.assertNotIn("assets/deep", out)   # resolved, not broken
-
-    def test_wikilink_case_mismatch_resolves_like_obsidian(self):
-        # The dialect resolves wikilinks case-insensitively: [[readme]]
-        # names README.md, stem and path-qualified forms alike. Relative
-        # markdown links keep filesystem semantics — the disk decides.
-        support.write(self.root / "README.md", "# Readme\n")
-        notes = self.root / "notes.md"
-        support.write(notes, notes.read_text(encoding="utf-8")
-                      + "\nSee [[readme]] and [[Assets/DEEP]].\n")
-        out = self.audit().stdout
-        self.assertNotIn("[[readme]]", out)            # resolved, not broken
-        self.assertNotIn("DEEP", out)
-        self.assertNotIn("README.md", out)             # credited, not orphan
-        self.assertIn("broken notes.md: [[nope]]", out)  # missing still breaks
-
-    def test_indented_code_is_not_scanned(self):
-        notes = self.root / "notes.md"
-        support.write(notes, notes.read_text(encoding="utf-8")
-                      + "\nAn example:\n\n    [[indent-ghost]] "
-                      "[also](indent-ghost.md)\n")
-        out = self.audit().stdout
-        self.assertNotIn("indent-ghost", out)
 
     def test_ignored_names_are_invisible_to_the_walk(self):
         support.write(self.root / "_meta" / "ignore.md",

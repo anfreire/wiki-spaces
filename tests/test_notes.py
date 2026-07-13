@@ -34,6 +34,16 @@ class NotesTests(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("unregistered/", r.stderr)
 
+    def test_stale_entries_are_named(self):
+        # A registered space deleted on disk must not vanish silently
+        # from list/files/grep — the one declined thing the advisory
+        # channel never named. The audit's finding stays the repair
+        # surface; the note points at it.
+        for cmd in (("list",), ("files",)):
+            r = support.run_ws(*cmd, "--wiki", str(self.root))
+            self.assertIn("stale entries, skipped", r.stderr, cmd)
+            self.assertIn("missing/", r.stderr, cmd)
+
     def test_skipped_externals_are_named(self):
         # A count would hide a user's own folder named `shared/` — the
         # skipped paths are named, so nothing is captured silently.

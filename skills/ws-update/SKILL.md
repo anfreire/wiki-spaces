@@ -1,11 +1,11 @@
 ---
 name: ws-update
-description: Create or update content in the user's canonical wiki. Use when the user says "update wiki", "sync project", "save this", "capture this", "store this research", or wants to distill knowledge from a project, conversation, or research session. When a session produced durable knowledge worth keeping, offer once at a natural wrap-up — never per-turn.
+description: Create or update content in the user's wiki — and set the wiki up when none exists yet. Use when the user says "update wiki", "sync project", "save this", "capture this", "store this research", "set up my wiki", "create a wiki", or wants to distill knowledge from a project, conversation, or research session, or to adopt an existing folder of notes as a wiki. When a session produced durable knowledge worth keeping, offer once at a natural wrap-up — never per-turn.
 ---
 
 # Wiki Update
 
-Extract durable knowledge from the current source — a project, the conversation, a research session — and place it in the user's wiki. Merge before creating, respect the conventions the wiki has adopted, and keep every file inside its size cap.
+Extract durable knowledge from the current source — a project, the conversation, a research session — and place it in the user's wiki. Merge before creating, respect the wiki's conventions, and keep every file inside its size cap.
 
 <!-- ws:core -->
 ## The wiki model
@@ -18,80 +18,76 @@ Resolution order: an explicit path from the user → the nearest CWD-ancestor fo
 
 ## The bundled script
 
-`scripts/ws.py` sits next to this SKILL.md — stdlib python3 (3.9+), zero dependencies. Invoke it by absolute path (your working directory is usually elsewhere):
+`scripts/ws.py` sits next to this SKILL.md — stdlib python3 (3.9+), zero dependencies, read-only. It parses the contract, never the content: structure — traversal, scope, caps, drift — is the script's side; reading and judging meaning is yours. Invoke it by absolute path (your working directory is usually elsewhere):
 
-- `python3 <skill-dir>/scripts/ws.py list --wiki <root>` — spaces reachable via the `## Spaces` contract (`--external` to cross mounts).
+- `python3 <skill-dir>/scripts/ws.py list --wiki <root>` — spaces reachable via the `## Spaces` contract, each with its entry description (`--external` to cross mounts).
 - `… files --wiki <root>` — markdown files reachable via the contract.
-- `… grep <pattern> [-i] --wiki <root>` — regex line search over those files; prints `rel:line: text`, exits 1 on no match.
+- `… grep <pattern> [-i] --wiki <root>` — regex line search over those files; prints `rel:line: text`, exits 1 on no match. The sweep primitive: a link worklist, a tag inventory, an escaping-reference check are each a pattern plus your judgment on the hits.
 - `… check-size <target> [--stdin] --wiki <root>` — cap verdict for a file; pipe planned content with `--stdin` to check before writing.
-- `… audit --wiki <root>` — drift, entries crossing a space boundary, broken links, over-cap or unreadable files, unhealthy mounts. Findings name the repair (a `missing entry` prints the exact line to add); apply repairs as ordinary edits and re-run the audit to verify — the script never writes.
+- `… audit --wiki <root>` — contract drift, entries crossing a space boundary, over-cap or unreadable files, unhealthy mounts. Findings name their repair where one is safe to name (a `missing entry` prints the exact line to add); apply repairs as ordinary edits and re-run the audit to verify — the script never writes.
 
-Trust the script's output over re-deriving structure by hand; it is the deterministic view of the contract. Stdout is data; stderr carries the resolved root and `note:` advisories naming whatever a walk skipped — relay them when they could change the answer.
+Trust the script's output over re-deriving structure by hand. Stdout is data; stderr carries the resolved root (`audit` prints it as its stdout header instead) and `note:` advisories naming whatever a walk skipped — relay them when they could change the answer. Shell examples throughout are POSIX — on Windows, substitute `python` for `python3` and the platform's equivalents for the one-liners.
 
 ## Trust scope and size discipline
 
-Owned vs external is relative to the resolved root: anything under a folder named `shared/` (at any depth), a foreign-origin git submodule, or a symlink escaping the tree is external. Reads cross owned spaces by default and enter external ones only when the user explicitly asks. Writes stay inside the targeted space; any other space — owned or external — is written only on explicit instruction.
+Owned vs external is relative to the resolved root: anything under a folder named `shared/` (at any depth), a git submodule, or a symlink escaping the tree is external. Reads cross owned spaces by default and enter external ones only when the user explicitly asks. Writes stay inside the targeted space; any other space — owned or external — is written only on explicit instruction.
 
-Caps are UTF-8 bytes including frontmatter, keyed by basename: `index.md` 5000, `log.md` and `hot.md` 100000, any other `*.md` 15000. A `_meta/limits.md` of plain `basename: bytes` lines overrides them — the nearest one at or above the file wins, like `_template.md`, and the literal name `*.md` re-caps the content-page catch-all. Run `check-size` before writing — a write that shrinks an over-cap file reports `ok`, progress. An overflow is a signal about shape, not just size: distill the page or reshape the space — never truncate.
+Caps are UTF-8 bytes including frontmatter, keyed by basename: `index.md` 5000, `log.md` and `hot.md` 100000, any other `*.md` 15000. A `_meta/limits.md` of plain `basename: bytes` lines overrides them — the nearest one at or above the file wins, like `_template.md`, and the literal name `*.md` re-caps the content-page catch-all. Check caps with `check-size`: pipe planned new content via `--stdin` before writing it; after editing a file in place, check the file itself — a write that shrinks an over-cap file reports `ok`, progress, so repairs converge. An overflow is a signal about shape, not just size: distill the page or reshape the space — never truncate.
 
 Conventions are opt-in per wiki. Read the markers present at the scope root — `log.md`, `_meta/taxonomy.md`, `_meta/limits.md`, `_meta/ignore.md`, frontmatter on pages, `_template.md`, `hot.md`, `.obsidian/`, `.git` — and degrade gracefully when one is absent. If `log.md` exists, append one line per operation:
 
 ```sh
-printf '%s <OP> <details>\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> <root>/log.md
+printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '<OP> <details>' >> <root>/log.md
 ```
 <!-- /ws:core -->
 
 ## Initialization
 
-When nothing resolves — no explicit path, no CWD-ancestor wiki, no valid config — set one up inline before doing anything else: follow [references/init.md](references/init.md). Keep the interview to two exchanges (gather, confirm), run every command yourself, and resume the original request once the wiki exists. A configured path that is broken (missing on disk, no `index.md`, not absolute) is a hard stop, not a setup trigger — surface it and let the user decide.
+When nothing resolves — no explicit path, no CWD-ancestor wiki, no valid config — set one up inline: follow [references/init.md](references/init.md), then resume the request. A broken configured path (missing on disk, no `index.md`, not absolute) is a hard stop, not a setup trigger — surface it and let the user decide.
 
 ## Procedure
 
-1. **Resolve the wiki** (core block). Announce the root when it came from CWD or could be ambiguous; "save to my wiki" from inside a company repo means the configured wiki, not the repo.
-2. **Detect conventions at the scope root** — the wiki root by default, the targeted space if the user named one. Spaces are autonomous; never inherit detection from a parent. Skip every step whose marker is absent.
-3. **Detect the mode** from the user's intent — CWD only disambiguates *which* project when intent is already project-scoped:
+1. **Resolve the wiki** (core block) and announce the root when it came from CWD or could be ambiguous.
+2. **Detect conventions at the scope root** — the wiki root by default, the targeted space if the user named one. Presence markers (`log.md`, taxonomy, `hot.md`) never inherit from a parent; `_meta/limits.md`, `_meta/ignore.md`, and `_template.md` follow their nearest-ancestor rule. Skip every step whose marker is absent.
+3. **Detect the mode** from the user's intent — CWD only disambiguates *which* project, never the mode:
    | Mode | Trigger | Input |
    |---|---|---|
+   | Direct add | "add this to the wiki", "save this recipe" — a concrete artifact in hand | the handed content |
    | Project sync | "sync this project", explicit project naming | project files, git log |
-   | Conversation capture | "save this", "capture this" | the current conversation |
+   | Conversation capture | "save this", "capture this" — the session itself, no single artifact | the current conversation |
    | Research capture | "store this research" | findings from the session |
-4. **Extract knowledge.** Project sync: architecture decisions and their rationale, patterns, tool/API wiring, trade-offs, results — from the project's files and recent git history. Conversation: durable conclusions and decisions, written as facts ("X works by…"), never chat summary. Research: what took effort and would be expensive to re-derive.
-5. **Filter and deduplicate.** For knowledge-capture wikis apply the noise filter: answerable from the code? skip; answerable by a quick search? skip; needed in 3 months? keep. Content-store wikis (recipes, journals, runbooks) skip the filter — every entry is intentional. Either way, enumerate existing pages via `files` and rank by filename / path / frontmatter overlap: when a near-match exists, **merge into it instead of creating a sibling**.
-6. **Place.** Run `list` for registered spaces (labels + descriptions are placement hints) and check top-level plain folders. Match content to a candidate semantically: project-scoped content goes under the project-grouping space (`projects/<name>/…` or whatever the wiki calls it); global concepts go to the topical folder even when captured inside a project. Several equally plausible candidates, or none → ask. Flat wiki → write at the root. Slugs: lowercase, hyphenated, ≤50 chars.
-7. **Check size before every write.** Materialize the full projected content (for an edit, apply it in memory first), then:
+4. **Extract knowledge.** Direct add: take the content as handed — your job is placement and dedup, not re-synthesis. Project sync: decisions and rationale, patterns, tool/API wiring, trade-offs, results — from the files and recent git history. Conversation: durable conclusions and decisions, written as facts ("X works by…"), never chat summary. Research: what took effort and would be expensive to re-derive.
+5. **Filter and deduplicate.** Knowledge-capture wikis get the noise filter: answerable from the code or a quick search? skip; needed in 3 months? keep. Content-store wikis (recipes, journals, runbooks) skip the filter — every entry is intentional. Enumerate existing pages via `files` and rank by filename/path/frontmatter overlap: when a near-match exists, **merge into it instead of creating a sibling**.
+6. **Place.** `list` prints each space with its entry description — the placement hints; check top-level plain folders too. Match semantically: project-scoped content goes under the project-grouping space (`projects/<name>/…` or whatever the wiki calls it); global concepts go to the topical folder even when captured inside a project. Several equally plausible candidates, or none → ask. Flat wiki → write at the root. Slugs: lowercase, hyphenated, ≤50 chars.
+7. **Check the cap on every write.** Pipe planned content before writing:
    ```sh
    python3 <skill-dir>/scripts/ws.py check-size <target> --stdin --wiki <root> <<'EOF'
-   <projected content>
+   <planned content>
    EOF
    ```
-   Editing an already-over-cap file smaller reports `ok … shrinking write is progress` — write it, then keep distilling toward the cap. On `over`, the content outgrew its shape — never truncate, never ignore. Re-read the page and its space's index, diagnose why it overflowed, then act:
-   - **Bloat** — padding, near-duplicates, prose pasted in raw, entries you wouldn't re-create today → distill: merge, tighten, drop. The cap exists to force exactly this judgment.
-   - **Growth** — genuinely distinct topics sharing one file → reshape the space to what it would look like had it been designed for today's content: sibling pages with self-standing names under a hub, a promotion into a space ([references/promote.md](references/promote.md)), or a regrouped layout — a new sub-space, pages moved to better homes.
-   Both can apply — distill first, then reshape what remains. Update every index you touch so the result reads as designed, not divided. Filenames like `topic-2.md` or `topic-more.md` mean a file was split without rethinking the space — never ship them.
-   An over-cap `index.md` is navigation debt: push detail down into child pages and keep entries to one line each — an index is navigation, not content.
-8. **Write.** New pages: nearest ancestor `_template.md` if present, else the wiki's page shape (frontmatter only where the wiki already uses it). Mark non-source claims `%%inferred%%`, conflicting sources `%%ambiguous%%`. Add up to 2 wikilinks on first natural mentions. Updates: merge, preserve manual content, bump `updated:` if frontmatter is in use, never overwrite unrelated sections. On a project sync, ensure the project's hub page records the repo path in `~`-contracted form — `repo:` or an entry under `sources:` where the wiki uses frontmatter, else a single plain line — so a later session can map the checkout back to its page. More than ~10 pages changing → show the plan and ask first.
-9. **Keep the contract.** Created a new space, removed one, or moved pages? Update `## Spaces` per [Space operations](#space-operations) below. `## Items` sections are optional human curation — maintain one where the index already has it. Then check the shape you're leaving: every entry description still true, no name that only makes sense historically — reorganize now when the fix is small, and surface bigger reshapes as the close-out's `ws-tend` suggestion.
-10. **Close out.** Run `audit`. Apply the safe structural repairs yourself, re-auditing between rounds until they are gone: add the exact entry line a `missing entry` finding prints, insert the heading a *registered* bare child lacks, and remove an entry flagged as crossing another space's boundary (registering the space where the finding says it belongs). An undeclared bare index (`not a space until it carries ## Spaces`) is a promotion decision, not drift — surface it, act only on the user's call. Other findings are reported, not auto-repaired; when they fall outside this sync's write scope, suggest a `ws-tend` pass to the user — suggestion only, never run it yourself. Then log an `UPDATE` line per the core block and confirm:
-    ```
-    Updated wiki (<root>):
-    - Created: <paths>   - Updated: <paths>
-    - Mode: <mode>       - Audit: <clean | findings>
-    ```
+   For an edit, apply it and `check-size` the file itself (a shrinking write reports `ok`; the audit backstops). On `over` — never truncate, never ignore. Re-read the page and its space's index, diagnose why it overflowed, then act:
+   - **Bloat** — padding, near-duplicates, prose pasted in raw, entries you wouldn't re-create today → distill: merge, tighten, drop. The cap exists to force this judgment.
+   - **Growth** — genuinely distinct topics sharing one file → reshape the space to what it would look like had it been designed for today's content: self-standing sibling pages under a hub, a promotion, or a regrouped layout ([Space operations](#space-operations) links both procedures).
+   Both can apply — distill first, then reshape what remains. Update every index you touch. Filenames like `topic-2.md` or `topic-more.md` mean a file was split without rethinking the space — never ship them.
+   An over-cap `index.md` is navigation debt: push detail into child pages, one line per entry.
+8. **Write.** New pages: nearest ancestor `_template.md` if present, else the wiki's page shape (frontmatter only where the wiki already uses it). Mark non-source claims `%%inferred%%`, conflicting sources `%%ambiguous%%`. Add up to 2 wikilinks on first natural mentions. Updates: merge, preserve manual content, bump `updated:` if frontmatter is in use, never overwrite unrelated sections. On a project sync, record the repo path (`~`-contracted) on the project's hub page — `repo:`/`sources:` frontmatter where in use, else one plain line — so a later session maps the checkout to its page. More than ~10 pages changing → show the plan and ask first.
+9. **Keep the contract.** Created a new space, removed one, or moved pages? Update `## Spaces` per [Space operations](#space-operations) below. `## Items` sections are optional human curation — maintain one where the index already has it. Then check the shape you're leaving: entry descriptions still true, no name that only makes sense historically — small fixes now; bigger reshapes become the close-out's `ws-tend` suggestion.
+10. **Close out.** Run `audit`. Apply the safe structural repairs yourself, re-auditing between rounds until gone: add the exact entry line a `missing entry` finding prints, insert the heading a *registered* bare child lacks, and remove an entry flagged as crossing another space's boundary (registering the space where the finding says it belongs). An undeclared bare index is a promotion decision — surface it, act only on the user's call. Other findings are reported, not auto-repaired; outside this sync's write scope, suggest a `ws-tend` pass — suggestion only, never run it yourself. Log an `UPDATE` line per the core block and confirm in one block: `Updated wiki (<root>)` with created paths, updated paths, mode, and audit outcome.
 
 ## Space operations
 
-**Create a space** (a folder that needs first-class navigation status):
+**Create a space** (a folder needing first-class navigation):
 
 ```sh
 mkdir -p <root>/<path> && printf '# <Title>\n\n## Spaces\n' > <root>/<path>/index.md
 ```
 
-Then register it in its parent space's `## Spaces` (the nearest ancestor with the heading): add `- [<name>/](<name>/index.md) — description`, percent-encoding the href where the name demands it (`my%20space/index.md`) — descriptions are placement hints for every later operation. Run `audit` to verify; its `missing entry` finding prints the exact line if in doubt.
+Register it in the nearest ancestor space's `## Spaces` — `- [<name>/](<name>/index.md) — description`, href percent-encoded where the name demands it; the description is the placement hint later operations read. The audit's `missing entry` finding prints the exact line if in doubt.
 
-**Remove a space**: confirm with the user (prefer moving content to `_archives/` over deletion), delete the folder, remove its entry from the parent's `## Spaces`, then `audit` to verify nothing dangles.
+**Remove a page**: sweep for what points at it first — `grep '<stem>' --wiki <root>` (every link form carries the stem; judge each hit, code examples aside) — rewrite or drop the real links, prefer a move to `_archives/` over deletion, then `audit`.
 
-**Mount someone else's space** (clone / submodule / symlink, lands under `shared/` by convention): [references/mount.md](references/mount.md).
+**Remove a space**: confirm with the user (prefer `_archives/` over deletion), delete the folder, remove its entry from the parent's `## Spaces`, then `audit` to verify nothing dangles.
 
-**Share a space of yours** (verify it stands alone, pick snapshot / repo / two-way sync, optionally re-mount it as your own consumer): [references/share.md](references/share.md).
+**Mount someone else's space**: [references/mount.md](references/mount.md). **Share a space of yours**: [references/share.md](references/share.md).
 
-**Promote a page into a space** (the riskiest manual operation — snapshot first): [references/promote.md](references/promote.md). Triggers: ~3+ H2 sections covering distinct sub-topics, accreted siblings (`strategy.md`, `strategy-backtest.md`…), or an over-cap hub page.
+**Promote a page into a space** (the riskiest manual operation; snapshot first): [references/promote.md](references/promote.md). **Rename, move, merge, or demote a space** (snapshot first): [references/restructure.md](references/restructure.md).

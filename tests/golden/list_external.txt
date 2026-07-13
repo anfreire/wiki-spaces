@@ -1,5 +1,5 @@
 .
-alpha
+alpha — first space
 beta
 beta/gamma
-shared/team [external]
+shared/team [external] — external mount

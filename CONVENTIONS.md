@@ -10,7 +10,7 @@ Obsidian-flavored markdown is the wire format. Syntax facts (wikilinks, frontmat
 
 ## Discovery via config
 
-The optional config file `~/.config/wiki-spaces/config` is plain text. Its only key is the `wiki` pointer naming your canonical personal wiki:
+The optional config file `~/.config/wiki-spaces/config` (under `$XDG_CONFIG_HOME` when that is set) is plain text. Its only key is the `wiki` pointer naming your canonical personal wiki:
 
 ```
 # wiki-spaces config
@@ -25,11 +25,11 @@ The path must be absolute; relative paths and unknown lines are ignored. The con
 
 ### `log.md`
 
-Optional append-only notes. When present, skills append one ISO-8601-UTC-timestamped line per operation. No structured-field schema is enforced. Log files are never archived or rotated. Concurrency locks are not guaranteed.
+Optional append-only notes. When present, skills append one ISO-8601-UTC-timestamped line per operation. No structured-field schema is enforced. Skills never rotate a log mid-operation; when the audit flags `log.md` over its cap, the repair is an archive roll — move it to `_archives/log-<YYYYMMDD>.md` and start a fresh `log.md`. `_archives/` is invisible to walks, so rolled logs stay out of search, and the history is never truncated. Concurrency locks are not guaranteed.
 
-Example shell one-liner to append:
+Example shell one-liner to append (details ride a `%s` argument, never the format string — a `%` in them would corrupt the line):
 ```sh
-printf '%s UPDATE pages=2\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> log.md
+printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" 'UPDATE pages=2' >> log.md
 ```
 
 If absent, skills skip logging.
@@ -71,7 +71,7 @@ Size discipline is default-on. It's configured via this file. Caps are enforced 
 | `hot.md` | 100000 |
 | `*.md` | 15000 |
 
-Shrinking writes are always allowed — `check-size --stdin` reports a planned write that shrinks an over-cap file as `ok … shrinking write is progress`. Size checks run via `python3 scripts/ws.py check-size` before writes. The `scripts/ws.py audit` command flags over-cap files after the fact. Plain `basename: bytes` lines configure the limits file; the literal name `*.md` re-caps the catch-all row above. Non-matching lines are ignored. No glob patterns, paths, or first-match-wins chains are supported — `*.md` is a reserved name, not a glob.
+Shrinking writes are always allowed — `check-size --stdin` reports a planned write that shrinks an over-cap file as `ok … shrinking write is progress`. Size checks run via `python3 scripts/ws.py check-size` — planned content piped via `--stdin`, or the file on disk right after an edit. The `scripts/ws.py audit` command flags over-cap files after the fact. Plain `basename: bytes` lines configure the limits file; the literal name `*.md` re-caps the catch-all row above. Non-matching lines are ignored. No glob patterns, paths, or first-match-wins chains are supported — `*.md` is a reserved name, not a glob.
 
 Any space can carry its own `_meta/limits.md`. The nearest one at or above a file governs it — closest ancestor wins, the same rule `_template.md` uses. The lookup never crosses a trust boundary: an external space answers to its own limits or the defaults, never the host's. A limits file under `shared/` sits on the external side of the fence and covers mounts beneath it that lack their own; a path outside the wiki answers to the defaults alone.
 
@@ -87,7 +87,7 @@ If absent, the defaults apply.
 
 ### `_meta/ignore.md`
 
-Folder names the filesystem walk skips, one plain name per line — the user-extensible sibling of the built-in reserved names (`_archives/`, `_meta/`, dot-dirs). `#` lines are comments; paths and globs are not supported. The nearest file at or above a folder governs it (the `limits.md` rule), and the lookup never crosses a trust boundary.
+Folder names the filesystem walk skips, one plain name per line — the user-extensible sibling of the built-in reserved names (`_archives/`, `_meta/`, dot-dirs). `#` lines are comments; every other non-blank line is read as a name, so keep prose behind `#`. Paths and globs are not supported, and a listed name is silenced at any depth below the declaring file — prefer a deeper `_meta/ignore.md` when the name is common. The nearest file at or above a folder governs it (the `limits.md` rule), and the lookup never crosses a trust boundary.
 
 ```
 # vendor trees a repo-root wiki drags in
@@ -121,7 +121,7 @@ Timestamps are UTC ISO-8601. Special files like `index.md` and `log.md` are exem
 
 ### `_template.md`
 
-When present in a folder, new pages created in that folder use this file as boilerplate. The closest ancestor template wins. If absent, pages use the default page template.
+When present in a folder, new pages created in that folder use this file as boilerplate. The closest ancestor template wins. The audit's link scan skips a template's body — placeholder links are examples, and they earn no incoming credit. If absent, pages use the default page template.
 
 ### `hot.md`
 
@@ -142,6 +142,10 @@ If absent, the colorize step is skipped.
 ### `.git`
 
 Presence of `.git` indicates the wiki is a git repository. Skills can surface git status in reports. Automatic commits or pushes are never performed. If absent, git context is skipped.
+
+### `AGENTS.md`
+
+A one-page contract note at the wiki root for harnesses that open the wiki without the skills installed: the `## Spaces` rule, the caps, trust scope, the dialect, and a pointer to the spec. `ws-update`'s setup offers it once; `CLAUDE.md` / `GEMINI.md` symlinks serve the harnesses that read those names. If absent, nothing changes for the skills.
 
 ---
 
@@ -210,7 +214,7 @@ Reserved folder names, honored at any depth:
 
 | Name | Behavior |
 |---|---|
-| `shared/` | External by default — trust scope is defined in [AGENTS.md](AGENTS.md). |
+| `shared/` | External by default (the exact lowercase name) — trust scope is defined in [AGENTS.md](AGENTS.md). |
 | `_archives/` | Excluded from audits and scans. |
 | `_meta/` | Configuration files. |
 | `.obsidian/` | Obsidian configuration. |

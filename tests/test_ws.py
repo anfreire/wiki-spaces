@@ -19,6 +19,13 @@ class SectionTests(unittest.TestCase):
         text = "# T\n\n```\n## Spaces\n```\n"
         self.assertFalse(ws.has_spaces(text))
 
+    def test_h1_closes_the_section_h3_stays_inside(self):
+        # The dialect ends a section at the next heading of the same or
+        # a higher level; a deeper ### grouping stays inside the body.
+        lines = ("## Spaces\n\n- x\n\n### group\n\n- y\n\n"
+                 "# Appendix\n- z\n").splitlines()
+        self.assertEqual(ws.find_section(lines), (0, 1, 8))
+
     def test_fence_closes_only_on_same_char_and_length(self):
         lines = "````\n```\nstill fenced\n````\nout\n".splitlines()
         self.assertEqual(ws.fenced_mask(lines), [True, True, True, True, False])
@@ -44,23 +51,17 @@ class SectionTests(unittest.TestCase):
             "prose line is fine\n"
         )
         entries, malformed = ws.parse_spaces(text)
-        self.assertEqual([h for _l, h in entries],
+        self.assertEqual([h for _l, h, _d in entries],
                          ["a/index.md", "b/index.md", "c/index.md",
                           "d/index.md", "e/index.md", "f/index.md",
                           "g/index.md", "my space/index.md"])
+        # The description tail rides whichever dash the writer used and
+        # is "" when absent — every consumer sees one entry shape.
+        self.assertEqual([d for _l, _h, d in entries],
+                         ["desc", "", "en-dash desc", "hyphen desc",
+                          "star bullet", "", "titled", ""])
         self.assertEqual(malformed, ["- [[wikilink-form]]", "- plain bullet",
                                      "* stray star"])
-
-    def test_blank_spaces_section_preserves_other_sections(self):
-        body = "## Items\n- [[kept]]\n## Spaces\n- [[gone]]\n"
-        blanked = ws.blank_spaces_section(body)
-        self.assertIn("[[kept]]", blanked)
-        self.assertNotIn("[[gone]]", blanked)
-
-    def test_body_after_frontmatter(self):
-        text = "---\ntitle: x\n---\nbody\n"
-        self.assertEqual(ws.body_after_frontmatter(text), "body")
-        self.assertEqual(ws.body_after_frontmatter("no fm\n"), "no fm\n")
 
     def test_heading_inside_frontmatter_is_not_the_contract(self):
         # A flush-left `## Spaces` line inside frontmatter is legal YAML
@@ -71,10 +72,22 @@ class SectionTests(unittest.TestCase):
 
     def test_near_miss_headings_are_detected_as_a_class(self):
         for text in ("# T\n\n## spaces\n", "# T\n\n## SPACES\n",
-                     "# T\n\n## Spaces ##\n", "# T\n\n##Spaces\n"):
+                     "# T\n\n## Spaces ##\n", "# T\n\n##Spaces\n",
+                     "# T\n\n  ## spaces\n"):
             self.assertIsNotNone(ws._heading_near_miss(text), text)
         self.assertIsNone(ws._heading_near_miss("# T\n\n## Spaces\n"))
+        self.assertIsNone(ws._heading_near_miss("# T\n\n  ## Spaces\n"))
         self.assertIsNone(ws._heading_near_miss("# T\n\n## Spacesuits\n"))
+
+    def test_an_indented_heading_is_the_contract(self):
+        # Up to 3 leading spaces still renders as a heading in the
+        # dialect, so the file visibly shows ## Spaces — it must not
+        # read as bare (the repair hint — add the heading — would have
+        # created a visible duplicate). At 4 spaces it is a code block.
+        self.assertTrue(ws.has_spaces("# T\n\n  ## Spaces\n"))
+        self.assertFalse(ws.has_spaces("# T\n\n    ## Spaces\n"))
+        self.assertEqual(ws.extra_spaces_headings(
+            "## Spaces\n- a\n\n   ## Spaces\n- b\n"), 1)
 
     def test_extra_spaces_headings_are_counted(self):
         self.assertEqual(ws.extra_spaces_headings(
@@ -96,14 +109,6 @@ class SectionTests(unittest.TestCase):
             p.write_bytes(b"\xef\xbb\xbf---\nt: x\n## Spaces\n---\nb\n")
             self.assertFalse(ws.has_spaces(ws.read_text(p)))
 
-    def test_strip_code_blanks_indented_blocks(self):
-        stripped = ws.strip_code(
-            "Prose [[kept]].\n\n    [[indent-ghost]]\n    more code\n\n"
-            "- a list\n  - nested [[list-kept]]\n")
-        self.assertIn("[[kept]]", stripped)
-        self.assertIn("[[list-kept]]", stripped)   # 2-space list survives
-        self.assertNotIn("indent-ghost", stripped)
-
 
 class HrefTests(unittest.TestCase):
     def test_normalizes_index_md_and_slashes(self):
@@ -115,6 +120,24 @@ class HrefTests(unittest.TestCase):
         for href in ("", "/abs", "../up", "_meta/x", ".hidden/y",
                      "self/..", ".", "./"):
             self.assertIsNone(ws.normalize_href(href), href)
+
+    def test_a_colon_marks_a_uri_never_a_wiki_path(self):
+        # URL and scheme hrefs once fell through to the stale channel,
+        # whose named repair — remove the entry — would delete a
+        # bookmark line. Obsidian forbids `:` in names, so no real
+        # folder loses its entry to this rule.
+        for href in ("https://example.com", "mailto:a@b.c",
+                     "obsidian://open?vault=x", "C:/notes",
+                     "a:b/index.md"):
+            self.assertIsNone(ws.normalize_href(href), href)
+
+    def test_a_raw_hash_marks_a_fragment_never_a_name(self):
+        # `- [jump](#top)` is an anchor, `beta/index.md#top` a fragment
+        # form — neither names a space, and Obsidian forbids `#` in
+        # names. A name's `#` rides percent-encoded and still registers.
+        for href in ("#top", "a#b", "beta/index.md#top"):
+            self.assertIsNone(ws.normalize_href(href), href)
+        self.assertEqual(ws.normalize_href("a%23b/"), "a#b")
 
     def test_trivial_equivalents_normalize(self):
         # `./x`, doubled or dotted separators, and a trailing slash are
@@ -222,6 +245,7 @@ class CapTests(unittest.TestCase):
             self.assertEqual(ws.cap_for("p.md", caps), 15000)
             self.assertEqual(ws.cap_for("index.md", caps), 5000)
 
+    @support.needs_symlinks
     def test_symlink_mount_caps_never_inherit_the_hosts_limits(self):
         # The third externality rule gets the same fence the other two
         # do: a symlink-mounted space answers to its own limits or the
@@ -234,8 +258,8 @@ class CapTests(unittest.TestCase):
             support.write(base / "m1" / "index.md", "# M1\n\n## Spaces\n")
             support.write(base / "m2" / "index.md", "# M2\n\n## Spaces\n")
             support.write(base / "m2" / "_meta" / "limits.md", "*.md: 50\n")
-            os.symlink(base / "m1", root / "mnt")
-            os.symlink(base / "m2", root / "mnt2")
+            support.symlink(base / "m1", root / "mnt")
+            support.symlink(base / "m2", root / "mnt2")
 
             def cap(p):
                 return ws.cap_for("p.md", ws.caps_for_path(p, root))
@@ -261,6 +285,17 @@ class CheckSizeTests(unittest.TestCase):
         r = support.run_ws("check-size", str(page), "--wiki", str(self.root))
         self.assertEqual(r.returncode, 1)
         self.assertIn("never truncate", r.stdout)
+
+    def test_verdicts_are_data_not_coaching(self):
+        # The refusal states the invariant and nothing more — what an
+        # overflow calls for is the skills' voice, not the tool's, so
+        # wording can improve without touching three script copies.
+        log = self.root / "log.md"
+        support.write(log, "x" * 100001)
+        r = support.run_ws("check-size", str(log), "--wiki", str(self.root))
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.stdout.strip(),
+                         "over log.md: 100001 > 100000 bytes — never truncate")
 
     def test_stdin_measures_planned_content(self):
         target = str(self.root / "new" / "index.md")
@@ -314,6 +349,7 @@ class CheckSizeTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertIn("target is external", r.stderr)
 
+    @support.needs_symlinks
     def test_symlink_mounted_verdict_is_root_independent(self):
         # A file inside a symlink mount is external however it is
         # reached: the mount's caps govern (not the host's), the note
@@ -323,7 +359,7 @@ class CheckSizeTests(unittest.TestCase):
             target = Path(outside).resolve() / "elsewhere"
             support.write(target / "index.md", "# E\n\n## Spaces\n")
             support.write(target / "roomy.md", "x" * 17000)
-            os.symlink(target, self.root / "mnt")
+            support.symlink(target, self.root / "mnt")
             r = support.run_ws("check-size", "mnt/roomy.md",
                                "--wiki", str(self.root))
             self.assertEqual(r.returncode, 1, r.stdout + r.stderr)

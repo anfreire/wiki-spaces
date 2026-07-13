@@ -9,6 +9,8 @@ import importlib.util
 import os
 import subprocess
 import sys
+import tempfile
+import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -48,10 +50,42 @@ def write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+_SYMLINKS: bool | None = None
+
+
+def symlinks_supported() -> bool:
+    """Whether this environment can create working symlinks — Windows
+    gates them behind a privilege some runners lack. Probed once."""
+    global _SYMLINKS
+    if _SYMLINKS is None:
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                target = Path(td) / "t"
+                target.mkdir()
+                link = Path(td) / "probe"
+                os.symlink(target, link, target_is_directory=True)
+                _SYMLINKS = link.is_dir()
+        except OSError:
+            _SYMLINKS = False
+    return _SYMLINKS
+
+
+def symlink(target: Path, link: Path) -> None:
+    """os.symlink with the Windows directory-type bit taken from the
+    target, so a directory link is a directory link on every platform."""
+    os.symlink(target, link, target_is_directory=Path(target).is_dir())
+
+
+needs_symlinks = unittest.skipUnless(
+    symlinks_supported(), "symlinks unavailable on this platform")
+
+
 def build_demo(root: Path) -> None:
     """The shared fixture: nested spaces, drift, a stale entry, a
-    half-declared space (registered, bare index), an external mount, a
-    broken wikilink, over-cap files, and an orphan."""
+    half-declared space (registered, bare index), an external mount,
+    over-cap files — and content links (a dangling wikilink, embeds,
+    code-span ghosts) the audit must leave unjudged: the script parses
+    the contract, never the content."""
     write(root / "index.md", (
         "# Demo wiki\n"
         "\n"

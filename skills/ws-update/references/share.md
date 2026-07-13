@@ -4,11 +4,12 @@ The producer side of [mounting](mount.md): a space is a folder, so sharing one m
 
 ## Before sharing
 
-1. **Verify the space stands alone.** Resolve it as its own wiki and audit it:
+1. **Verify the space stands alone.** Resolve it as its own wiki, audit it, and sweep its references:
    ```sh
    python3 <skill-dir>/scripts/ws.py audit --wiki <root>/<space>
+   python3 <skill-dir>/scripts/ws.py grep '\[\[|\]\(' --wiki <root>/<space>
    ```
-   Broken links here are references to pages that live outside the space — they will dangle for the receiver. Fix each (move the target in, drop the link, or inline the content) or name it to the user and let them accept it.
+   The audit must come back clean standalone. Then read the sweep as a producer, judging each hit against the space's own `files` inventory: a link whose target lives outside the space — a wikilink to a page elsewhere in your wiki, a relative link reaching above it (`../…`) — resolves on *your* disk but dangles for every receiver. Fix each (move the target in, drop the link, or inline the content) or name it to the user and let them accept it.
 2. **Check what rides along.** Everything in the folder ships: drafts, `log.md`, `_meta/`, `_archives/`, and full git history when you share a repo. Pruning is the user's call — ask when anything looks private.
 
 ## Pick the mechanism
@@ -21,13 +22,15 @@ The producer side of [mounting](mount.md): a space is a folder, so sharing one m
 
 ## Carve a space into its own repo
 
-Non-git wiki, or history that shouldn't travel: copy the folder, `git init` inside the copy, commit, push to a new remote. Git wiki whose space history should travel:
+Non-git wiki, or history that shouldn't travel: copy the folder, `git init` inside the copy, commit, push to a new remote. Git wiki whose space history should travel — commit the space's current state first (`subtree split` reads committed history; uncommitted edits stay behind):
 
 ```sh
 git -C <root> subtree split --prefix=<space-path> -b share-<name>
 git -C <root> push <new-remote-url> share-<name>:main
 git -C <root> branch -D share-<name>              # the split branch was scaffolding
 ```
+
+`git subtree` is a contrib command some installs omit — when it is missing, fall back to copy + `git init` (the history stays behind) or `git filter-repo` where history must travel.
 
 If you keep editing the shared space, replace your in-tree copy with a mount of the new repo (per [mount.md](mount.md)) so one source of truth exists. It lands under `shared/` and classifies external — that is correct, not a loss: the space is shared now, and your writes to it happen the way all external writes do, on explicit targeting.
 

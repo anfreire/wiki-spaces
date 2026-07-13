@@ -57,20 +57,22 @@ class TraversalTests(unittest.TestCase):
         support.write(index, text + "- [bare/](bare/index.md)\n")
         self.assertNotIn("bare", self.rels(ws.walk_spaces(self.root)))
 
+    @support.needs_symlinks
     def test_symlink_cycle_terminates(self):
         loop = self.root / "alpha" / "loop"
-        os.symlink(self.root / "alpha", loop)
+        support.symlink(self.root / "alpha", loop)
         index = self.root / "alpha" / "index.md"
         text = index.read_text(encoding="utf-8")
         support.write(index, text + "\n- [loop/](loop/index.md)\n")
         rels = self.rels(ws.walk_spaces(self.root))
         self.assertEqual(rels, [".", "alpha", "beta", "beta/gamma"])
 
+    @support.needs_symlinks
     def test_escaping_symlink_is_external(self):
         with tempfile.TemporaryDirectory() as outside:
             target = Path(outside) / "elsewhere"
             support.write(target / "index.md", "# E\n\n## Spaces\n")
-            os.symlink(target, self.root / "mounted")
+            support.symlink(target, self.root / "mounted")
             index = self.root / "index.md"
             text = index.read_text(encoding="utf-8")
             support.write(index, text + "- [mounted/](mounted/index.md)\n")
@@ -78,6 +80,7 @@ class TraversalTests(unittest.TestCase):
             rels = self.rels(ws.walk_spaces(self.root, include_external=True))
             self.assertIn("mounted", rels)
 
+    @support.needs_symlinks
     def test_symlink_mount_ignores_never_inherit_the_hosts_list(self):
         # `_meta/ignore.md` rides the same nearest-file lookup as limits,
         # and the same fence: the host's list stops at the mount.
@@ -86,7 +89,7 @@ class TraversalTests(unittest.TestCase):
             target = Path(outside).resolve() / "elsewhere"
             support.write(target / "index.md", "# E\n\n## Spaces\n")
             support.write(target / "assets" / "page.md", "# P\n")
-            os.symlink(target, self.root / "mounted")
+            support.symlink(target, self.root / "mounted")
             index = self.root / "index.md"
             support.write(index, index.read_text(encoding="utf-8")
                           + "- [mounted/](mounted/index.md)\n")
@@ -94,6 +97,7 @@ class TraversalTests(unittest.TestCase):
             self.assertIn("mounted/assets/page.md", rels)
             self.assertNotIn("alpha/assets/deep.md", rels)  # host list holds
 
+    @support.needs_symlinks
     def test_entry_through_a_symlinked_middle_segment_is_external(self):
         # A multi-segment href may group through plain folders; when a
         # middle segment is a symlink out of the tree, the child is
@@ -101,7 +105,7 @@ class TraversalTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as outside:
             target = Path(outside).resolve() / "elsewhere"
             support.write(target / "sub" / "index.md", "# S\n\n## Spaces\n")
-            os.symlink(target, self.root / "tunnel")
+            support.symlink(target, self.root / "tunnel")
             index = self.root / "index.md"
             support.write(index, index.read_text(encoding="utf-8")
                           + "- [tunnel/sub/](tunnel/sub/index.md)\n")
@@ -128,8 +132,9 @@ class TraversalTests(unittest.TestCase):
                   in ws.walk_spaces(self.root, include_external=True)}
         self.assertTrue(marked.get("alpha/shared/inner"))
 
+    @support.needs_symlinks
     def test_owned_symlink_alias_dedupes_to_the_real_file(self):
-        os.symlink(self.root / "notes.md", self.root / "alias.md")
+        support.symlink(self.root / "notes.md", self.root / "alias.md")
         walked = ws.walk_files(self.root)
         by_rel = {rel: ext for rel, _p, ext in walked}
         self.assertIn("notes.md", by_rel)
@@ -187,16 +192,16 @@ class TraversalTests(unittest.TestCase):
                       + "- [docs/guides/](docs/guides/index.md)\n")
         self.assertIn("docs/guides", self.rels(ws.walk_spaces(self.root)))
 
-    def test_nested_repos_foreign_submodule_is_external_at_any_depth(self):
+    def test_nested_repo_submodule_is_external_at_any_depth(self):
         # projects/app is an owned checkout; its .gitmodules declares a
-        # stranger's submodule. The fence must hold from the outer root
-        # exactly as it does when app itself resolves.
+        # submodule. A submodule names another repository by definition,
+        # so the fence holds from the outer root exactly as it does when
+        # app itself resolves — judged against the declaring repo's
+        # .gitmodules, at every git boundary on the path.
         app = self.root / "projects" / "app"
         support.write(app / "index.md",
                       "# App\n\n## Spaces\n\n- [third/](third/index.md)\n")
         (app / ".git").mkdir(parents=True)
-        support.write(app / ".git" / "config",
-                      '[remote "origin"]\n\turl = https://example.com/me/app.git\n')
         support.write(app / ".gitmodules",
                       '[submodule "third"]\n\tpath = third\n'
                       '\turl = https://example.com/stranger/wiki.git\n')
@@ -211,6 +216,30 @@ class TraversalTests(unittest.TestCase):
                   in ws.walk_spaces(self.root, include_external=True)}
         self.assertTrue(marked.get("projects/app/third"))
         self.assertFalse(marked.get("projects/app"))
+
+    def test_own_origin_submodule_is_still_external(self):
+        # Even a submodule whose URL names the declaring repo's own
+        # origin mounts external: its content answers to that repository,
+        # not to this wiki. An owned mount of your own second repo is a
+        # clone, not a submodule — and a clone (a .git boundary with no
+        # declaring .gitmodules entry) stays owned.
+        app = self.root / "projects" / "app"
+        support.write(app / "index.md",
+                      "# App\n\n## Spaces\n\n- [wikimod/](wikimod/index.md)\n")
+        (app / ".git").mkdir(parents=True)
+        support.write(app / ".gitmodules",
+                      '[submodule "wikimod"]\n\tpath = wikimod\n'
+                      '\turl = https://github.com/me/app.git\n')
+        support.write(app / "wikimod" / "index.md", "# W\n\n## Spaces\n")
+        index = self.root / "index.md"
+        support.write(index, index.read_text(encoding="utf-8")
+                      + "- [projects/app/](projects/app/index.md)\n")
+        marked = {rel: ext for rel, _p, ext
+                  in ws.walk_spaces(self.root, include_external=True)}
+        self.assertTrue(marked.get("projects/app/wikimod"))
+        self.assertFalse(marked.get("projects/app"))   # the clone stays owned
+        self.assertNotIn("projects/app/wikimod",
+                         self.rels(ws.walk_spaces(self.root)))
 
     def test_dot_files_are_reserved_like_dot_dirs(self):
         support.write(self.root / ".draft.md", "# Hidden\n")
@@ -228,35 +257,28 @@ class TraversalTests(unittest.TestCase):
         self.assertIn("my space", self.rels(ws.walk_spaces(self.root)))
 
 
-class GitResolverTests(unittest.TestCase):
-    """The origin-url resolver behind the submodule fence must read every
-    layout git produces — a submodule's `.git` file with gitdir
-    indirection, and a worktree's commondir hop — not just the plain
-    `.git` directory the other trust tests fake."""
+class SubmoduleDeclarationTests(unittest.TestCase):
+    """`.gitmodules` is the one input behind the submodule fence: every
+    declared path is external, quoted values are unwrapped, and a repo
+    without the file declares nothing."""
 
     def setUp(self):
         self._td = tempfile.TemporaryDirectory()
         self.base = Path(self._td.name).resolve()
         self.addCleanup(self._td.cleanup)
 
-    def test_gitfile_submodule_layout(self):
-        sub = self.base / "checkout"
-        support.write(sub / ".git", "gitdir: ../main/.git/modules/sub\n")
-        support.write(
-            self.base / "main" / ".git" / "modules" / "sub" / "config",
-            '[remote "origin"]\n\turl = https://example.com/a.git\n')
-        self.assertEqual(ws._origin_url(sub), "https://example.com/a.git")
+    def test_declared_paths_are_read_quotes_unwrapped(self):
+        repo = self.base / "repo"
+        support.write(repo / ".gitmodules", (
+            '[submodule "a"]\n\tpath = shared-notes\n\turl = x\n'
+            '[submodule "b"]\n\tpath = "quoted name"\n\turl = y\n'))
+        self.assertEqual(ws._submodule_paths(repo),
+                         frozenset({"shared-notes", "quoted name"}))
 
-    def test_worktree_commondir_layout(self):
-        wt = self.base / "wt"
-        support.write(wt / ".git",
-                      f"gitdir: {self.base}/repo/.git/worktrees/wt\n")
-        support.write(
-            self.base / "repo" / ".git" / "worktrees" / "wt" / "commondir",
-            "../..\n")
-        support.write(self.base / "repo" / ".git" / "config",
-                      '[remote "origin"]\n\turl = https://example.com/b.git\n')
-        self.assertEqual(ws._origin_url(wt), "https://example.com/b.git")
+    def test_no_gitmodules_declares_nothing(self):
+        repo = self.base / "bare-repo"
+        repo.mkdir()
+        self.assertEqual(ws._submodule_paths(repo), frozenset())
 
 
 class DiscoveryTests(unittest.TestCase):

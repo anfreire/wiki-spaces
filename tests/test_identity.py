@@ -57,6 +57,38 @@ class IdentityTests(unittest.TestCase):
                             f"{p}: description is what the harness reads "
                             "to invoke the skill")
 
+    def test_skill_docs_are_self_contained(self):
+        """`npx skills add` copies one skill directory whole; every real
+        relative link inside SKILL.md and its references must resolve
+        within that directory, or the install ships dangling docs.
+        Example links ride code spans and blocks — a local strip keeps
+        them out (the script no longer reads content, so the test owns
+        its own doc scanning)."""
+        ws = support.load_ws()
+
+        def strip_code(text):
+            lines = text.splitlines()
+            fenced = ws.fenced_mask(lines)
+            return "\n".join(
+                "" if fenced[i] else re.sub(r"`[^`\n]+`", "", line)
+                for i, line in enumerate(lines))
+
+        link_re = re.compile(r"\]\(([^)\s]+?)(?:\s+\"[^\"]*\")?\)")
+        for skill in support.SKILLS:
+            sdir = skill.parent.resolve()
+            docs = [skill, *sorted(sdir.glob("references/*.md"))]
+            for doc in docs:
+                scan = strip_code(doc.read_text(encoding="utf-8"))
+                for href in link_re.findall(scan):
+                    if "://" in href or href.startswith(("mailto:", "#")):
+                        continue
+                    target = (doc.parent / href).resolve()
+                    self.assertTrue(
+                        target.is_relative_to(sdir),
+                        f"{doc}: link ({href}) escapes the skill directory")
+                    self.assertTrue(
+                        target.exists(), f"{doc}: link ({href}) dangles")
+
     def test_core_block_states_the_tested_floor(self):
         """HANDBOOK Delivery: claims match the tested floor. The core
         block states the interpreter floor, and CI runs exactly it."""
