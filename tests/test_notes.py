@@ -1,6 +1,7 @@
 """The stderr advisory channel: the resolved root announced on every data
 command, and `note:` lines naming what a walk skipped — unreachable spaces,
-external paths, unreadable files. Stdout stays pure data throughout."""
+external paths, unreadable files — and the enclosing wiki when the root is
+nested inside one. Stdout stays pure data throughout."""
 import tempfile
 import unittest
 from pathlib import Path
@@ -54,13 +55,25 @@ class NotesTests(unittest.TestCase):
         self.assertNotIn("external, skipped", r.stderr)
 
     def test_audit_names_what_its_walk_skipped(self):
-        # Silence never means "looked everywhere" — the audit's walk emits
-        # the same advisories the data commands do.
+        # Silence speaks for the walk's reach, never the whole disk — the
+        # audit's walk emits the same advisories the data commands do.
         r = support.run_ws("audit", "--wiki", str(self.root))
         self.assertIn("external, skipped", r.stderr)
         self.assertIn("shared/", r.stderr)
         r = support.run_ws("audit", "--external", "--wiki", str(self.root))
         self.assertNotIn("external, skipped", r.stderr)
+
+    def test_nested_root_names_the_enclosing_wiki(self):
+        # Trust scope never looks above the resolved root, so a mount the
+        # enclosing walk calls external can read as owned from a nested
+        # one — the fact was held by prose alone; every command names it.
+        for cmd in (("list",), ("audit",)):
+            r = support.run_ws(*cmd, "--wiki", str(self.root / "alpha"))
+            self.assertIn("note: root is nested inside a wiki "
+                          f"({self.root})", r.stderr, cmd)
+        # The top-level root has no enclosing wiki — no note.
+        r = support.run_ws("list", "--wiki", str(self.root))
+        self.assertNotIn("nested inside", r.stderr)
 
     def test_unreadable_files_are_named_by_grep(self):
         (self.root / "bad.md").write_bytes(b"\xff\xfe nope\n")

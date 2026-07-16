@@ -44,6 +44,20 @@ class GrepTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertIn("alpha/alpha-notes.md", r.stdout)
 
+    def test_fixed_string_flag_takes_metacharacters_literally(self):
+        # A page named `notes (2024)` read as a regex turns the parens
+        # into a group and never matches its own literal links — the
+        # silent miss a link inventory cannot afford. -F carries the
+        # escaping (one right answer), and composes with -i.
+        support.write(self.root / "wip.md",
+                      "# WIP\n\nSee [[notes (2024)]] for the ledger.\n")
+        self.assertEqual(self.grep("notes (2024)").returncode, 1)
+        r = self.grep("notes (2024)", "-F")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("wip.md:3: See [[notes (2024)]] for the ledger.",
+                      r.stdout)
+        self.assertEqual(self.grep("NOTES (2024)", "-F", "-i").returncode, 0)
+
     def test_bad_pattern_cannot_operate(self):
         r = self.grep("[unclosed")
         self.assertEqual(r.returncode, 2)

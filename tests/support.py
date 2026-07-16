@@ -9,8 +9,6 @@ import importlib.util
 import os
 import subprocess
 import sys
-import tempfile
-import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -46,42 +44,8 @@ def run_ws(*args, cwd=None, env_extra=None, stdin=None):
 
 
 def write(path: Path, text: str) -> None:
-    """Fixture writes pin LF endings: caps are byte counts and the golden
-    outputs state them exactly, so platform newline translation would
-    shift every size on Windows."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="\n") as f:
-        f.write(text)
-
-
-_SYMLINKS: bool | None = None
-
-
-def symlinks_supported() -> bool:
-    """Whether this environment can create working symlinks — Windows
-    gates them behind a privilege some runners lack. Probed once."""
-    global _SYMLINKS
-    if _SYMLINKS is None:
-        try:
-            with tempfile.TemporaryDirectory() as td:
-                target = Path(td) / "t"
-                target.mkdir()
-                link = Path(td) / "probe"
-                os.symlink(target, link, target_is_directory=True)
-                _SYMLINKS = link.is_dir()
-        except OSError:
-            _SYMLINKS = False
-    return _SYMLINKS
-
-
-def symlink(target: Path, link: Path) -> None:
-    """os.symlink with the Windows directory-type bit taken from the
-    target, so a directory link is a directory link on every platform."""
-    os.symlink(target, link, target_is_directory=Path(target).is_dir())
-
-
-needs_symlinks = unittest.skipUnless(
-    symlinks_supported(), "symlinks unavailable on this platform")
+    path.write_text(text, encoding="utf-8")
 
 
 def build_demo(root: Path) -> None:

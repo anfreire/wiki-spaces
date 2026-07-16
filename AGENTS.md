@@ -2,7 +2,7 @@
 
 The wiki-spaces spec. This document defines the vocabulary, structure, and operating contract for an LLM working in a wiki-spaces wiki. Working on wiki-spaces itself? [HANDBOOK.md](HANDBOOK.md) is the bar every change answers to.
 
-**Scope.** wiki-spaces targets LLMs running inside an AI coding harness with filesystem access, such as Claude Code, Codex, Cursor, Copilot, Gemini CLI, OpenCode, or Kiro. Browser-only assistants are out of scope. They can't read or write the wiki directly.
+**Scope.** wiki-spaces targets LLMs running inside an AI coding harness with filesystem access, such as Claude Code, Codex, Cursor, Copilot, Gemini CLI, OpenCode, or Kiro. The host is POSIX; Windows is out of scope. So are browser-only assistants — they can't read or write the wiki directly.
 
 ## What a wiki is
 
@@ -26,7 +26,7 @@ Zero contained spaces is a fine wiki, meaning `## Spaces` is just empty. Deep ne
 
 ## The navigation contract
 
-`## Spaces` is the navigation contract. It's **exhaustive**, meaning every space directly inside this one must be listed there — plain folders and heading-less `index.md` dirs group transparently, so a space beneath them lists at its nearest real ancestor, and an entry never reaches through another space's boundary: the space on the way owns the deeper listing. Tools traverse via this list and rely on it being complete. A heading-less `index.md` dir is itself an undecided space: its contents stay out of file walks until it is promoted or silenced — the audit names the choice. An entry is a markdown bullet (any marker; skills write `-`), its href a percent-encoded relative path — encoded where the name demands it, as in `my%20space/index.md` or `notes%20%282024%29/index.md` — so any folder name registers. An entry may trail a `— description`: skills read descriptions as placement hints and preserve them on rewrite.
+`## Spaces` is the navigation contract. It's **exhaustive**: every space directly inside this one must be listed there. Plain folders and heading-less `index.md` dirs group transparently, so a space beneath them lists at its nearest real ancestor. An entry never reaches through another space's boundary — the space on the way owns the deeper listing. Tools traverse via this list and rely on it being complete. A heading-less `index.md` dir is itself an undecided space: its contents stay out of file walks until it is promoted or silenced — the audit names the choice. An entry is a markdown bullet (any marker; skills write `-`), its href a percent-encoded relative path — encoded where the name demands it, as in `my%20space/index.md` or `notes%20%282024%29/index.md` — so any folder name registers. An entry may trail a `— description`: skills read descriptions as placement hints and preserve them on rewrite.
 
 - **Maintenance**: The skills maintain `## Spaces` when creating, removing, mounting, or promoting spaces. No CLI commands exist to perform writes.
 - **Repair**: The bundled `scripts/ws.py audit` is the detection surface. It reports drift, entries crossing a space boundary, over-cap and unreadable files, and registered mounts that stopped being wikis — findings name their repair wherever one is safe to name, down to the exact entry line a `missing entry` asks for, while author-intent findings (a stale or malformed entry, say) name the problem and leave the edit to judgment. The LLM applies repairs as ordinary edits and re-runs the audit to verify; because every round re-derives from disk, the repairs converge in any order. The script itself never writes: an undeclared folder is never treated as a space, and a coincidental `index.md` (a docs site inside a repo-root wiki, say) is reported as a promotion decision, not rewritten.
@@ -69,7 +69,7 @@ This makes auditing reach project knowledge in `projects/<name>/` automatically,
 
 ## Optional conventions
 
-A wiki opts into one or more conventions from [`CONVENTIONS.md`](CONVENTIONS.md). Each marker is independent, allowing you to adopt any subset that fits your wiki. The three reference skills (`ws-search`, `ws-update`, `ws-tend`) read whatever markers are present and degrade where they are not.
+A wiki opts into one or more conventions from [`CONVENTIONS.md`](CONVENTIONS.md). Each convention is independent, allowing you to adopt any subset that fits your wiki. The three reference skills (`ws-search`, `ws-update`, `ws-tend`) read whatever the wiki adopted and degrade where it hasn't.
 
 The conventions catalog includes:
 
@@ -80,10 +80,9 @@ The conventions catalog includes:
 - `frontmatter`: Metadata block at the top of files.
 - `_template.md`: Template for new files.
 - `hot.md`: Frequently updated notes.
-- `.obsidian/`: Obsidian configuration folder.
 - `.git`: Git repository metadata.
 
-`CONVENTIONS.md` describes what each marker enables.
+`CONVENTIONS.md` describes what each enables.
 
 ## Markdown flavor
 

@@ -12,6 +12,7 @@ that judgment.
               its entry description — the placement hints
   files       markdown files reachable via the contract
   grep        regex line search over the files the contract reaches
+              (-F takes the pattern as a literal string)
   check-size  cap verdict for one file, before or after writing
   audit       detect contract drift (including an entry that lists
               through another space's boundary), over-cap and
@@ -24,7 +25,9 @@ that judgment.
 Stdout is data. Stderr carries the resolved root (the audit prints it
 as its stdout header instead) and `note:` advisories naming what a walk
 skipped (external paths, unreachable spaces, stale entries, unreadable
-files) — silence never means "looked everywhere".
+files, unlistable directories) and the enclosing wiki when the resolved
+root is nested inside one — silence speaks for the walk's reach, never
+the whole disk.
 Stdlib-only python3 (3.9+), zero dependencies, read-only: no command
 writes to a wiki. Exit codes: 0 clean, 1 findings (for grep, no match),
 2 cannot operate.
@@ -51,10 +54,16 @@ RESERVED_NAMES = {"_archives", "_meta"}
 # An entry's href is percent-encoded, so any folder name survives the
 # entry grammar: encode what would break or blur the `[label](href)`
 # shape (`%` itself first, so encoding round-trips through the
-# percent-decode every read applies).
+# percent-decode every read applies). The grammar lives on one physical
+# line, so every character Python's splitlines treats as a line
+# boundary rides encoded too (UTF-8 bytes, the decode unquote applies).
+LINE_BREAKS = {"\n": "%0A", "\r": "%0D", "\v": "%0B", "\f": "%0C",
+               "\x1c": "%1C", "\x1d": "%1D", "\x1e": "%1E",
+               "\x85": "%C2%85", "\u2028": "%E2%80%A8",
+               "\u2029": "%E2%80%A9"}
 HREF_ENCODE = {"%": "%25", " ": "%20", "#": "%23", "<": "%3C", ">": "%3E",
                "(": "%28", ")": "%29", "[": "%5B", "]": "%5D",
-               "{": "%7B", "}": "%7D", '"': "%22", "\n": "%0A", "\r": "%0D"}
+               "{": "%7B", "}": "%7D", '"': "%22", **LINE_BREAKS}
 
 # A traversal node: (root-relative posix path, filesystem path, external?).
 Node = tuple[str, Path, bool]
@@ -109,12 +118,12 @@ def _rel_parts(path: Path, root: Path) -> tuple[str, ...] | None:
     """`path` relative to `root` as name parts, None when outside. A
     single string pass — pathlib's relative_to materializes every
     ancestor and goes quadratic on deep trees."""
-    p, r = os.fspath(path), os.fspath(root).rstrip(os.sep)
+    p, r = os.fspath(path), os.fspath(root).rstrip("/")
     if p == r:
         return ()
-    if not p.startswith(r + os.sep):
+    if not p.startswith(r + "/"):
         return None
-    return tuple(p[len(r) + 1:].split(os.sep))
+    return tuple(p[len(r) + 1:].split("/"))
 
 
 # ---------- markdown primitives ----------
@@ -233,15 +242,15 @@ def parse_spaces(text: str) -> tuple[list[tuple[str, str, str]], list[str]]:
 def normalize_href(href: str) -> str | None:
     """`## Spaces` href -> child directory, or None when unregistrable:
     empty, absolute, escaping (`..`), carrying a colon or a raw `#`, or
-    a reserved segment. A colon marks a URI (`https://…`, `mailto:`) or
-    a drive path, and a raw `#` a fragment or anchor — never a
-    wiki-relative name. Obsidian forbids both characters in names, and a
-    name's `#` rides percent-encoded (`%23`), so no real folder loses
-    its entry. The href is percent-encoded (Obsidian writes
-    `my%20space/index.md`), so it is decoded after the fragment check
-    and every other check runs on the decoded name — the one the
-    filesystem knows. Trivial equivalents (`./x`, `a//b`, a trailing
-    slash) normalize instead of failing."""
+    a reserved segment. A colon marks a URI (`https://…`, `mailto:`),
+    and a raw `#` a fragment or anchor — never a wiki-relative name.
+    Obsidian forbids both characters in names, and a name's `#` rides
+    percent-encoded (`%23`), so no real folder loses its entry. The
+    href is percent-encoded (Obsidian writes `my%20space/index.md`),
+    so it is decoded after the fragment check and every other check
+    runs on the decoded name — the one the filesystem knows. Trivial
+    equivalents (`./x`, `a//b`, a trailing slash) normalize instead of
+    failing."""
     h = href.strip()
     if "#" in h:
         return None
@@ -323,6 +332,20 @@ def resolve_root(explicit: str | None) -> Path:
     die("no wiki found: pass --wiki, run inside one, or set `wiki` in "
         "the config (~/.config/wiki-spaces/config, or under "
         "$XDG_CONFIG_HOME when set)" + (f"; {reason}" if reason else ""))
+
+
+def _enclosing_wiki(root: Path) -> Path | None:
+    """The nearest wiki ancestor above the resolved root, or None. Trust
+    scope never looks above the root, so a fence declared up there — a
+    `shared/` segment, a submodule of an enclosing repo — does not hold
+    below it: a mount the enclosing walk calls external can read as
+    owned from the nested root. Re-rooting on purpose is how a space is
+    judged standalone; the advisory names the fact so nobody re-roots
+    blind."""
+    for p in root.parents:
+        if is_wiki(p):
+            return p
+    return None
 
 
 def die(msg: str) -> NoReturn:
@@ -690,7 +713,7 @@ def _limits_overrides(limits: Path) -> dict[str, int] | None:
     overrides: dict[str, int] = {}
     for line in text.splitlines():
         m = LIMIT_LINE_RE.match(line)
-        if m and "/" not in m.group(1) and "\\" not in m.group(1):
+        if m and "/" not in m.group(1):
             value = int(m.group(2))
             if value > 0:
                 overrides[m.group(1)] = value
@@ -709,7 +732,7 @@ def _ignored_names(ignore: Path) -> frozenset[str]:
     for line in text.splitlines():
         name = line.strip()
         if (name and not name.startswith("#") and "/" not in name
-                and "\\" not in name and name not in (".", "..")):
+                and name not in (".", "..")):
             names.add(name)
     return frozenset(names)
 
@@ -919,8 +942,9 @@ def _suggest_entry(crel: str) -> str:
     """The exact entry a `missing entry` finding asks for — computed by
     the same encode/normalize round-trip the audit validates names with,
     so pasting it verbatim converges. A label the grammar cannot carry
-    raw (a `]`) rides encoded; hrefs always do."""
-    label = crel if "]" not in crel else encode_href(crel)
+    raw (a `]`, a line break) rides encoded; hrefs always do."""
+    breakers = {"]"} | set(LINE_BREAKS)
+    label = crel if not set(crel) & breakers else encode_href(crel)
     return f"- [{label}/]({encode_href(crel)}/index.md)"
 
 
@@ -983,7 +1007,7 @@ def cmd_audit(root: Path, include_external: bool) -> int:
               f"{space_mark(ext)}")
     for rel, nd, ext in f.file_entry:
         print(f"contract {_ix(rel)}: entry {nd} names a file, not a space "
-              f"— list files under ## Items instead{space_mark(ext)}")
+              f"— files are reachable by traversal alone{space_mark(ext)}")
     for rel, crel, ext in f.missing:
         if ext:
             hint = " (register mounts by hand) [external]"
@@ -1031,13 +1055,17 @@ def cmd_files(root: Path, include_external: bool) -> int:
 
 def cmd_grep(
     root: Path, pattern: str, ignore_case: bool, include_external: bool,
+    fixed: bool = False,
 ) -> int:
     """Line matches as `rel:line: text` over the contract-reachable files —
     the exact set `files` prints, so trust scope and reserved dirs hold.
     Under --external a match inside an external space carries the same
-    `[external]` marker `files` prints."""
+    `[external]` marker `files` prints. With `fixed` the pattern matches
+    as a literal string — escaping has one right answer, so the tool
+    carries it and a swept name keeps its metacharacters."""
     try:
-        rx = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
+        rx = re.compile(re.escape(pattern) if fixed else pattern,
+                        re.IGNORECASE if ignore_case else 0)
     except re.error as exc:
         die(f"bad pattern: {exc}")
     notes = WalkNotes()
@@ -1062,7 +1090,7 @@ def cmd_check_size(root: Path, target: str, use_stdin: bool) -> int:
         p = root / p                    # relative targets are wiki paths,
     path = Path(os.path.abspath(p))     # wherever the caller stands
     name = path.name
-    if not use_stdin and path.is_dir():
+    if path.is_dir():
         die(f"target is a directory: {target}")
     if use_stdin:
         size = len(sys.stdin.buffer.read())
@@ -1124,6 +1152,8 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("pattern", help="python regex matched against each line")
     sp.add_argument("-i", "--ignore-case", action="store_true",
                     help="case-insensitive match")
+    sp.add_argument("-F", "--fixed-strings", action="store_true",
+                    help="match the pattern as a literal string, not a regex")
     sp = command("check-size", "cap verdict for one file")
     sp.add_argument("target", help="file the content is (or will be) written "
                     "to (a relative path resolves from the wiki root)")
@@ -1137,12 +1167,18 @@ def main(argv: list[str] | None = None) -> int:
     root = resolve_root(args.wiki)
     if args.cmd != "audit":
         print(f"wiki: {root}", file=sys.stderr)
+    enclosing = _enclosing_wiki(root)
+    if enclosing is not None:
+        note(f"root is nested inside a wiki ({enclosing}) — scope is "
+             "relative to the resolved root: what the enclosing wiki "
+             "fences as external can read as owned here")
     if args.cmd == "list":
         return cmd_list(root, args.external)
     if args.cmd == "files":
         return cmd_files(root, args.external)
     if args.cmd == "grep":
-        return cmd_grep(root, args.pattern, args.ignore_case, args.external)
+        return cmd_grep(root, args.pattern, args.ignore_case, args.external,
+                        args.fixed_strings)
     if args.cmd == "check-size":
         return cmd_check_size(root, args.target, args.stdin)
     return cmd_audit(root, args.external)

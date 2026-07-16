@@ -74,15 +74,25 @@ Adopting an existing folder — the wiki *is* that folder; touch as little as po
 ```sh
 WIKI=/path/they/gave
 [ -f "$WIKI/index.md" ] || printf '# %s\n\n## Spaces\n' "$(basename "$WIKI")" > "$WIKI/index.md"
-grep -Eq '^ {0,3}## Spaces' "$WIKI/index.md" || printf '\n## Spaces\n' >> "$WIKI/index.md"   # the root must be a wiki before the audit can run
 # Adopting a code repository? Seed the skip list with the vendor trees
 # you can see BEFORE the first audit — a node_modules sweep helps nobody.
 # Adjust to the tree; skip this line for a plain notes folder.
-mkdir -p "$WIKI/_meta" && printf 'node_modules\ndist\nbuild\ntarget\n' > "$WIKI/_meta/ignore.md"
-python3 <skill-dir>/scripts/ws.py audit --wiki "$WIKI"   # findings name the safe repairs
+[ -f "$WIKI/_meta/ignore.md" ] || { mkdir -p "$WIKI/_meta" && printf 'node_modules\ndist\nbuild\ntarget\n' > "$WIKI/_meta/ignore.md"; }
+python3 <skill-dir>/scripts/ws.py audit --wiki "$WIKI"   # refusals and findings both name their repair
 ```
 
-Apply the audit's findings as edits, re-running it between rounds until the structural ones are gone: paste each `missing entry` line into the index it names; where the confirmed layout says a bare folder is a space, add `## Spaces` to its index (the next round then registers whatever lives beneath it, and flags any entry the new boundary invalidates); where it is repo furniture (a docs site, a vendor tree the seed above missed), leave it untouched and add its folder name to `_meta/ignore.md`. Each round re-derives from disk, so the repairs converge in any order. Reorganizing their files into new folders is a separate follow-up, only if they asked.
+A `not a wiki` refusal is round zero, and its message names the repair:
+
+- An index that lacks the heading takes the append: `printf '\n## Spaces\n' >> "$WIKI/index.md"`.
+- A near-miss it quotes (`## Spaces ##`, `## spaces`) takes a rename of that line to exactly `## Spaces`, its entries kept — a second heading beside a near-miss would orphan them.
+
+Then apply the audit's findings as edits, re-running it between rounds until the structural ones are gone — each round re-derives from disk, so the repairs converge in any order:
+
+- Paste each `missing entry` line into the index it names.
+- Where the confirmed layout says a bare folder is a space, add `## Spaces` to its index — the next round then registers whatever lives beneath it, and flags any entry the new boundary invalidates.
+- Where a bare folder is repo furniture (a docs site, a vendor tree the seed above missed), leave it untouched and add its name to `_meta/ignore.md`.
+
+Reorganizing their files into new folders is a separate follow-up, only if they asked.
 
 Register the canonical pointer (skip if they called this wiki secondary):
 
@@ -116,4 +126,4 @@ cat > "$WIKI/AGENTS.md" <<'EOF'
 EOF
 ```
 
-Claude Code and Gemini CLI read the same note under their own names — on a yes for those harnesses: `ln -s AGENTS.md "$WIKI/CLAUDE.md"` (likewise `GEMINI.md`; plain copies on Windows).
+Claude Code and Gemini CLI read the same note under their own names — on a yes for those harnesses: `ln -s AGENTS.md "$WIKI/CLAUDE.md"` (likewise `GEMINI.md`).

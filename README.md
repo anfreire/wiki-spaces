@@ -2,7 +2,7 @@
 
 A wiki your AI agent keeps for you. The whole format is a folder whose `index.md` carries a `## Spaces` heading — spaces nest recursively, every page lives under a byte cap, and three skills run the lifecycle (find, capture, maintain) while you work. Research, recipes, code notes, writing, team docs, a personal life wiki: your shape, your call.
 
-Built for AI coding harnesses with filesystem access — Claude Code, Codex, Cursor, Copilot, Gemini CLI, OpenCode, Kiro. Browser-only assistants can't reach your files and are out of scope. The markdown dialect is Obsidian — wikilinks, frontmatter, callouts, embeds, Bases — though plain CommonMark always works; view in Obsidian for full fidelity.
+Built for AI coding harnesses with filesystem access on a POSIX host (macOS, Linux) — Claude Code, Codex, Cursor, Copilot, Gemini CLI, OpenCode, Kiro. Windows and browser-only assistants are out of scope. The markdown dialect is Obsidian — wikilinks, frontmatter, callouts, embeds, Bases — though plain CommonMark always works; view in Obsidian for full fidelity.
 
 ## Quick start
 

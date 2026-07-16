@@ -127,8 +127,7 @@ class HrefTests(unittest.TestCase):
         # bookmark line. Obsidian forbids `:` in names, so no real
         # folder loses its entry to this rule.
         for href in ("https://example.com", "mailto:a@b.c",
-                     "obsidian://open?vault=x", "C:/notes",
-                     "a:b/index.md"):
+                     "obsidian://open?vault=x", "a:b/index.md"):
             self.assertIsNone(ws.normalize_href(href), href)
 
     def test_a_raw_hash_marks_a_fragment_never_a_name(self):
@@ -245,7 +244,6 @@ class CapTests(unittest.TestCase):
             self.assertEqual(ws.cap_for("p.md", caps), 15000)
             self.assertEqual(ws.cap_for("index.md", caps), 5000)
 
-    @support.needs_symlinks
     def test_symlink_mount_caps_never_inherit_the_hosts_limits(self):
         # The third externality rule gets the same fence the other two
         # do: a symlink-mounted space answers to its own limits or the
@@ -258,8 +256,8 @@ class CapTests(unittest.TestCase):
             support.write(base / "m1" / "index.md", "# M1\n\n## Spaces\n")
             support.write(base / "m2" / "index.md", "# M2\n\n## Spaces\n")
             support.write(base / "m2" / "_meta" / "limits.md", "*.md: 50\n")
-            support.symlink(base / "m1", root / "mnt")
-            support.symlink(base / "m2", root / "mnt2")
+            os.symlink(base / "m1", root / "mnt")
+            os.symlink(base / "m2", root / "mnt2")
 
             def cap(p):
                 return ws.cap_for("p.md", ws.caps_for_path(p, root))
@@ -319,6 +317,19 @@ class CheckSizeTests(unittest.TestCase):
                            "--wiki", str(self.root))
         self.assertEqual(r.returncode, 2)
 
+    def test_directory_target_cannot_operate(self):
+        # A directory is never a write target — both arms refuse alike.
+        # The --stdin arm once fell through and statted the directory as
+        # the "current size", feeding a nonsense shrinking-write verdict.
+        d = self.root / "pages.md"       # a directory can wear an .md name
+        d.mkdir()
+        for args in ((), ("--stdin",)):
+            with self.subTest(args=args):
+                r = support.run_ws("check-size", str(d), *args,
+                                   "--wiki", str(self.root), stdin="x")
+                self.assertEqual(r.returncode, 2)
+                self.assertIn("directory", r.stderr)
+
     def test_relative_target_resolves_from_the_wiki_root(self):
         # A relative target is a wiki path, wherever the caller stands —
         # resolving from CWD would misjudge externality and existence.
@@ -349,7 +360,6 @@ class CheckSizeTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertIn("target is external", r.stderr)
 
-    @support.needs_symlinks
     def test_symlink_mounted_verdict_is_root_independent(self):
         # A file inside a symlink mount is external however it is
         # reached: the mount's caps govern (not the host's), the note
@@ -359,7 +369,7 @@ class CheckSizeTests(unittest.TestCase):
             target = Path(outside).resolve() / "elsewhere"
             support.write(target / "index.md", "# E\n\n## Spaces\n")
             support.write(target / "roomy.md", "x" * 17000)
-            support.symlink(target, self.root / "mnt")
+            os.symlink(target, self.root / "mnt")
             r = support.run_ws("check-size", "mnt/roomy.md",
                                "--wiki", str(self.root))
             self.assertEqual(r.returncode, 1, r.stdout + r.stderr)

@@ -7,9 +7,10 @@ The producer side of [mounting](mount.md): a space is a folder, so sharing one m
 1. **Verify the space stands alone.** Resolve it as its own wiki, audit it, and sweep its references:
    ```sh
    python3 <skill-dir>/scripts/ws.py audit --wiki <root>/<space>
-   python3 <skill-dir>/scripts/ws.py grep '\[\[|\]\(' --wiki <root>/<space>
+   python3 <skill-dir>/scripts/ws.py grep -F '[[' --wiki <root>/<space>
+   python3 <skill-dir>/scripts/ws.py grep -F '](' --wiki <root>/<space>
    ```
-   The audit must come back clean standalone. Then read the sweep as a producer, judging each hit against the space's own `files` inventory: a link whose target lives outside the space — a wikilink to a page elsewhere in your wiki, a relative link reaching above it (`../…`) — resolves on *your* disk but dangles for every receiver. Fix each (move the target in, drop the link, or inline the content) or name it to the user and let them accept it.
+   The audit must come back clean standalone; the note naming your enclosing wiki is expected here — judging the space alone is the point. Then read the sweep as a producer, judging each hit against the space's own `files` inventory: a link whose target lives outside the space — a wikilink to a page elsewhere in your wiki, a relative link reaching above it (`../…`) — resolves on *your* disk but dangles for every receiver. Fix each (move the target in, drop the link, or inline the content) or name it to the user and let them accept it.
 2. **Check what rides along.** Everything in the folder ships: drafts, `log.md`, `_meta/`, `_archives/`, and full git history when you share a repo. Pruning is the user's call — ask when anything looks private.
 
 ## Pick the mechanism

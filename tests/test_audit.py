@@ -131,6 +131,33 @@ class AuditTests(unittest.TestCase):
                 r = support.run_ws("list", "--wiki", str(self.root))
                 self.assertIn(name, r.stdout)
 
+    def test_every_line_boundary_name_registers_encoded(self):
+        # POSIX allows any of Python's line boundaries in a dirname, and
+        # the entry grammar lives on one physical line. Derive the set
+        # from str.splitlines — the authority the grammar answers to —
+        # so a boundary the encoder missed cannot pass silently: every
+        # suggestion must be one pasteable line that converges.
+        boundaries = [chr(c) for c in range(0x3000)
+                      if len(f"a{chr(c)}b".splitlines()) > 1]
+        self.assertIn("\v", boundaries)
+        for ch in boundaries:
+            support.write(self.root / f"a{ch}b" / "index.md",
+                          "# N\n\n## Spaces\n")
+        out = self.audit().stdout
+        self.assertNotIn("unregistrable child name", out)
+        index = self.root / "index.md"
+        text = index.read_text(encoding="utf-8")
+        for ch in boundaries:
+            enc = ws.encode_href(f"a{ch}b")
+            entry = f"- [{enc}/]({enc}/index.md)"
+            self.assertEqual(len(entry.splitlines()), 1, hex(ord(ch)))
+            self.assertIn(f" — add: {entry}", out, hex(ord(ch)))
+            text += entry + "\n"
+        support.write(index, text)
+        out = self.audit().stdout
+        for ch in boundaries:
+            self.assertNotIn(ws.encode_href(f"a{ch}b"), out, hex(ord(ch)))
+
     def test_dotslash_and_title_hrefs_resolve(self):
         # `./x/index.md` and a CommonMark link title are trivial dialect:
         # normalized on read, never findings.
@@ -161,7 +188,7 @@ class AuditTests(unittest.TestCase):
         r = self.audit("--fix")
         self.assertEqual(r.returncode, 2)
 
-    @unittest.skipIf(getattr(os, "geteuid", lambda: 1)() == 0,
+    @unittest.skipIf(os.geteuid() == 0,
                      "permission checks are a no-op as root")
     def test_every_command_runs_on_a_sealed_tree(self):
         # The subtraction's contract: no command writes to a wiki. Seal
@@ -257,7 +284,6 @@ class AuditTests(unittest.TestCase):
         self.assertNotIn("over-cap shared/team/tiny.md", out)
         self.assertNotIn("over-cap shared/team/wide.md", out)
 
-    @support.needs_symlinks
     def test_symlink_mount_caps_never_inherit_the_hosts_limits(self):
         # Same fence, third rule: a symlink-mounted space answers to its
         # own limits (m1) or the defaults (m2, whose tiny.md the host's
@@ -271,8 +297,8 @@ class AuditTests(unittest.TestCase):
             support.write(m2 / "index.md", "# M2\n\n## Spaces\n")
             support.write(m2 / "tiny.md",
                           "# Well over ten bytes, fine by the defaults\n")
-            support.symlink(m1, self.root / "mnt")
-            support.symlink(m2, self.root / "mnt2")
+            os.symlink(m1, self.root / "mnt")
+            os.symlink(m2, self.root / "mnt2")
             out = self.audit("--external").stdout
             self.assertNotIn("over-cap mnt/wide.md", out)
             self.assertNotIn("over-cap mnt2/tiny.md", out)
@@ -346,16 +372,19 @@ class AuditTests(unittest.TestCase):
         self.assertIn("malformed entry: unregistrable href: #top", out)
         self.assertNotIn("stale entry #top", out)
 
-    def test_file_entry_names_the_items_repair(self):
+    def test_file_entry_states_the_fact_not_a_convention(self):
         # `- [notes](notes.md)` names a file that exists — "stale …
         # (no index.md on disk)" was factually wrong and its implied
-        # repair destructive. The finding now names the real edit.
+        # repair destructive. An entry naming a file is author intent:
+        # the finding states why the entry is unnecessary and leaves
+        # the edit to judgment — it must not prescribe `## Items`, an
+        # optional convention the wiki may not keep.
         index = self.root / "index.md"
         support.write(index, index.read_text(encoding="utf-8")
                       + "- [notes](notes.md)\n")
         out = self.audit().stdout
         self.assertIn("contract index.md: entry notes.md names a file, "
-                      "not a space — list files under ## Items instead",
+                      "not a space — files are reachable by traversal alone",
                       out)
         self.assertNotIn("stale entry notes.md", out)
 

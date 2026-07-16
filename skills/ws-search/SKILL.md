@@ -22,33 +22,41 @@ Resolution order: an explicit path from the user → the nearest CWD-ancestor fo
 
 - `python3 <skill-dir>/scripts/ws.py list --wiki <root>` — spaces reachable via the `## Spaces` contract, each with its entry description (`--external` to cross mounts).
 - `… files --wiki <root>` — markdown files reachable via the contract.
-- `… grep <pattern> [-i] --wiki <root>` — regex line search over those files; prints `rel:line: text`, exits 1 on no match. The sweep primitive: a link worklist, a tag inventory, an escaping-reference check are each a pattern plus your judgment on the hits.
+- `… grep <pattern> [-i] [-F] --wiki <root>` — regex line search over those files, `-F` for a literal string (a name carrying metacharacters sweeps exact); prints `rel:line: text`, exits 1 on no match. The sweep primitive: a link worklist, a tag inventory, an escaping-reference check are each a pattern plus your judgment on the hits.
 - `… check-size <target> [--stdin] --wiki <root>` — cap verdict for a file; pipe planned content with `--stdin` to check before writing.
 - `… audit --wiki <root>` — contract drift, entries crossing a space boundary, over-cap or unreadable files, unhealthy mounts. Findings name their repair where one is safe to name (a `missing entry` prints the exact line to add); apply repairs as ordinary edits and re-run the audit to verify — the script never writes.
 
-Trust the script's output over re-deriving structure by hand. Stdout is data; stderr carries the resolved root (`audit` prints it as its stdout header instead) and `note:` advisories naming whatever a walk skipped — relay them when they could change the answer. Shell examples throughout are POSIX — on Windows, substitute `python` for `python3` and the platform's equivalents for the one-liners.
+Trust the script's output over re-deriving structure by hand. Stdout is data; stderr carries the resolved root (`audit` prints it as its stdout header instead) and `note:` advisories naming whatever a walk skipped (and the enclosing wiki when the root is nested inside one) — relay them when they could change the answer.
 
 ## Trust scope and size discipline
 
 Owned vs external is relative to the resolved root: anything under a folder named `shared/` (at any depth), a git submodule, or a symlink escaping the tree is external. Reads cross owned spaces by default and enter external ones only when the user explicitly asks. Writes stay inside the targeted space; any other space — owned or external — is written only on explicit instruction.
 
-Caps are UTF-8 bytes including frontmatter, keyed by basename: `index.md` 5000, `log.md` and `hot.md` 100000, any other `*.md` 15000. A `_meta/limits.md` of plain `basename: bytes` lines overrides them — the nearest one at or above the file wins, like `_template.md`, and the literal name `*.md` re-caps the content-page catch-all. Check caps with `check-size`: pipe planned new content via `--stdin` before writing it; after editing a file in place, check the file itself — a write that shrinks an over-cap file reports `ok`, progress, so repairs converge. An overflow is a signal about shape, not just size: distill the page or reshape the space — never truncate.
+Caps are UTF-8 bytes including frontmatter, keyed by basename: `index.md` 5000, `log.md` and `hot.md` 100000, any other `*.md` 15000.
 
-Conventions are opt-in per wiki. Read the markers present at the scope root — `log.md`, `_meta/taxonomy.md`, `_meta/limits.md`, `_meta/ignore.md`, frontmatter on pages, `_template.md`, `hot.md`, `.obsidian/`, `.git` — and degrade gracefully when one is absent. If `log.md` exists, append one line per operation:
+- A `_meta/limits.md` of plain `basename: bytes` lines overrides them — the nearest one at or above the file wins, like `_template.md`, and the literal name `*.md` re-caps the content-page catch-all.
+- Check caps with `check-size`: pipe planned new content via `--stdin` before writing it; after editing a file in place, check the file itself — a write that shrinks an over-cap file reports `ok`, progress, so repairs converge.
+- An overflow is a signal about shape, not just size: distill the page or reshape the space — never truncate.
+- The exception is `log.md`: an over-cap log rolls — move it whole to `_archives/log-<YYYYMMDD>.md` and start a fresh one — so the history archives, never shrinks.
+
+Conventions are opt-in per wiki. Read the markers present at the scope root (the space the user targeted, else the resolved root) — `log.md`, `_meta/taxonomy.md`, `_meta/limits.md`, `_meta/ignore.md`, frontmatter on pages, `_template.md`, `hot.md`, `.git` — and degrade gracefully when one is absent. If `log.md` exists, append one line per operation:
 
 ```sh
-printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '<OP> <details>' >> <root>/log.md
+printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '<OP> <details>' >> <scope-root>/log.md
 ```
 <!-- /ws:core -->
 
 ## Procedure
 
 1. **Resolve the wiki** (core block above). Announce the root when it came from CWD or could be ambiguous. No wiki anywhere → say so and offer to set one up via `ws-update`.
-2. **Map the terrain.** Run `list` for the space shape and `files` for the page inventory. Both are cheap; run them before any content search. External mounts stay out unless the user asked — the stderr `note:` lines say how many were skipped and which spaces are unreachable; when a skipped or unreachable space could hold the answer, say so and offer to cross or repair it.
+2. **Map the terrain.** Run `list` for the space shape and `files` for the page inventory. Both are cheap; run them before any content search.
+   - On a large wiki, slice the inventory rather than re-rooting it: `files` prints paths grouped by space, so read just the candidate spaces' slices — one walk, the root's trust scope and `_meta/` governing throughout.
+   - Never re-root a search. A space taken as its own `--wiki` answers to its own fences — a mount the root walk calls external can read as owned there; the script notes the enclosing wiki when you do. Re-rooting is the stance for judging a space standalone (`ws-update`'s share pre-flight), not for searching.
+   - External mounts stay out unless the user asked — the stderr `note:` lines name what was skipped and which spaces are unreachable; when a skipped or unreachable space could hold the answer, say so and offer to cross or repair it.
 3. **Pick the depth.** "Just check", "do I have anything on X", or an agent pre-research probe → quick lookup: rank candidates structurally (step 4), read nothing, answer from names/summaries and say so. A real question → deep query: continue through step 6.
 4. **Rank candidates structurally.** Match the query against space labels and descriptions (`## Spaces` entries), file names, and path segments. When frontmatter is in use, `summary`, `aliases`, and `tags` rank pages without reading bodies — `grep '^(tags|aliases|summary):' --wiki <root>` sweeps that inventory in one call.
 5. **Search content** when structure alone doesn't settle it, cheapest first:
-   1. A markdown-aware search backend when available (e.g. the qmd MCP — BM25 + semantic over markdown).
+   1. A markdown-aware search backend when available (e.g. the qmd MCP — BM25 + semantic over markdown); its index knows nothing of trust scope — drop hits the root `files` walk wouldn't list.
    2. `… grep '<term>' -i --wiki <root>` — the universal fallback, always bundled; searches exactly the trust-scoped page set (no `shared/`, submodules, or `_archives/`), `--external` only when the user asked.
 6. **Read the top hits fully.** Pages are cap-bounded, so whole files are affordable. Prefer 2–4 full pages over a dozen snippets.
 7. **Answer from the wiki only.** Cite every claim's page with a wikilink (`[[path/to/page]]`). Carry over `%%inferred%%` / `%%ambiguous%%` provenance markers when the wiki uses them. Name what the wiki lacks as a gap, then offer to research and capture it via `ws-update`.

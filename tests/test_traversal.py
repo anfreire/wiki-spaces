@@ -57,22 +57,20 @@ class TraversalTests(unittest.TestCase):
         support.write(index, text + "- [bare/](bare/index.md)\n")
         self.assertNotIn("bare", self.rels(ws.walk_spaces(self.root)))
 
-    @support.needs_symlinks
     def test_symlink_cycle_terminates(self):
         loop = self.root / "alpha" / "loop"
-        support.symlink(self.root / "alpha", loop)
+        os.symlink(self.root / "alpha", loop)
         index = self.root / "alpha" / "index.md"
         text = index.read_text(encoding="utf-8")
         support.write(index, text + "\n- [loop/](loop/index.md)\n")
         rels = self.rels(ws.walk_spaces(self.root))
         self.assertEqual(rels, [".", "alpha", "beta", "beta/gamma"])
 
-    @support.needs_symlinks
     def test_escaping_symlink_is_external(self):
         with tempfile.TemporaryDirectory() as outside:
             target = Path(outside) / "elsewhere"
             support.write(target / "index.md", "# E\n\n## Spaces\n")
-            support.symlink(target, self.root / "mounted")
+            os.symlink(target, self.root / "mounted")
             index = self.root / "index.md"
             text = index.read_text(encoding="utf-8")
             support.write(index, text + "- [mounted/](mounted/index.md)\n")
@@ -80,7 +78,6 @@ class TraversalTests(unittest.TestCase):
             rels = self.rels(ws.walk_spaces(self.root, include_external=True))
             self.assertIn("mounted", rels)
 
-    @support.needs_symlinks
     def test_symlink_mount_ignores_never_inherit_the_hosts_list(self):
         # `_meta/ignore.md` rides the same nearest-file lookup as limits,
         # and the same fence: the host's list stops at the mount.
@@ -89,7 +86,7 @@ class TraversalTests(unittest.TestCase):
             target = Path(outside).resolve() / "elsewhere"
             support.write(target / "index.md", "# E\n\n## Spaces\n")
             support.write(target / "assets" / "page.md", "# P\n")
-            support.symlink(target, self.root / "mounted")
+            os.symlink(target, self.root / "mounted")
             index = self.root / "index.md"
             support.write(index, index.read_text(encoding="utf-8")
                           + "- [mounted/](mounted/index.md)\n")
@@ -97,7 +94,6 @@ class TraversalTests(unittest.TestCase):
             self.assertIn("mounted/assets/page.md", rels)
             self.assertNotIn("alpha/assets/deep.md", rels)  # host list holds
 
-    @support.needs_symlinks
     def test_entry_through_a_symlinked_middle_segment_is_external(self):
         # A multi-segment href may group through plain folders; when a
         # middle segment is a symlink out of the tree, the child is
@@ -105,7 +101,7 @@ class TraversalTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as outside:
             target = Path(outside).resolve() / "elsewhere"
             support.write(target / "sub" / "index.md", "# S\n\n## Spaces\n")
-            support.symlink(target, self.root / "tunnel")
+            os.symlink(target, self.root / "tunnel")
             index = self.root / "index.md"
             support.write(index, index.read_text(encoding="utf-8")
                           + "- [tunnel/sub/](tunnel/sub/index.md)\n")
@@ -132,9 +128,8 @@ class TraversalTests(unittest.TestCase):
                   in ws.walk_spaces(self.root, include_external=True)}
         self.assertTrue(marked.get("alpha/shared/inner"))
 
-    @support.needs_symlinks
     def test_owned_symlink_alias_dedupes_to_the_real_file(self):
-        support.symlink(self.root / "notes.md", self.root / "alias.md")
+        os.symlink(self.root / "notes.md", self.root / "alias.md")
         walked = ws.walk_files(self.root)
         by_rel = {rel: ext for rel, _p, ext in walked}
         self.assertIn("notes.md", by_rel)

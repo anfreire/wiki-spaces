@@ -22,22 +22,27 @@ Resolution order: an explicit path from the user → the nearest CWD-ancestor fo
 
 - `python3 <skill-dir>/scripts/ws.py list --wiki <root>` — spaces reachable via the `## Spaces` contract, each with its entry description (`--external` to cross mounts).
 - `… files --wiki <root>` — markdown files reachable via the contract.
-- `… grep <pattern> [-i] --wiki <root>` — regex line search over those files; prints `rel:line: text`, exits 1 on no match. The sweep primitive: a link worklist, a tag inventory, an escaping-reference check are each a pattern plus your judgment on the hits.
+- `… grep <pattern> [-i] [-F] --wiki <root>` — regex line search over those files, `-F` for a literal string (a name carrying metacharacters sweeps exact); prints `rel:line: text`, exits 1 on no match. The sweep primitive: a link worklist, a tag inventory, an escaping-reference check are each a pattern plus your judgment on the hits.
 - `… check-size <target> [--stdin] --wiki <root>` — cap verdict for a file; pipe planned content with `--stdin` to check before writing.
 - `… audit --wiki <root>` — contract drift, entries crossing a space boundary, over-cap or unreadable files, unhealthy mounts. Findings name their repair where one is safe to name (a `missing entry` prints the exact line to add); apply repairs as ordinary edits and re-run the audit to verify — the script never writes.
 
-Trust the script's output over re-deriving structure by hand. Stdout is data; stderr carries the resolved root (`audit` prints it as its stdout header instead) and `note:` advisories naming whatever a walk skipped — relay them when they could change the answer. Shell examples throughout are POSIX — on Windows, substitute `python` for `python3` and the platform's equivalents for the one-liners.
+Trust the script's output over re-deriving structure by hand. Stdout is data; stderr carries the resolved root (`audit` prints it as its stdout header instead) and `note:` advisories naming whatever a walk skipped (and the enclosing wiki when the root is nested inside one) — relay them when they could change the answer.
 
 ## Trust scope and size discipline
 
 Owned vs external is relative to the resolved root: anything under a folder named `shared/` (at any depth), a git submodule, or a symlink escaping the tree is external. Reads cross owned spaces by default and enter external ones only when the user explicitly asks. Writes stay inside the targeted space; any other space — owned or external — is written only on explicit instruction.
 
-Caps are UTF-8 bytes including frontmatter, keyed by basename: `index.md` 5000, `log.md` and `hot.md` 100000, any other `*.md` 15000. A `_meta/limits.md` of plain `basename: bytes` lines overrides them — the nearest one at or above the file wins, like `_template.md`, and the literal name `*.md` re-caps the content-page catch-all. Check caps with `check-size`: pipe planned new content via `--stdin` before writing it; after editing a file in place, check the file itself — a write that shrinks an over-cap file reports `ok`, progress, so repairs converge. An overflow is a signal about shape, not just size: distill the page or reshape the space — never truncate.
+Caps are UTF-8 bytes including frontmatter, keyed by basename: `index.md` 5000, `log.md` and `hot.md` 100000, any other `*.md` 15000.
 
-Conventions are opt-in per wiki. Read the markers present at the scope root — `log.md`, `_meta/taxonomy.md`, `_meta/limits.md`, `_meta/ignore.md`, frontmatter on pages, `_template.md`, `hot.md`, `.obsidian/`, `.git` — and degrade gracefully when one is absent. If `log.md` exists, append one line per operation:
+- A `_meta/limits.md` of plain `basename: bytes` lines overrides them — the nearest one at or above the file wins, like `_template.md`, and the literal name `*.md` re-caps the content-page catch-all.
+- Check caps with `check-size`: pipe planned new content via `--stdin` before writing it; after editing a file in place, check the file itself — a write that shrinks an over-cap file reports `ok`, progress, so repairs converge.
+- An overflow is a signal about shape, not just size: distill the page or reshape the space — never truncate.
+- The exception is `log.md`: an over-cap log rolls — move it whole to `_archives/log-<YYYYMMDD>.md` and start a fresh one — so the history archives, never shrinks.
+
+Conventions are opt-in per wiki. Read the markers present at the scope root (the space the user targeted, else the resolved root) — `log.md`, `_meta/taxonomy.md`, `_meta/limits.md`, `_meta/ignore.md`, frontmatter on pages, `_template.md`, `hot.md`, `.git` — and degrade gracefully when one is absent. If `log.md` exists, append one line per operation:
 
 ```sh
-printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '<OP> <details>' >> <root>/log.md
+printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '<OP> <details>' >> <scope-root>/log.md
 ```
 <!-- /ws:core -->
 
@@ -48,7 +53,7 @@ When nothing resolves — no explicit path, no CWD-ancestor wiki, no valid confi
 ## Procedure
 
 1. **Resolve the wiki** (core block) and announce the root when it came from CWD or could be ambiguous.
-2. **Detect conventions at the scope root** — the wiki root by default, the targeted space if the user named one. Presence markers (`log.md`, taxonomy, `hot.md`) never inherit from a parent; `_meta/limits.md`, `_meta/ignore.md`, and `_template.md` follow their nearest-ancestor rule. Skip every step whose marker is absent.
+2. **Detect conventions at the scope root** (core block). Presence markers (`log.md`, taxonomy, `hot.md`) never inherit from a parent; `_meta/limits.md`, `_meta/ignore.md`, and `_template.md` follow their nearest-ancestor rule. Skip every step whose marker is absent.
 3. **Detect the mode** from the user's intent — CWD only disambiguates *which* project, never the mode:
    | Mode | Trigger | Input |
    |---|---|---|
@@ -58,7 +63,7 @@ When nothing resolves — no explicit path, no CWD-ancestor wiki, no valid confi
    | Research capture | "store this research" | findings from the session |
 4. **Extract knowledge.** Direct add: take the content as handed — your job is placement and dedup, not re-synthesis. Project sync: decisions and rationale, patterns, tool/API wiring, trade-offs, results — from the files and recent git history. Conversation: durable conclusions and decisions, written as facts ("X works by…"), never chat summary. Research: what took effort and would be expensive to re-derive.
 5. **Filter and deduplicate.** Knowledge-capture wikis get the noise filter: answerable from the code or a quick search? skip; needed in 3 months? keep. Content-store wikis (recipes, journals, runbooks) skip the filter — every entry is intentional. Enumerate existing pages via `files` and rank by filename/path/frontmatter overlap: when a near-match exists, **merge into it instead of creating a sibling**.
-6. **Place.** `list` prints each space with its entry description — the placement hints; check top-level plain folders too. Match semantically: project-scoped content goes under the project-grouping space (`projects/<name>/…` or whatever the wiki calls it); global concepts go to the topical folder even when captured inside a project. Several equally plausible candidates, or none → ask. Flat wiki → write at the root. Slugs: lowercase, hyphenated, ≤50 chars.
+6. **Place.** `list` prints each space with its entry description — the placement hints; check top-level plain folders too. Match semantically: project-scoped content goes under the project-grouping space (`projects/<name>/…` or whatever the wiki calls it); global concepts go to the topical folder even when captured inside a project. Several equally plausible candidates, or none → ask. Flat wiki → write at the root. Names follow the wiki's own pattern — match what existing pages do; where no pattern exists, default to lowercase, hyphenated, ≤50 chars.
 7. **Check the cap on every write.** Pipe planned content before writing:
    ```sh
    python3 <skill-dir>/scripts/ws.py check-size <target> --stdin --wiki <root> <<'EOF'
@@ -72,7 +77,14 @@ When nothing resolves — no explicit path, no CWD-ancestor wiki, no valid confi
    An over-cap `index.md` is navigation debt: push detail into child pages, one line per entry.
 8. **Write.** New pages: nearest ancestor `_template.md` if present, else the wiki's page shape (frontmatter only where the wiki already uses it). Mark non-source claims `%%inferred%%`, conflicting sources `%%ambiguous%%`. Add up to 2 wikilinks on first natural mentions. Updates: merge, preserve manual content, bump `updated:` if frontmatter is in use, never overwrite unrelated sections. On a project sync, record the repo path (`~`-contracted) on the project's hub page — `repo:`/`sources:` frontmatter where in use, else one plain line — so a later session maps the checkout to its page. More than ~10 pages changing → show the plan and ask first.
 9. **Keep the contract.** Created a new space, removed one, or moved pages? Update `## Spaces` per [Space operations](#space-operations) below. `## Items` sections are optional human curation — maintain one where the index already has it. Then check the shape you're leaving: entry descriptions still true, no name that only makes sense historically — small fixes now; bigger reshapes become the close-out's `ws-tend` suggestion.
-10. **Close out.** Run `audit`. Apply the safe structural repairs yourself, re-auditing between rounds until gone: add the exact entry line a `missing entry` finding prints, insert the heading a *registered* bare child lacks, and remove an entry flagged as crossing another space's boundary (registering the space where the finding says it belongs). An undeclared bare index is a promotion decision — surface it, act only on the user's call. Other findings are reported, not auto-repaired; outside this sync's write scope, suggest a `ws-tend` pass — suggestion only, never run it yourself. Log an `UPDATE` line per the core block and confirm in one block: `Updated wiki (<root>)` with created paths, updated paths, mode, and audit outcome.
+10. **Close out.** Run `audit`. Apply the safe structural repairs yourself, re-auditing between rounds until gone:
+    <!-- ws:safe-repairs -->
+    - Add the exact entry line a `missing entry` finding prints, then trail it with a `— description` — the placement hint every later operation reads.
+    - Insert the `## Spaces` heading a *registered* bare child lacks — only where the finding's hint asks for the insert; a near-miss hint asks for a rename, which stays reported as author intent.
+    - Remove an entry the audit says crosses another space's boundary — that space owns the deeper listing; register it there instead when it is missing.
+    <!-- /ws:safe-repairs -->
+
+    An undeclared bare index is a promotion decision — surface it, act only on the user's call. Other findings are reported, not auto-repaired; outside this sync's write scope, suggest a `ws-tend` pass — suggestion only, never run it yourself. Log an `UPDATE` line per the core block and confirm in one block: `Updated wiki (<root>)` with created paths, updated paths, mode, and audit outcome.
 
 ## Space operations
 
@@ -84,7 +96,7 @@ mkdir -p <root>/<path> && printf '# <Title>\n\n## Spaces\n' > <root>/<path>/inde
 
 Register it in the nearest ancestor space's `## Spaces` — `- [<name>/](<name>/index.md) — description`, href percent-encoded where the name demands it; the description is the placement hint later operations read. The audit's `missing entry` finding prints the exact line if in doubt.
 
-**Remove a page**: sweep for what points at it first — `grep '<stem>' --wiki <root>` (every link form carries the stem; judge each hit, code examples aside) — rewrite or drop the real links, prefer a move to `_archives/` over deletion, then `audit`.
+**Remove a page**: sweep for what points at it first — `grep -F '<stem>' --wiki <root>` (every link form carries the stem; judge each hit, code examples aside) — rewrite or drop the real links, prefer a move to `_archives/` over deletion, then `audit`.
 
 **Remove a space**: confirm with the user (prefer `_archives/` over deletion), delete the folder, remove its entry from the parent's `## Spaces`, then `audit` to verify nothing dangles.
 

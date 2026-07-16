@@ -11,7 +11,7 @@ Any of: the page carries 3+ H2 sections that read as distinct sub-topics; siblin
 1. **Snapshot first.** Git wiki: commit the current state (`git -C <root> add -A && git -C <root> commit -m "snapshot: before promoting <page>"`) — or, if the user minds the commit, `git stash push --include-untracked` and note the stash. No git: `cp -a <root> <root>.pre-promote` (or tar the affected space). Do not proceed without a restore path.
 2. **Inventory every incoming link before moving anything:**
    ```sh
-   python3 <skill-dir>/scripts/ws.py grep '<stem>' --wiki <root>
+   python3 <skill-dir>/scripts/ws.py grep -F '<stem>' --wiki <root>
    ```
    The stem (filename without `.md`) rides every link form — `[[<stem>]]`, `[[dir/<stem>|alias]]`, `(<rel>/<stem>.md)`, embeds — so the sweep over-collects on purpose, trust-scoped (external mounts and `_archives/` stay out); judge each `rel:line:` hit and keep the real links (a code example or a prose mention is not one). The page's own self-links appear too; step 5 rewrites those. The kept list is your rewrite worklist and your verification baseline.
 3. **Move:**

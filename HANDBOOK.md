@@ -31,13 +31,21 @@ A file grown many jobs is a page that wants promoting: split it, and link. We ke
 
 Tools are the executable side, consisting of the single-file ws.py script. Where Instructions ask the LLM to hold the Core by judgment, Tools encode it so judgment cannot drift. Hygiene here is not taste. A sloppy tool corrupts the wiki it exists to keep.
 
+### The line
+
+What the tool may contain comes before how it is written: **the script parses the contract, never the content**. Structure — traversal, trust scope, caps, drift — has exactly one answer derivable from bytes on disk, and belongs in the tool. Meaning — what a page says, links, tags, what is worth keeping — is judgment, and belongs to the LLM, with `grep` as the sweep that feeds it. Every capability answers to this line before any rule below.
+
+- No dialect semantics. How the dialect resolves a link or a YAML shape is content; re-implementing it buys false positives one patch at a time.
+- No write path. Repair is judgment: a finding names its repair wherever one is safe to name, the caller applies it as an ordinary edit, and a re-run verifies. Read-only is pinned by test.
+- No duplicating what existing tools do well. `grep` is in the tool for its file set — trust scope and contract reachability, which nothing else knows — never for its matching; anything richer than line hits belongs to the system's tools and the LLM's own reads.
+
 ### One source of truth
 
 - One value, one definition. No second cap table, no parallel resolver, no quantity computed two ways.
 - Two implementations that differ only a little are one implementation with a parameter. Unify instead of forking.
-- Producer = consumer: the code that writes a contract and the code that reads it travel the same path. Maintaining both sides by hand leads to drift, which makes the tool traverse a lie.
+- Producer = consumer: the code that produces a contract line and the code that reads it travel the same path. Maintaining both sides by hand leads to drift, which makes the tool traverse a lie.
 - Reuse before you add. Confirm a behavior doesn't already exist before writing it.
-- The three copies of ws.py in the skill directories must remain byte-identical, and the shared core block in the three SKILL.md files must match verbatim. Both invariants are pinned by tests, as are the prose restatements of the cap defaults.
+- The three copies of ws.py in the skill directories must remain byte-identical, and the shared blocks in the SKILL.md files — the core block, the safe-repairs set — verbatim. Tests pin these invariants and every prose restatement — cap defaults, interpreter floor, promised platforms, the log's roll destination, init.md's config block — each to the code or CI that anchors it, prose pinning prose where nothing does: CI tests exactly what the prose promises.
 
 ### Types and shapes
 
@@ -54,10 +62,10 @@ Tools are the executable side, consisting of the single-file ws.py script. Where
 
 ### Safety and failure
 
-- Writes are atomic and fail-closed. Use a temp file, an atomic replace, and fsync of file and parent so the rename is durable. A half-written index.md is never observable. Concurrent writers are not locked out: a lost race is drift, and the next audit repairs it.
+- There is no write path to make safe — that is The line. What replaces write-safety is convergence: every run re-derives from disk, a lost race between concurrent editors is just drift, and the next audit names the repair.
 - Refuse, never truncate. A breached cap or invariant is an error with a clear cause, never a silent cut.
-- Handle failures at boundaries like the filesystem, parse, or subprocess. Never swallow an exception to limp onward.
-- Errors go to stderr with a cause and a meaningful exit code. Writes stay inside the trust boundary.
+- Handle failures at boundaries like the filesystem or a parse. Never swallow an exception to limp onward.
+- Errors go to stderr with a cause and a meaningful exit code. Stdout is pure data; what a walk skipped, and the enclosing wiki when the root is nested, rides stderr `note:` advisories — silence speaks for the walk's reach, never the whole disk.
 
 ### Change and refactor
 

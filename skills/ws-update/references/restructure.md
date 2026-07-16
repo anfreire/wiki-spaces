@@ -7,7 +7,7 @@ Promotion's siblings — each operation relocates a space that other pages link 
 1. **Snapshot** exactly as [promote.md](promote.md) step 1 — no restore path, no restructure.
 2. **Inventory incoming links** before moving anything — one sweep per name the operation changes (the space's own name, and each page whose path moves):
    ```sh
-   python3 <skill-dir>/scripts/ws.py grep '<name>' --wiki <root>
+   python3 <skill-dir>/scripts/ws.py grep -F '<name>' --wiki <root>
    ```
    Judge each `rel:line:` hit and keep the real links — wikilinks, markdown links, embeds; a code example or a prose mention is not one. The kept union is the rewrite worklist and the verification baseline.
 3. **Move** with `git mv` (a git wiki) or `mv`, then make every touched parent true again: the losing parent's `## Spaces` drops the entry, the gaining parent's adds it — the audit's `missing entry` finding prints the exact line to paste. Carry the entry's description along; update it if the reshape changed what the space holds.
@@ -17,7 +17,7 @@ Promotion's siblings — each operation relocates a space that other pages link 
 
 ## Rename (same parent, new name)
 
-`mv <old-name> <new-name>`, then rewrite: the parent entry's label and href, every incoming path-form link, and the space's own `# title` if it spoke the old name. Slugs stay lowercase, hyphenated, ≤50 chars.
+`mv <old-name> <new-name>`, then rewrite: the parent entry's label and href, every incoming path-form link, and the space's own `# title` if it spoke the old name. The new name follows the wiki's own naming pattern; the lowercase-hyphenated ≤50-char default applies only where none exists.
 
 ## Move (new parent)
 

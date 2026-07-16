@@ -4,6 +4,219 @@ All notable changes to wiki-spaces are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [4.2.0] — 2026-07-16
+
+A precision pass over the balance — what the tool provides, what the
+instructions ask — reread sentence by sentence for the reader who gets
+one chance to parse it. Mechanics with one right answer moved into the
+tool (`grep -F`), judgments the tool already makes stopped being
+re-made outside it (adoption's heading check), and the safe-repair set
+both writing skills carry is pinned verbatim like the core block. The
+handbook states The line as a named section; the skills gain guidance
+that lived only in repo files an install never ships; and wording that
+could be read two ways now reads one way. The read side then caught up
+with the write side: the one scope fact prose held alone — a nested
+root answers to its own fences — rides a tool advisory now, the two
+paragraphs that carry it read one rule per bullet, and the config
+block init.md states joined the pins that hold prose to code.
+
+### Added
+
+- `grep -F/--fixed-strings` (grep's own spelling): match the pattern
+  as a literal string. The name sweeps pass it (promote, restructure,
+  remove-a-page), and the link-shape sweeps read plain (`-F '[['`) —
+  ws-tend's integrity pass and share's standalone check alike, no
+  escaping for a reader to parse, none for a writer to get wrong.
+- A nested-root advisory: every command notes when the resolved root
+  sits inside an enclosing wiki, naming it. Trust scope never looks
+  above the root — what the enclosing walk fences as external can
+  read as owned from the nested one — and that fact was held by prose
+  alone (ws-search's terrain step; share's pre-flight, which re-roots
+  on purpose and now expects the note). The enclosing wiki has one
+  answer derivable from disk, and check-size's external note set the
+  write-side precedent — so the read side's scope caveat gains the
+  same tool-side voice, and re-rooting stays the caller's call.
+
+### Changed
+
+- The spec's navigation-contract paragraph reads as short sentences —
+  same rules, parseable once.
+- HANDBOOK: The line (the script parses the contract, never the
+  content) is a named section every capability answers to before any
+  other rule; the safety section replaces atomic-write rules with what
+  replaced them (convergence — there is no write path); producer =
+  consumer speaks of contract lines, not writes; and the pin sentence
+  names the whole pinned surface — the safe-repairs block and this
+  cycle's prose pins joined the copies, core block, caps, and floor it
+  already named.
+- The safe structural repair set — what a close-out may apply without
+  asking — read differently in ws-update and ws-tend; one verbatim
+  block now sits in both behind `ws:safe-repairs` markers, pinned by
+  the identity suite like the core block. The heading insert keys on
+  the finding's own hint: a near-miss child takes the rename its hint
+  names — reported as author intent, never an insert beside the
+  author's heading (adoption's orphaning fix, held at the close-out
+  too).
+- ws-tend's audit vocabulary, tag pass, and structural close-out — and
+  ws-update's close-out — read as bullets, the shape the densest steps
+  already took; the vocabulary speaks the audit's own words (an
+  unregistrable child name, never an "unregistrable entry"), and the
+  close-out's author-intent list names dead second headings too.
+- The read side took the same bullet shape: ws-search's terrain step
+  and mount.md's mechanism rules read one rule per bullet — the two
+  scope paragraphs convergence can never backstop, since a misread
+  there leaks external content into an answer and no re-audit catches
+  a read. The terrain step now points at the nested-root note, and
+  "say how many were skipped" became what the advisories have done
+  since 4.0.0: name them.
+- The core block's size-discipline paragraph reads as one rule per
+  bullet — override, check, overflow, the log's roll — words
+  unchanged.
+- Repairing drift keeps the placement map: both close-outs trail the
+  pasted `missing entry` line with a `— description`.
+- The audit's file-entry finding prescribed `## Items`, an optional
+  convention the wiki may not keep. An author-intent finding names the
+  problem and leaves the edit to judgment, so it states the fact
+  instead: files are reachable by traversal alone.
+- The cross-link pass fences the special files — indexes, `log.md`,
+  `hot.md`, `_template.md` neither give nor take links — and carries
+  the large-wiki scope clause the link-integrity pass already had.
+- ws-search's backend option drops hits the root `files` walk
+  wouldn't list — an external index knows nothing of trust scope; the
+  bundled-grep line already said so of itself.
+- ws-search's terrain step scopes the inventory on a large wiki by
+  slicing one root walk — `files` prints paths grouped by space; read
+  just the candidate spaces' slices — never by re-rooting: a space
+  taken as its own `--wiki` answers to its own fences, and a mount
+  the root walk calls external can read as owned there (a submodule
+  declared above the new root does). Re-rooting stays the stance for
+  judging a space standalone — share's pre-flight — not for
+  searching.
+- New names follow the wiki's own pattern; the lowercase-hyphenated
+  ≤50-char default applies only where none exists (the place step and
+  the rename procedure).
+- "Silence never means looked everywhere" read two ways, one of them
+  against the advisories' whole point. The docstring and handbook now
+  say what is true — silence speaks for the walk's reach, never the
+  whole disk — and the advisory list names unlistable directories too.
+- CONVENTIONS.md's intro admits the catalog's three kinds — markers on
+  disk, shape-adopted conventions, and skill defaults that say so —
+  and every non-marker section now names its kind: Page template
+  (skills keep new pages to the shape existing pages carry),
+  `## Items`, and Categorical layout are adopted by shape; Linking
+  rules, Noise filter, and Provenance markers are skill defaults. The
+  spec speaks of conventions, not markers — its skills line reads
+  whatever the wiki adopted, degrading where it hasn't; "vault"
+  became "wiki".
+- The cap-restatement test pins README.md and init.md's contract note
+  too — every prose restatement of the defaults answers to the code —
+  and the interpreter-floor test names its rule: CI tests exactly what
+  the prose promises. The stragglers joined: `hot.md`'s prose cap in
+  CONVENTIONS.md, README's floor, and the archive-roll destination —
+  pure convention, no code anchor, so the core block and
+  CONVENTIONS.md pin each other.
+- The one prose *procedure* restating reader behavior joined the pins:
+  init.md's config block promises replace-not-append because the
+  resolver takes the first valid `wiki` line, and nothing held the
+  pairing. The identity suite now runs the block exactly as init.md
+  states it — fresh and over a stale config alike — and the resolver
+  must take the pointer it wrote, every other line surviving.
+- CI runs the platforms the prose promises: a macOS leg joins ubuntu
+  in the matrix — README names macOS and Linux as the POSIX hosts —
+  and the identity suite pins the pairing.
+- init.md's adoption rounds read as bullets — the refusal's two
+  repairs (append the heading, rename the near-miss) and the
+  per-finding edits (paste the entry, promote the bare folder,
+  silence the furniture) one rule per bullet, each naming its own
+  subject — same rules, parseable once.
+
+### Removed
+
+- Graph colorization (ws-tend's colorize mode and its reference), on
+  the existence bar: every capability serves the lifecycle — create,
+  populate, maintain, scale — and coloring Obsidian's graph view
+  serves none of it. It was also the framework's one write into
+  another application's private file (`.obsidian/graph.json`), carrying
+  its own close-the-app hazard and a palette stated in two unpinned
+  places. With nothing left reading `.obsidian/`, it stops being a
+  convention at all: it leaves the core block's marker list, the
+  spec's catalog, and its CONVENTIONS.md section — the reserved-names
+  row remains, carrying the one guarantee that matters: never read,
+  never written.
+- Windows support, whole. The host is POSIX now — the spec's scope
+  names the fence — and everything that existed only to hold the other
+  platform went with it: the CI leg, the core block's substitution
+  note, init.md's symlink copy-fallback, the tests' symlink-privilege
+  probe and LF pinning, and the script's backslash guards — on POSIX a
+  `\` in a `_meta/limits.md` key or an ignore name is a character in a
+  filename, not a path separator to reject, so those names may now be
+  capped and silenced like any other. BOM handling stays: a BOM is a
+  fact about a file's bytes, wherever they were written, not about the
+  host.
+
+### Fixed
+
+- `check-size` refused a directory target on the plain arm but let the
+  `--stdin` arm stat the directory as the "current size", feeding a
+  nonsense shrinking-write verdict — both arms now refuse alike,
+  pinned by test.
+- The link-inventory sweeps (promote, restructure, remove-a-page) are
+  regex sweeps, and a name carrying metacharacters — the spec's own
+  example `notes (2024)` — silently missed the very links the worklist
+  and its verification baseline exist to catch. Escaping has one right
+  answer derivable from the name, so the tool carries it: the sweeps
+  pass the new `-F` and the pattern is the name as written, pinned by
+  test.
+- A `missing entry` suggestion for a name carrying a line break
+  printed a raw label across two physical lines — the one suggestion
+  that could never parse back. The entry grammar lives on one physical
+  line, so every character Python's splitlines treats as a boundary (a
+  vertical tab, U+2028, …) now rides percent-encoded in href and label
+  alike — one pasteable line per name, and any folder name still
+  registers. Pinned by a test that derives the boundary set from
+  splitlines itself.
+- An over-cap `log.md` reached an installed skill with only the
+  generic overflow repair — distill or reshape — which for append-only
+  history means rewriting it. The archive roll (move it whole to
+  `_archives/log-<YYYYMMDD>.md`, start fresh) now ships in the core
+  block, and ws-tend's remediation points the log at it — 4.1.0
+  assigned that voice to "the skills and CONVENTIONS.md", but only
+  CONVENTIONS.md ever carried it.
+- CONVENTIONS.md still attributed a link scan to the audit — removed
+  in 4.1.0 — in the `_template.md` and `## Items` sections; both now
+  name the skills' sweep. The rule stranded there (a template's
+  placeholder links are examples, not dead links) landed in ws-tend's
+  link-integrity pass, the step that actually runs the sweep.
+- init.md's adoption guard was a second parser of the contract
+  heading, and every answer it could give was wrong somewhere: the
+  prefix match read a decorated near-miss (`## Spaces ##`) as present
+  and suppressed the repair, while on a case near-miss (`## spaces`)
+  its append planted a second heading beside the author's and
+  silently orphaned their entries. The guard is gone — adoption
+  scaffolds a missing index.md and lets the resolver judge: a
+  `not a wiki` refusal is round zero, naming the append or the rename
+  that keeps the entries.
+- Adoption's skip-list seeding overwrote a `_meta/ignore.md` the
+  folder already carried; it now takes the same `[ -f ] ||` guard the
+  index.md scaffold line above it always had — an existing list stays
+  the author's.
+- The `_template.md` fallback promised "the default page template"
+  while ws-update writes "the wiki's page shape" — the any-wiki
+  answer; CONVENTIONS.md now agrees.
+- skills/index.md promised every skill "its own `references/`"; only
+  ws-update bundles one — the space description now says so.
+- The shared core block spoke of "the scope root" while only the two
+  writing skills' step 2 defined it — ws-search shipped the term
+  unbound, and the twin definitions had already drifted apart ("the
+  wiki root … if" / "the wiki … when"). The block now binds it at
+  first use — the space the user targeted, else the resolved root —
+  and both step 2s defer to the one definition.
+- The core block detects `log.md` at the scope root, but its append
+  one-liner wrote to `<root>/log.md` — the resolved root, the wrong
+  file whenever a targeted space keeps its own log (presence markers
+  never inherit from a parent). Detection and append now name the
+  same file: `<scope-root>/log.md`.
+
 ## [4.1.0] — 2026-07-13
 
 The line release. Every capability was re-judged against one rule, now

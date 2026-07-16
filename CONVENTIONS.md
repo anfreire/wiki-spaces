@@ -1,6 +1,6 @@
 # Conventions
 
-This catalog lists the opt-in conventions a wiki can adopt. Every section is independent. Pick the markers that fit your vault. Skills degrade where a marker is absent. The spec defines `index.md` with a `## Spaces` heading as the required floor. Everything here is layered on top.
+This catalog lists the opt-in conventions a wiki can adopt. Every section is independent: most are markers on disk (pick the ones that fit your wiki), some are adopted by shape (a wiki opts in by already writing that way), and a few are skill defaults that say so. Skills degrade where a marker is absent. The spec defines `index.md` with a `## Spaces` heading as the required floor. Everything here is layered on top.
 
 Skills are LLM-driven procedures that read these markers and degrade gracefully. They're self-contained after installation. A bundled read-only script `scripts/ws.py` per skill handles local operations.
 
@@ -121,23 +121,11 @@ Timestamps are UTC ISO-8601. Special files like `index.md` and `log.md` are exem
 
 ### `_template.md`
 
-When present in a folder, new pages created in that folder use this file as boilerplate. The closest ancestor template wins. The audit's link scan skips a template's body — placeholder links are examples, and they earn no incoming credit. If absent, pages use the default page template.
+When present in a folder, new pages created in that folder use this file as boilerplate. The closest ancestor template wins. The skills' link sweep skips a template's body — placeholder links are examples, and they earn no incoming credit. If absent, new pages match the wiki's existing page shape.
 
 ### `hot.md`
 
 Free-form scratchpad for active work. Skills read it for context but never rewrite it. Users own the content. Default cap is 100,000 bytes. If absent, skills ignore it.
-
-### `.obsidian/`
-
-Obsidian vault configuration. When present, the colorize step writes graph color groups into `.obsidian/graph.json`. Close Obsidian before running colorize to prevent Obsidian from overwriting the file.
-
-Default palette (RGB integers):
-```
-[5142951, 15896107, 14767961, 7780786, 5873999,
- 15583048, 11565217, 16751527, 10253663, 12234924]
-```
-
-If absent, the colorize step is skipped.
 
 ### `.git`
 
@@ -159,13 +147,13 @@ An optional curated section in a space's `index.md`, listing notable files as or
 - [notes.md](notes.md) — top notes
 ```
 
-It is human navigation, not contract: tools traverse only `## Spaces`, and drift in `## Items` surfaces through the audit's broken-link scan, not as registration findings. Skills maintain one only where the index already has it. If absent, files are found by traversal alone.
+It is human navigation, not contract: tools traverse only `## Spaces`, and drift in `## Items` surfaces through the skills' dead-link sweep, not as registration findings. Adopted by shape, not by a marker: skills maintain one only where the index already has it. If absent, files are found by traversal alone.
 
 ---
 
 ## Page template
 
-Body structure for content pages:
+Body structure for content pages — adopted by shape, not by a marker: a wiki opts in by writing its pages this way, and skills keep new pages to the shape existing pages carry (`_template.md`, when present, wins):
 
 ```markdown
 # Page Title
@@ -189,7 +177,7 @@ If absent, pages are free-form.
 
 ## Provenance markers
 
-Inline comments indicating epistemic status:
+A skill default, not a marker — nothing on disk opts in. Skills mark the claims they write; existing pages are left as they are. Inline comments indicating epistemic status:
 
 | State | Marker | Meaning |
 |---|---|---|
@@ -197,13 +185,13 @@ Inline comments indicating epistemic status:
 | Inferred | `%%inferred%%` | Synthesized or implied |
 | Ambiguous | `%%ambiguous%%` | Sources disagree |
 
-Place the marker at the end of the claim. If absent, all claims are unmarked.
+Place the marker at the end of the claim.
 
 ---
 
 ## Categorical layout
 
-Folder convention for placing pages by kind. Example folders:
+Folder convention for placing pages by kind — adopted by shape, not by a marker: the folders themselves are the opt-in. Example folders:
 
 | Use case | Common top-level folders |
 |---|---|
@@ -217,7 +205,7 @@ Reserved folder names, honored at any depth:
 | `shared/` | External by default (the exact lowercase name) — trust scope is defined in [AGENTS.md](AGENTS.md). |
 | `_archives/` | Excluded from audits and scans. |
 | `_meta/` | Configuration files. |
-| `.obsidian/` | Obsidian configuration. |
+| `.obsidian/` | Obsidian's vault configuration — never read, never written. |
 | `.git/` | Hidden directory, skipped. |
 
 Dot-prefixed names are reserved at any depth, files and folders alike — Obsidian cannot display them either. Extend the skipped set per space with [`_meta/ignore.md`](#_metaignoremd).
@@ -228,6 +216,8 @@ If absent, pages are written flat at the root.
 
 ## Linking rules
 
+A skill default, not a marker — nothing on disk opts in. Skills hold to it for the links they add; a wiki that links more densely is left as it is.
+
 - Add up to 2 relevant wikilinks per page.
 - Link the first natural mention only.
 - Use the shortest link that resolves unambiguously.
@@ -236,7 +226,7 @@ If absent, pages are written flat at the root.
 
 ## Noise filter
 
-Before writing a page, apply these checks:
+A skill default, not a marker — nothing on disk opts in. Before writing a page, apply these checks:
 
 - Code answers it? Skip.
 - Quick search answers it? Skip.
