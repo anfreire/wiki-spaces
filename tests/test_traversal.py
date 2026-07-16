@@ -1,6 +1,7 @@
 """Traversal contract: walk_spaces / walk_files semantics, trust scope,
 cycle guards."""
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -138,21 +139,41 @@ class TraversalTests(unittest.TestCase):
 
     def test_deep_nesting_is_bounded_by_the_filesystem_not_the_stack(self):
         # "Trees nest without limit" must not die on the interpreter's
-        # recursion limit; 1200 levels exceed it comfortably. Teardown
+        # recursion limit — but raw depth cannot prove that portably:
+        # macOS caps a path at 1024 bytes where Linux allows 4096. So
+        # the chain stays inside every POSIX path limit and the walks
+        # run under a recursion limit clamped to the live stack plus
+        # headroom: a walker that recursed per level would die long
+        # before the bottom; the iterative walkers reach it. Teardown
         # gets the same courtesy: shutil.rmtree recurses before 3.12, so
         # the chain is removed iteratively, deepest first.
+        depth = 400
         self.addCleanup(self._unlink_chain, self.root / "beta" / "gamma" / "c")
         cur = self.root / "beta" / "gamma"
         support.write(cur / "index.md",
                       "# Gamma\n\n## Spaces\n\n- [c/](c/index.md)\n")
-        for _ in range(1200):
+        for _ in range(depth):
             cur = cur / "c"
             support.write(cur / "index.md",
                           "# L\n\n## Spaces\n\n- [c/](c/index.md)\n")
-        walked = ws.walk_spaces(self.root)
-        self.assertGreater(len(walked), 1200)
-        files = ws.walk_files(self.root)
-        self.assertGreater(len(files), 1200)
+        live = 0
+        frame = sys._getframe()
+        while frame is not None:
+            live += 1
+            frame = frame.f_back
+        clamp = live + 80
+        self.assertLess(clamp, depth,
+                        "premise: per-level recursion must overflow")
+        limit = sys.getrecursionlimit()
+        sys.setrecursionlimit(clamp)
+        try:
+            walked = ws.walk_spaces(self.root)
+            files = ws.walk_files(self.root)
+        finally:
+            sys.setrecursionlimit(limit)
+        deepest = "beta/gamma" + "/c" * depth
+        self.assertIn(deepest, self.rels(walked))
+        self.assertGreater(len(files), depth)
 
     @staticmethod
     def _unlink_chain(top):

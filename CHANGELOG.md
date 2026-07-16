@@ -216,6 +216,13 @@ block init.md states joined the pins that hold prose to code.
   file whenever a targeted space keeps its own log (presence markers
   never inherit from a parent). Detection and append now name the
   same file: `<scope-root>/log.md`.
+- The deep-nesting proof assumed Linux's 4096-byte path limit: 1200
+  two-byte levels overflow macOS's 1024 during fixture setup, so the
+  macOS leg's first run failed its own suite. The chain now fits every
+  POSIX path limit and the walks run under a recursion limit clamped
+  to the live stack plus headroom — per-level recursion would still
+  overflow, the iterative walkers still reach the bottom, on both
+  promised platforms.
 
 ## [4.1.0] — 2026-07-13
 
