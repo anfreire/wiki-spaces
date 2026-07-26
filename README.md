@@ -50,3 +50,7 @@ The bundled `ws.py grep` — deterministic and trust-scope-aware — carries a w
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+---
+
+**More agent tooling** — [patch-cc](https://github.com/anfreire/patch-cc): patch the Claude Code binary (live thinking, Codex models) · [summon-cc](https://github.com/anfreire/summon-cc): give your agent a crew of Claude Code workers · [cc-oc](https://github.com/anfreire/cc-oc): drive opencode from inside Claude Code · [omoctl](https://github.com/anfreire/omoctl): manage oh-my-openagent profiles
