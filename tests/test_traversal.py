@@ -67,50 +67,125 @@ class TraversalTests(unittest.TestCase):
         rels = self.rels(ws.walk_spaces(self.root))
         self.assertEqual(rels, [".", "alpha", "beta", "beta/gamma"])
 
-    def test_escaping_symlink_is_external(self):
+    def test_symlink_out_of_the_tree_answers_to_its_placement(self):
+        # A target outside the tree has no position to judge, so the link
+        # is owned or external by where it sits, like a clone: outside
+        # `shared/` (a folder's own space mounted from the wiki) it
+        # is owned and walked by default; under `shared/` it is external.
         with tempfile.TemporaryDirectory() as outside:
-            target = Path(outside) / "elsewhere"
-            support.write(target / "index.md", "# E\n\n## Spaces\n")
-            os.symlink(target, self.root / "mounted")
+            mine = Path(outside) / "mine"
+            theirs = Path(outside) / "theirs"
+            for t in (mine, theirs):
+                support.write(t / "index.md", "# T\n\n## Spaces\n")
+            os.symlink(mine, self.root / "mounted")
+            os.symlink(theirs, self.root / "shared" / "mounted")
             index = self.root / "index.md"
             text = index.read_text(encoding="utf-8")
-            support.write(index, text + "- [mounted/](mounted/index.md)\n")
-            self.assertNotIn("mounted", self.rels(ws.walk_spaces(self.root)))
-            rels = self.rels(ws.walk_spaces(self.root, include_external=True))
-            self.assertIn("mounted", rels)
-
-    def test_symlink_mount_ignores_never_inherit_the_hosts_list(self):
-        # `_meta/ignore.md` rides the same nearest-file lookup as limits,
-        # and the same fence: the host's list stops at the mount.
-        support.write(self.root / "_meta" / "ignore.md", "assets\n")
-        with tempfile.TemporaryDirectory() as outside:
-            target = Path(outside).resolve() / "elsewhere"
-            support.write(target / "index.md", "# E\n\n## Spaces\n")
-            support.write(target / "assets" / "page.md", "# P\n")
-            os.symlink(target, self.root / "mounted")
-            index = self.root / "index.md"
-            support.write(index, index.read_text(encoding="utf-8")
-                          + "- [mounted/](mounted/index.md)\n")
-            rels = self.rels(ws.walk_files(self.root, include_external=True))
-            self.assertIn("mounted/assets/page.md", rels)
-            self.assertNotIn("alpha/assets/deep.md", rels)  # host list holds
-
-    def test_entry_through_a_symlinked_middle_segment_is_external(self):
-        # A multi-segment href may group through plain folders; when a
-        # middle segment is a symlink out of the tree, the child is
-        # external — opt-in only, like every other mount.
-        with tempfile.TemporaryDirectory() as outside:
-            target = Path(outside).resolve() / "elsewhere"
-            support.write(target / "sub" / "index.md", "# S\n\n## Spaces\n")
-            os.symlink(target, self.root / "tunnel")
-            index = self.root / "index.md"
-            support.write(index, index.read_text(encoding="utf-8")
-                          + "- [tunnel/sub/](tunnel/sub/index.md)\n")
-            self.assertNotIn("tunnel/sub",
-                             self.rels(ws.walk_spaces(self.root)))
+            support.write(index, text + "- [mounted/](mounted/index.md)\n"
+                          "- [shared/mounted/](shared/mounted/index.md)\n")
+            default = self.rels(ws.walk_spaces(self.root))
+            self.assertIn("mounted", default)
+            self.assertNotIn("shared/mounted", default)
             marked = {rel: ext for rel, _p, ext
                       in ws.walk_spaces(self.root, include_external=True)}
-            self.assertTrue(marked.get("tunnel/sub"))
+            self.assertFalse(marked["mounted"])
+            self.assertTrue(marked["shared/mounted"])
+
+    def test_symlink_mount_ignores_follow_the_fence(self):
+        # `_meta/ignore.md` rides the same nearest-file lookup as limits,
+        # and the same fence: the host's list reaches an owned mount and
+        # stops at an external one, which answers to its own (here none).
+        support.write(self.root / "_meta" / "ignore.md", "assets\n")
+        with tempfile.TemporaryDirectory() as outside:
+            mine = Path(outside).resolve() / "mine"
+            theirs = Path(outside).resolve() / "theirs"
+            for t in (mine, theirs):
+                support.write(t / "index.md", "# T\n\n## Spaces\n")
+                support.write(t / "assets" / "page.md", "# P\n")
+            os.symlink(mine, self.root / "mounted")
+            os.symlink(theirs, self.root / "shared" / "mounted")
+            index = self.root / "index.md"
+            support.write(index, index.read_text(encoding="utf-8")
+                          + "- [mounted/](mounted/index.md)\n"
+                          + "- [shared/mounted/](shared/mounted/index.md)\n")
+            rels = self.rels(ws.walk_files(self.root, include_external=True))
+            self.assertNotIn("mounted/assets/page.md", rels)   # owned: silenced
+            self.assertIn("shared/mounted/assets/page.md", rels)
+            self.assertNotIn("alpha/assets/deep.md", rels)     # host list holds
+
+    def test_entry_through_a_symlinked_middle_segment_follows_placement(self):
+        # A multi-segment href may group through plain folders; a middle
+        # segment that is a symlink out of the tree is judged by where it
+        # sits, like every mount: owned outside `shared/`, external under.
+        with tempfile.TemporaryDirectory() as outside:
+            mine = Path(outside).resolve() / "mine"
+            theirs = Path(outside).resolve() / "theirs"
+            for t in (mine, theirs):
+                support.write(t / "sub" / "index.md", "# S\n\n## Spaces\n")
+            os.symlink(mine, self.root / "tunnel")
+            os.symlink(theirs, self.root / "shared" / "tunnel")
+            index = self.root / "index.md"
+            support.write(index, index.read_text(encoding="utf-8")
+                          + "- [tunnel/sub/](tunnel/sub/index.md)\n"
+                          + "- [shared/tunnel/sub/]"
+                          "(shared/tunnel/sub/index.md)\n")
+            default = self.rels(ws.walk_spaces(self.root))
+            self.assertIn("tunnel/sub", default)
+            self.assertNotIn("shared/tunnel/sub", default)
+            marked = {rel: ext for rel, _p, ext
+                      in ws.walk_spaces(self.root, include_external=True)}
+            self.assertFalse(marked["tunnel/sub"])
+            self.assertTrue(marked["shared/tunnel/sub"])
+
+    def test_alias_into_external_scope_stays_external(self):
+        # A symlink whose realpath stays inside the tree answers to the
+        # target's own position: an alias into `shared/` cannot lift the
+        # fence, wherever it is placed.
+        os.symlink(self.root / "shared" / "team", self.root / "alias")
+        self.assertEqual(ws.external_reason(self.root / "alias", self.root),
+                         "symlink into external scope")
+        index = self.root / "index.md"
+        support.write(index, index.read_text(encoding="utf-8")
+                      + "- [alias/](alias/index.md)\n")
+        self.assertNotIn("alias", self.rels(ws.walk_spaces(self.root)))
+
+    def test_alias_into_a_symlink_mounted_shared_space_stays_external(self):
+        # The position a link names is judged as spelled: an alias into
+        # `shared/` cannot lift the fence even when the `shared/` mount is
+        # itself a link to a folder outside the tree — by realpath alone
+        # the alias would be an outside target and placement would own it.
+        with tempfile.TemporaryDirectory() as outside:
+            theirs = Path(outside).resolve() / "theirs"
+            support.write(theirs / "index.md", "# T\n\n## Spaces\n")
+            os.symlink(theirs, self.root / "shared" / "mnt")
+            os.symlink(self.root / "shared" / "mnt", self.root / "alias")
+            self.assertEqual(
+                ws.external_reason(self.root / "alias", self.root),
+                "symlink into external scope")
+            index = self.root / "index.md"
+            support.write(index, index.read_text(encoding="utf-8")
+                          + "- [alias/](alias/index.md)\n")
+            self.assertNotIn("alias", self.rels(ws.walk_spaces(self.root)))
+
+    def test_symlink_loops_are_inert(self):
+        # A link that resolves through itself has nothing on disk behind
+        # it. Python 3.13+ resolves a loop "as far as possible" instead of
+        # raising, so scope must answer without recursing — a link asking
+        # about itself reads its parent's state — and the walk names the
+        # entry stale, on every interpreter the CI matrix promises.
+        os.symlink(self.root / "b", self.root / "a")
+        os.symlink(self.root / "a", self.root / "b")
+        os.symlink(self.root / "c" / "sub", self.root / "c")
+        for name in ("a", "c"):
+            self.assertIsNone(ws.external_reason(self.root / name, self.root))
+        index = self.root / "index.md"
+        support.write(index, index.read_text(encoding="utf-8")
+                      + "- [a/](a/index.md)\n- [c/](c/index.md)\n")
+        notes = ws.WalkNotes()
+        rels = self.rels(ws.walk_spaces(self.root, notes=notes))
+        self.assertNotIn("a", rels)
+        self.assertNotIn("c", rels)
+        self.assertLessEqual({"a/", "c/"}, set(notes.stale))
 
     def test_nested_shared_is_external_at_any_depth(self):
         # Every space is a wiki one level down — its `shared/` mounts get
@@ -323,6 +398,86 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         # Nearest ancestor wiki is alpha itself, not the demo root.
         self.assertEqual(r.stdout.splitlines(), ["."])
+
+    def test_own_space_resolves_from_inside_the_folder(self):
+        # A folder's own space is a dot-folder at its root: the wiki every
+        # command resolves from anywhere inside the folder, ahead of the
+        # configured wiki — the CWD rule, one more candidate per ancestor.
+        folder = self.base / "folder"
+        space = folder / ws.OWN_SPACE
+        support.write(space / "index.md", "# F\n\n## Spaces\n")
+        (folder / "src" / "deep").mkdir(parents=True)
+        env = self.config_env(self.wiki)
+        for cwd in (folder / "src" / "deep", folder, space):
+            r = support.run_ws("list", cwd=cwd, env_extra=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn(f"wiki: {space}", r.stderr, cwd)
+
+    def test_a_folder_that_is_a_wiki_beats_its_own_space(self):
+        # The ancestor's own contract wins over the dot-folder it carries
+        # — a repo-root wiki stays one.
+        folder = self.base / "folder"
+        support.write(folder / "index.md", "# F\n\n## Spaces\n")
+        support.write(folder / ws.OWN_SPACE / "index.md",
+                      "# Inner\n\n## Spaces\n")
+        (folder / "src").mkdir()
+        r = support.run_ws("list", cwd=folder / "src")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"wiki: {folder}\n", r.stderr)
+
+    def test_own_space_link_resolves_to_the_space_it_names(self):
+        # The other shape: the space lives in the wiki and the folder's
+        # dot-folder is a link to it. The root is the space itself — one
+        # announcement from anywhere inside the folder — and the
+        # enclosing-wiki advisory names the wiki around it.
+        folder = self.base / "folder"
+        space = self.wiki / "alpha" / "held"
+        support.write(space / "index.md", "# Held\n\n## Spaces\n")
+        (folder / "src").mkdir(parents=True)
+        os.symlink(space, folder / ws.OWN_SPACE)
+        for cwd in (folder / "src", folder / ws.OWN_SPACE):
+            r = support.run_ws("list", cwd=cwd)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn(f"wiki: {space}\n", r.stderr, cwd)
+            self.assertIn(f"nested inside a wiki ({self.wiki / 'alpha'})",
+                          r.stderr, cwd)
+
+    def test_explicit_path_to_a_folder_answers_as_its_own_space(self):
+        # --wiki names the folder, not the dot-folder inside it: a folder
+        # answers by its own contract, else by the space it carries — the
+        # rule the CWD walk applies, applied to the explicit path too.
+        folder = self.base / "folder"
+        space = folder / ws.OWN_SPACE
+        support.write(space / "index.md", "# F\n\n## Spaces\n")
+        r = support.run_ws("list", "--wiki", str(folder), cwd=self.neutral)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"wiki: {space}\n", r.stderr)
+
+    def test_a_broken_own_space_is_named_before_the_fall_through(self):
+        # A dot-folder on disk that is not a wiki — a link gone stale after
+        # the space it named moved, an index without the heading — is
+        # noted, and resolution goes on to the next candidate: the folder
+        # meant to keep a space, so it never loses it in silence.
+        env = self.config_env(self.wiki)
+        cases = {
+            "dangling": lambda own: os.symlink(self.base / "gone", own),
+            "unheaded": lambda own: support.write(own / "index.md", "# F\n"),
+        }
+        for case, make in cases.items():
+            with self.subTest(case=case):
+                folder = self.base / case
+                (folder / "src").mkdir(parents=True)
+                own = folder / ws.OWN_SPACE
+                make(own)
+                r = support.run_ws("list", cwd=folder / "src", env_extra=env)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertIn(f"wiki: {self.wiki}\n", r.stderr)
+                self.assertIn(f"note: {own} is not a wiki (", r.stderr)
+                r = support.run_ws("list", "--wiki", str(folder),
+                                   cwd=self.neutral)
+                self.assertEqual(r.returncode, 2)
+                self.assertIn(f"note: {own} is not a wiki (", r.stderr)
+                self.assertIn(f"not a wiki: {folder}", r.stderr)
 
     def test_cwd_beats_config(self):
         other = self.base / "other"

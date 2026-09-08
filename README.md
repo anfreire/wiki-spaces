@@ -34,7 +34,8 @@ Each skill bundles `scripts/ws.py` — Python 3.9+ standard library only, zero d
 - **Spaces are the unit.** A space is a folder with `index.md` and a `## Spaces` heading — and every space is itself a wiki one level down. Trees nest without limit; any folder anywhere (a repo root, a teammate's share) can be one. Sharing a space is sharing a folder: mount it as a subdirectory, symlink, submodule, or clone.
 - **`## Spaces` is the navigation contract.** It exhaustively lists the spaces directly inside; tools traverse only what it lists. `ws.py audit` detects drift and names the safe repairs; the agent applies them.
 - **Size caps force curation.** Per-file byte caps (5,000 for an `index.md`, 15,000 for a page) make the agent distill the page or reshape the space instead of hoarding — never truncate. Day 30 is better than day 0.
-- **Trust scope protects sharing.** Owned spaces are read freely; anything under `shared/`, a git submodule, or an escaping symlink is external — read on request, written only on explicit instruction.
+- **Trust scope protects sharing.** Owned spaces are read freely; anything under `shared/` or a git submodule is external — read on request, written only on explicit instruction. A symlink answers to where it sits, like a clone.
+- **Any folder can keep its own space.** A `.wiki-spaces/` folder at its root resolves as the wiki from anywhere inside — a repo's knowledge beside its code, so "save this" lands with it — and a symlink joins it to your personal wiki as a space of yours like any other.
 
 Opt-in conventions — frontmatter, taxonomy, templates, an append-only log, custom caps — are cataloged in [CONVENTIONS.md](CONVENTIONS.md).
 

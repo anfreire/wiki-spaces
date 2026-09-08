@@ -62,7 +62,7 @@ If absent, tags are free-form.
 
 ### `_meta/limits.md`
 
-Size discipline is default-on. It's configured via this file. Caps are enforced in UTF-8 bytes. Frontmatter's included in the count. Basename-keyed defaults apply:
+Size discipline is default-on; this file is where the user sets caps that differ from the defaults — a skill reads it and never raises a cap to fit a write. Caps are enforced in UTF-8 bytes. Frontmatter's included in the count. Basename-keyed defaults apply:
 
 | Basename | Cap (bytes) |
 |---|---|
@@ -71,7 +71,7 @@ Size discipline is default-on. It's configured via this file. Caps are enforced 
 | `hot.md` | 100000 |
 | `*.md` | 15000 |
 
-Shrinking writes are always allowed — `check-size --stdin` reports a planned write that shrinks an over-cap file as `ok … shrinking write is progress`. Size checks run via `python3 scripts/ws.py check-size` — planned content piped via `--stdin`, or the file on disk right after an edit. The `scripts/ws.py audit` command flags over-cap files after the fact. Plain `basename: bytes` lines configure the limits file; the literal name `*.md` re-caps the catch-all row above. Non-matching lines are ignored. No glob patterns, paths, or first-match-wins chains are supported — `*.md` is a reserved name, not a glob.
+Shrinking writes are always allowed — `check-size --stdin` reports a planned write that shrinks an over-cap file as `ok … shrinking write is progress`. Size checks run via `python3 scripts/ws.py check-size` — planned content piped via `--stdin`, or the file on disk right after an edit, where the verdict is the cap alone. The `scripts/ws.py audit` command flags over-cap files after the fact. Plain `basename: bytes` lines configure the limits file; the literal name `*.md` re-caps the catch-all row above. Non-matching lines are ignored. No glob patterns, paths, or first-match-wins chains are supported — `*.md` is a reserved name, not a glob.
 
 Any space can carry its own `_meta/limits.md`. The nearest one at or above a file governs it — closest ancestor wins, the same rule `_template.md` uses. The lookup never crosses a trust boundary: an external space answers to its own limits or the defaults, never the host's. A limits file under `shared/` sits on the external side of the fence and covers mounts beneath it that lack their own; a path outside the wiki answers to the defaults alone.
 
@@ -203,6 +203,7 @@ Reserved folder names, honored at any depth:
 | Name | Behavior |
 |---|---|
 | `shared/` | External by default (the exact lowercase name) — trust scope is defined in [AGENTS.md](AGENTS.md). |
+| `.wiki-spaces/` | A folder's own space, kept at its root and resolved as the wiki from anywhere inside the folder — discovery is defined in [AGENTS.md](AGENTS.md). Dot-prefixed, so no walk enters it as a child. |
 | `_archives/` | Excluded from audits and scans. |
 | `_meta/` | Configuration files. |
 | `.obsidian/` | Obsidian's vault configuration — never read, never written. |

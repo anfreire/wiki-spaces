@@ -1,6 +1,6 @@
 ---
 name: ws-update
-description: Create or update content in the user's wiki — and set the wiki up when none exists yet. Use when the user says "update wiki", "sync project", "save this", "capture this", "store this research", "set up my wiki", "create a wiki", or wants to distill knowledge from a project, conversation, or research session, or to adopt an existing folder of notes as a wiki. When a session produced durable knowledge worth keeping, offer once at a natural wrap-up — never per-turn.
+description: Create or update content in the user's wiki — and set the wiki up when none exists yet. Use when the user says "update wiki", "sync project", "save this", "capture this", "store this research", "set up my wiki", "create a wiki", "set up a wiki for this project", or wants to distill knowledge from a project, conversation, or research session, or to adopt an existing folder of notes as a wiki. When a session produced durable knowledge worth keeping, offer once at a natural wrap-up — never per-turn.
 ---
 
 # Wiki Update
@@ -14,7 +14,7 @@ A wiki is a folder whose `index.md` carries a `## Spaces` heading. `## Spaces` i
 
 ## Resolving the wiki
 
-Resolution order: an explicit path from the user → the nearest CWD-ancestor folder that is a wiki → the `wiki` key in `~/.config/wiki-spaces/config`. The user's words override the mechanics: "my wiki" means the configured one even when CWD sits inside another wiki (a company repo, say). When a CWD wiki and a different configured wiki both exist, announce which root you resolved; ask once if intent is ambiguous. Never silently operate on the wrong wiki.
+Resolution order: an explicit path from the user → the nearest CWD-ancestor folder that is a wiki, or carries a `.wiki-spaces/` folder that is one (a folder's own space) → the `wiki` key in `~/.config/wiki-spaces/config`. The user's words override the mechanics: "my wiki" means the configured one even when CWD sits inside another wiki (a company repo, say). When a CWD wiki and a different configured wiki both exist, announce which root you resolved; ask once if intent is ambiguous. Never silently operate on the wrong wiki.
 
 ## The bundled script
 
@@ -26,17 +26,17 @@ Resolution order: an explicit path from the user → the nearest CWD-ancestor fo
 - `… check-size <target> [--stdin] --wiki <root>` — cap verdict for a file; pipe planned content with `--stdin` to check before writing.
 - `… audit --wiki <root>` — contract drift, entries crossing a space boundary, over-cap or unreadable files, unhealthy mounts. Findings name their repair where one is safe to name (a `missing entry` prints the exact line to add); apply repairs as ordinary edits and re-run the audit to verify — the script never writes.
 
-Trust the script's output over re-deriving structure by hand. Stdout is data; stderr carries the resolved root (`audit` prints it as its stdout header instead) and `note:` advisories naming whatever a walk skipped (and the enclosing wiki when the root is nested inside one) — relay them when they could change the answer.
+Trust the script's output over re-deriving structure by hand. Stdout is data; stderr carries the resolved root (`audit` prints it as its stdout header instead) and `note:` advisories naming whatever a walk skipped, the enclosing wiki when the root is nested inside one, and the configured wiki when the root is another — relay them when they could change the answer.
 
 ## Trust scope and size discipline
 
-Owned vs external is relative to the resolved root: anything under a folder named `shared/` (at any depth), a git submodule, or a symlink escaping the tree is external. Reads cross owned spaces by default and enter external ones only when the user explicitly asks. Writes stay inside the targeted space; any other space — owned or external — is written only on explicit instruction.
+Owned vs external is relative to the resolved root: anything under a folder named `shared/` (at any depth), a git submodule, or a symlink into either is external; a symlink to a folder outside the tree answers to where it sits, like a clone. Reads cross owned spaces by default and enter external ones only when the user explicitly asks. Writes stay inside the targeted space; any other space — owned or external — is written only on explicit instruction.
 
 Caps are UTF-8 bytes including frontmatter, keyed by basename: `index.md` 5000, `log.md` and `hot.md` 100000, any other `*.md` 15000.
 
-- A `_meta/limits.md` of plain `basename: bytes` lines overrides them — the nearest one at or above the file wins, like `_template.md`, and the literal name `*.md` re-caps the content-page catch-all.
-- Check caps with `check-size`: pipe planned new content via `--stdin` before writing it; after editing a file in place, check the file itself — a write that shrinks an over-cap file reports `ok`, progress, so repairs converge.
-- An overflow is a signal about shape, not just size: distill the page or reshape the space — never truncate.
+- Caps belong to the user: a wiki that wants different ones sets them in `_meta/limits.md`, and `check-size` reads them.
+- Check caps with `check-size`: pipe the planned content via `--stdin` before every write, new page or edit — a write that shrinks an over-cap file reports `ok`, progress, so repairs converge; a file checked on disk answers to the cap alone.
+- An overflow is a signal about shape, not just size: distill the page, reshape the space, or promote a page that has grown into one — never truncate, never raise the cap.
 - The exception is `log.md`: an over-cap log rolls — move it whole to `_archives/log-<YYYYMMDD>.md` and start a fresh one — so the history archives, never shrinks.
 
 Conventions are opt-in per wiki. Read the markers present at the scope root (the space the user targeted, else the resolved root) — `log.md`, `_meta/taxonomy.md`, `_meta/limits.md`, `_meta/ignore.md`, frontmatter on pages, `_template.md`, `hot.md`, `.git` — and degrade gracefully when one is absent. If `log.md` exists, append one line per operation:
@@ -48,7 +48,7 @@ printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '<OP> <details>' >> <scope-roo
 
 ## Initialization
 
-When nothing resolves — no explicit path, no CWD-ancestor wiki, no valid config — set one up inline: follow [references/init.md](references/init.md), then resume the request. A broken configured path (missing on disk, no `index.md`, not absolute) is a hard stop, not a setup trigger — surface it and let the user decide.
+When nothing resolves — no explicit path, no CWD-ancestor wiki, no valid config — set one up inline: follow [references/init.md](references/init.md), then resume the request. A broken configured path (missing on disk, no `index.md`, not absolute) is a hard stop, not a setup trigger — surface it and let the user decide. A folder's own space — asked for ("set up a wiki for this project"), or offered once when a sync targets a folder that has none — follows [references/own-space.md](references/own-space.md), whether or not a wiki already resolves.
 
 ## Procedure
 
@@ -63,14 +63,14 @@ When nothing resolves — no explicit path, no CWD-ancestor wiki, no valid confi
    | Research capture | "store this research" | findings from the session |
 4. **Extract knowledge.** Direct add: take the content as handed — your job is placement and dedup, not re-synthesis. Project sync: decisions and rationale, patterns, tool/API wiring, trade-offs, results — from the files and recent git history. Conversation: durable conclusions and decisions, written as facts ("X works by…"), never chat summary. Research: what took effort and would be expensive to re-derive.
 5. **Filter and deduplicate.** Knowledge-capture wikis get the noise filter: answerable from the code or a quick search? skip; needed in 3 months? keep. Content-store wikis (recipes, journals, runbooks) skip the filter — every entry is intentional. Enumerate existing pages via `files` and rank by filename/path/frontmatter overlap: when a near-match exists, **merge into it instead of creating a sibling**.
-6. **Place.** `list` prints each space with its entry description — the placement hints; check top-level plain folders too. Match semantically: project-scoped content goes under the project-grouping space (`projects/<name>/…` or whatever the wiki calls it); global concepts go to the topical folder even when captured inside a project. Several equally plausible candidates, or none → ask. Flat wiki → write at the root. Names follow the wiki's own pattern — match what existing pages do; where no pattern exists, default to lowercase, hyphenated, ≤50 chars.
+6. **Place.** `list` prints each space with its entry description — the placement hints; check top-level plain folders too. Match semantically: knowledge about a source belongs with that source's space when one exists — its own `.wiki-spaces/`, or its space in the wiki; knowledge reusable beyond it belongs with its topic. Standing in a folder's own space, that topic's home is the configured wiki the script notes — a second root: name the page and its place there, and on a yes take that root through steps 2 and 5 before writing. Several equally plausible candidates, or none → ask. Flat wiki → write at the root. Names follow the wiki's own pattern — match what existing pages do; where no pattern exists, default to lowercase, hyphenated, ≤50 chars.
 7. **Check the cap on every write.** Pipe planned content before writing:
    ```sh
    python3 <skill-dir>/scripts/ws.py check-size <target> --stdin --wiki <root> <<'EOF'
    <planned content>
    EOF
    ```
-   For an edit, apply it and `check-size` the file itself (a shrinking write reports `ok`; the audit backstops). On `over` — never truncate, never ignore. Re-read the page and its space's index, diagnose why it overflowed, then act:
+   An edit pipes its planned content the same way (a shrink of an over-cap page reports `ok`); the audit backstops what slips through. On `over` — never truncate, never ignore, never raise the cap. Re-read the page and its space's index, diagnose why it overflowed, then act:
    - **Bloat** — padding, near-duplicates, prose pasted in raw, entries you wouldn't re-create today → distill: merge, tighten, drop. The cap exists to force this judgment.
    - **Growth** — genuinely distinct topics sharing one file → reshape the space to what it would look like had it been designed for today's content: self-standing sibling pages under a hub, a promotion, or a regrouped layout ([Space operations](#space-operations) links both procedures).
    Both can apply — distill first, then reshape what remains. Update every index you touch. Filenames like `topic-2.md` or `topic-more.md` mean a file was split without rethinking the space — never ship them.
@@ -102,4 +102,4 @@ Register it in the nearest ancestor space's `## Spaces` — `- [<name>/](<name>/
 
 **Mount someone else's space**: [references/mount.md](references/mount.md). **Share a space of yours**: [references/share.md](references/share.md).
 
-**Promote a page into a space** (the riskiest manual operation; snapshot first): [references/promote.md](references/promote.md). **Rename, move, merge, or demote a space** (snapshot first): [references/restructure.md](references/restructure.md).
+**Promote a page into a space** — routine once a page's shape asks for it; inventory its links, snapshot, move, rewrite, verify: [references/promote.md](references/promote.md). **Rename, move, merge, or demote a space** on the same skeleton: [references/restructure.md](references/restructure.md).

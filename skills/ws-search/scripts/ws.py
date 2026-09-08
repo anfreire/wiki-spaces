@@ -25,9 +25,10 @@ that judgment.
 Stdout is data. Stderr carries the resolved root (the audit prints it
 as its stdout header instead) and `note:` advisories naming what a walk
 skipped (external paths, unreachable spaces, stale entries, unreadable
-files, unlistable directories) and the enclosing wiki when the resolved
-root is nested inside one — silence speaks for the walk's reach, never
-the whole disk.
+files, unlistable directories), the enclosing wiki when the resolved
+root is nested inside one, and the configured wiki when the resolved
+root is not it — silence speaks for the walk's reach, never the whole
+disk.
 Stdlib-only python3 (3.9+), zero dependencies, read-only: no command
 writes to a wiki. Exit codes: 0 clean, 1 findings (for grep, no match),
 2 cannot operate.
@@ -51,6 +52,10 @@ from urllib.parse import unquote
 DEFAULT_CAPS = {"index.md": 5000, "log.md": 100000, "hot.md": 100000}
 DEFAULT_MD_CAP = 15000
 RESERVED_NAMES = {"_archives", "_meta"}
+# A folder's own space: a dot-folder at its root, resolved as the wiki
+# from anywhere inside the folder. Dot-prefixed, so no walk enters it as
+# a child — it is reached as a root, or through a mount.
+OWN_SPACE = ".wiki-spaces"
 # An entry's href is percent-encoded, so any folder name survives the
 # entry grammar: encode what would break or blur the `[label](href)`
 # shape (`%` itself first, so encoding round-trips through the
@@ -303,29 +308,58 @@ def config_wiki() -> tuple[Path | None, str | None]:
         if p.is_absolute() and is_wiki(p):
             return p, None
         if reason is None:
-            why = ("not absolute" if not p.is_absolute()
-                   else "missing on disk" if not p.is_dir()
-                   else "no index.md with a ## Spaces heading")
+            why = "not absolute" if not p.is_absolute() else _unwiki_reason(p)
             reason = f"config `wiki` ignored: {p} ({why})"
     return None, reason
 
 
+def _unwiki_reason(p: Path) -> str:
+    """Why `p` is not a wiki, for an advisory: nothing on disk (a link
+    gone stale, say), or no index.md with the heading — naming a
+    near-miss heading, since the author almost certainly meant the
+    contract."""
+    if not p.is_dir():
+        return "a broken link" if p.is_symlink() else "missing on disk"
+    text = read_text(p / "index.md")
+    miss = _heading_near_miss(text) if text is not None else None
+    return ("no index.md with a ## Spaces heading"
+            + (f'; it carries "{miss}" — rename it' if miss else ""))
+
+
+def _wiki_at(p: Path) -> Path | None:
+    """The wiki a folder answers as: its own contract, else the space it
+    carries (OWN_SPACE, returned resolved: a link to a space in another
+    wiki names that space, so the root and its advisories read the same
+    from every entry), else None. A dot-folder on disk that is not a
+    wiki is noted, never passed over in silence — the folder meant to
+    keep a space, and the next candidate would take its place
+    unannounced."""
+    if is_wiki(p):
+        return p
+    own = p / OWN_SPACE
+    if is_wiki(own):
+        return safe_resolve(own) or own
+    if own.is_symlink() or own.exists():
+        note(f"{own} is not a wiki ({_unwiki_reason(own)}) — skipped")
+    return None
+
+
 def resolve_root(explicit: str | None) -> Path:
-    """Explicit path, else nearest CWD-ancestor wiki, else the `wiki` key in
-    the user config. Exits 2 when nothing resolves — naming the configured
-    path it had to ignore, so a broken config never fails silently."""
+    """Explicit path, else the nearest CWD ancestor, else the `wiki` key
+    in the user config — every candidate answering as `_wiki_at` says.
+    Exits 2 when nothing resolves — naming the configured path it had to
+    ignore, so a broken config never fails silently."""
     if explicit:
         p = Path(os.path.abspath(os.path.expanduser(explicit)))
-        if not is_wiki(p):
-            text = read_text(p / "index.md")
-            miss = _heading_near_miss(text) if text is not None else None
-            die(f"not a wiki: {p} (no index.md with a ## Spaces heading"
-                + (f'; it carries "{miss}" — rename it' if miss else "") + ")")
-        return p
+        found = _wiki_at(p)
+        if found is None:
+            die(f"not a wiki: {p} ({_unwiki_reason(p)})")
+        return found
     cwd = Path(os.getcwd())
     for p in (cwd, *cwd.parents):
-        if is_wiki(p):
-            return p
+        found = _wiki_at(p)
+        if found is not None:
+            return found
     found, reason = config_wiki()
     if found is not None:
         return found
@@ -346,6 +380,20 @@ def _enclosing_wiki(root: Path) -> Path | None:
         if is_wiki(p):
             return p
     return None
+
+
+def _configured_elsewhere(root: Path) -> Path | None:
+    """The configured wiki when the resolved root is not it — a folder's
+    own space resolved from CWD, a nested space re-rooted: the advisory
+    names the canonical root, so the one the caller stands in is never
+    mistaken for it, and what belongs past the root has its address."""
+    configured, _reason = config_wiki()
+    if configured is None:
+        return None
+    c, r = safe_resolve(configured), safe_resolve(root)
+    if c is None or r is None or c == r:
+        return None
+    return configured
 
 
 def die(msg: str) -> NoReturn:
@@ -425,19 +473,38 @@ def _is_repo(path: Path) -> bool:
     return (path / ".git").exists()
 
 
+def _link_target(path: Path) -> Path | None:
+    """The path a symlink names — one hop, normalized, unresolved: the
+    position the author pointed at, whatever sits there now."""
+    try:
+        raw = os.readlink(path)
+    except OSError:
+        return None
+    return Path(os.path.normpath(os.path.join(os.fspath(path.parent), raw)))
+
+
 def _symlink_reason(path: Path, root: Path) -> str | None:
-    """Why a symlink at `path` leaves trust scope: unresolvable or
-    escaping the tree, or resolving into external scope. None for an
-    owned alias — a realpath that stays inside the tree and owned."""
+    """Why a symlink at `path` leaves trust scope: the position it names
+    inside the tree is external — an alias into `shared/` or a
+    submodule, judged by the path the link spells, so a `shared/` mount
+    that is itself a link still fences — or its realpath lands inside
+    the tree at one. A target outside the tree has no position to
+    judge, so the link answers to where it sits, like a clone — under
+    `shared/` external, elsewhere owned (a folder's own space mounted
+    from the wiki). None for an owned alias, an outside target, or a
+    link with nothing on disk behind it (the walk names it stale)."""
     target = safe_resolve(path)
     root_real = safe_resolve(root)
-    if target is None or root_real is None or target.is_symlink():
-        return "symlink escapes the wiki tree"
-    trel = _rel_parts(target, root_real)
-    if trel is None:
-        return "symlink escapes the wiki tree"
-    if _scope_reason(trel, root):
-        return "symlink into external scope"
+    if target is None or root_real is None:
+        return None
+    named = _link_target(path)
+    for candidate, base in ((named, root), (named, root_real),
+                            (target, root_real)):
+        if candidate is None:
+            continue
+        rel = _rel_parts(candidate, base)
+        if rel is not None and _scope_reason(rel, root):
+            return "symlink into external scope"
     return None
 
 
@@ -458,9 +525,11 @@ def _scope_state(root: Path,
     mounts deserve the same fence); a declared git submodule is external
     — judged against the .gitmodules of the repo that declares it, at
     every git boundary on the path, whichever root resolved; a symlink
-    component whose realpath escapes the tree or lands in external scope
-    marks external from that point down, so scope, caps, ignores, and
-    advisories cannot disagree about a mount."""
+    component whose target, as named or as resolved, stays inside the
+    tree at an external position marks external from that point down —
+    one whose target lies outside the tree answers to where it sits,
+    like a clone — so scope, caps, ignores, and advisories cannot
+    disagree about a mount."""
     hit = _SCOPE_STATE.get((root, parts))
     if hit is not None:
         return hit
@@ -471,6 +540,12 @@ def _scope_state(root: Path,
         prefix = prefix[:-1]
     state = _SCOPE_STATE.get((root, prefix), (None, root, ""))
     for q in reversed(pending):
+        # Provisional, the parent's state: a link that names a path
+        # through itself asks for this prefix while it is being judged
+        # — a loop, which Python 3.13+ resolves "as far as possible"
+        # instead of raising — and reads this instead of recursing; the
+        # walk names the link stale.
+        _SCOPE_STATE[(root, q)] = state
         reason, repo, rel = state
         if reason is None:
             part = q[-1]
@@ -1140,8 +1215,8 @@ def main(argv: list[str] | None = None) -> int:
                         "then the config `wiki` key)")
         if external:
             sp.add_argument("--external", action="store_true",
-                            help="also cross external spaces (shared/, foreign "
-                            "submodules, escaping symlinks)")
+                            help="also cross external spaces (shared/, git "
+                            "submodules, symlinks into either)")
         return sp
 
     command("list", "spaces reachable via the ## Spaces contract, each "
@@ -1172,6 +1247,9 @@ def main(argv: list[str] | None = None) -> int:
         note(f"root is nested inside a wiki ({enclosing}) — scope is "
              "relative to the resolved root: what the enclosing wiki "
              "fences as external can read as owned here")
+    configured = _configured_elsewhere(root)
+    if configured is not None:
+        note(f"the configured wiki is {configured} — not the resolved root")
     if args.cmd == "list":
         return cmd_list(root, args.external)
     if args.cmd == "files":

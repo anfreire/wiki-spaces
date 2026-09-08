@@ -1,7 +1,8 @@
 """The stderr advisory channel: the resolved root announced on every data
 command, and `note:` lines naming what a walk skipped — unreachable spaces,
-external paths, unreadable files — and the enclosing wiki when the root is
-nested inside one. Stdout stays pure data throughout."""
+external paths, unreadable files — the enclosing wiki when the root is
+nested inside one, and the configured wiki when the root is another.
+Stdout stays pure data throughout."""
 import tempfile
 import unittest
 from pathlib import Path
@@ -74,6 +75,32 @@ class NotesTests(unittest.TestCase):
         # The top-level root has no enclosing wiki — no note.
         r = support.run_ws("list", "--wiki", str(self.root))
         self.assertNotIn("nested inside", r.stderr)
+
+    def test_configured_wiki_is_named_whenever_the_root_is_not_it(self):
+        # Standing anywhere but the configured wiki itself — a folder's
+        # own space, a nested space re-rooted — the advisory names the
+        # canonical root: the address placement past the root needs, a
+        # fact prose alone carried until now. The configured wiki itself
+        # gets no such note.
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td).resolve() / "home"
+            support.write(home / "index.md", "# Home\n\n## Spaces\n")
+            cfg = Path(td) / "cfg"
+            support.write(cfg / "wiki-spaces" / "config", f"wiki = {home}\n")
+            env = {"XDG_CONFIG_HOME": str(cfg)}
+            for cmd in (("list",), ("audit",)):
+                r = support.run_ws(*cmd, "--wiki", str(self.root),
+                                   env_extra=env)
+                self.assertIn(f"note: the configured wiki is {home}",
+                              r.stderr, cmd)
+            support.write(cfg / "wiki-spaces" / "config",
+                          f"wiki = {self.root}\n")
+            r = support.run_ws("list", "--wiki", str(self.root), env_extra=env)
+            self.assertNotIn("configured wiki", r.stderr)
+            r = support.run_ws("list", "--wiki", str(self.root / "alpha"),
+                               env_extra=env)
+            self.assertIn(f"note: the configured wiki is {self.root}",
+                          r.stderr)
 
     def test_unreadable_files_are_named_by_grep(self):
         (self.root / "bad.md").write_bytes(b"\xff\xfe nope\n")

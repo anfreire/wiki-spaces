@@ -244,10 +244,11 @@ class CapTests(unittest.TestCase):
             self.assertEqual(ws.cap_for("p.md", caps), 15000)
             self.assertEqual(ws.cap_for("index.md", caps), 5000)
 
-    def test_symlink_mount_caps_never_inherit_the_hosts_limits(self):
-        # The third externality rule gets the same fence the other two
-        # do: a symlink-mounted space answers to its own limits or the
-        # defaults, never the host's.
+    def test_symlink_mount_caps_follow_the_fence(self):
+        # A symlink answers to where it sits, like a clone. Mounted outside
+        # `shared/` it is owned: the host's table reaches it unless it
+        # carries its own (nearest wins). Under `shared/` it is external:
+        # its own limits or the defaults, never the host's.
         with tempfile.TemporaryDirectory() as td:
             base = Path(td).resolve()
             root = base / "host"
@@ -256,15 +257,20 @@ class CapTests(unittest.TestCase):
             support.write(base / "m1" / "index.md", "# M1\n\n## Spaces\n")
             support.write(base / "m2" / "index.md", "# M2\n\n## Spaces\n")
             support.write(base / "m2" / "_meta" / "limits.md", "*.md: 50\n")
-            os.symlink(base / "m1", root / "mnt")
-            os.symlink(base / "m2", root / "mnt2")
+            (root / "shared").mkdir()
+            os.symlink(base / "m1", root / "mine")
+            os.symlink(base / "m2", root / "mine2")
+            os.symlink(base / "m1", root / "shared" / "theirs")
+            os.symlink(base / "m2", root / "shared" / "theirs2")
 
             def cap(p):
                 return ws.cap_for("p.md", ws.caps_for_path(p, root))
 
             self.assertEqual(cap(root / "p.md"), 90000)
-            self.assertEqual(cap(root / "mnt" / "p.md"), 15000)
-            self.assertEqual(cap(root / "mnt2" / "p.md"), 50)
+            self.assertEqual(cap(root / "mine" / "p.md"), 90000)
+            self.assertEqual(cap(root / "mine2" / "p.md"), 50)
+            self.assertEqual(cap(root / "shared" / "theirs" / "p.md"), 15000)
+            self.assertEqual(cap(root / "shared" / "theirs2" / "p.md"), 50)
 
 
 class CheckSizeTests(unittest.TestCase):
@@ -360,23 +366,43 @@ class CheckSizeTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertIn("target is external", r.stderr)
 
-    def test_symlink_mounted_verdict_is_root_independent(self):
-        # A file inside a symlink mount is external however it is
-        # reached: the mount's caps govern (not the host's), the note
-        # fires, and the verdict matches the mount resolved as its own
-        # root.
+    def test_external_symlink_mounted_verdict_is_root_independent(self):
+        # A file inside a symlink mount under `shared/` is external
+        # however it is reached: the mount's caps govern (not the host's),
+        # the note fires, and the verdict matches the mount resolved as
+        # its own root.
         with tempfile.TemporaryDirectory() as outside:
             target = Path(outside).resolve() / "elsewhere"
             support.write(target / "index.md", "# E\n\n## Spaces\n")
             support.write(target / "roomy.md", "x" * 17000)
-            os.symlink(target, self.root / "mnt")
-            r = support.run_ws("check-size", "mnt/roomy.md",
+            (self.root / "shared").mkdir(exist_ok=True)
+            os.symlink(target, self.root / "shared" / "mnt")
+            r = support.run_ws("check-size", "shared/mnt/roomy.md",
                                "--wiki", str(self.root))
             self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
             self.assertIn("target is external", r.stderr)
             r = support.run_ws("check-size", "roomy.md",
                                "--wiki", str(target))
             self.assertEqual(r.returncode, 1)
+
+    def test_owned_symlink_mount_answers_to_the_nearest_limits(self):
+        # A folder's own space mounted outside `shared/` is owned, so from
+        # the wiki it answers to the nearest `_meta/limits.md` — the
+        # wiki's, unless it carries its own — with no external note.
+        # Resolved as its own root it answers to its own fences (the
+        # nested-root rule): here the defaults, and the page is over.
+        support.write(self.root / "_meta" / "limits.md", "*.md: 20000\n")
+        with tempfile.TemporaryDirectory() as outside:
+            space = Path(outside).resolve() / "folder" / ws.OWN_SPACE
+            support.write(space / "index.md", "# P\n\n## Spaces\n")
+            support.write(space / "roomy.md", "x" * 17000)
+            os.symlink(space, self.root / "mnt")
+            r = support.run_ws("check-size", "mnt/roomy.md",
+                               "--wiki", str(self.root))
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertNotIn("target is external", r.stderr)
+            r = support.run_ws("check-size", "roomy.md", "--wiki", str(space))
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
 
     def test_shrinking_write_toward_the_cap_is_progress(self):
         # CONVENTIONS: "Shrinking writes are always allowed." Over the cap

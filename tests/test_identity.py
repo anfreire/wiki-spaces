@@ -9,6 +9,7 @@ procedure answers the same way: the config block init.md carries must
 feed the resolver it writes for."""
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -213,6 +214,137 @@ class IdentityTests(unittest.TestCase):
                         env_extra={"XDG_CONFIG_HOME": str(cfg_home)})
                     self.assertEqual(out.returncode, 0, out.stderr)
                     self.assertIn(f"wiki: {wiki}", out.stderr)
+
+    def test_own_space_setup_blocks_feed_the_resolver(self):
+        """own-space.md's shell blocks are the producer of a folder's own
+        space and ws.py's resolver the consumer. Run them exactly as the
+        reference states them, placeholders filled: both shapes must
+        resolve from inside the folder, the audit's `missing entry` line
+        must register the link, git must ignore the wiki-held link, and
+        a second run must change nothing the first made."""
+        ws = support.load_ws()
+        ref = (support.REPO / "skills" / "ws-update" / "references"
+               / "own-space.md").read_text(encoding="utf-8")
+        blocks = re.findall(r"```sh\n(.*?)```", ref, re.DOTALL)
+        self.assertEqual(len(blocks), 3, "own-space.md must carry three "
+                         "blocks: create with the folder, link from the "
+                         "wiki, create in the wiki")
+        create_with, link_from_wiki, create_in = blocks
+        skill_dir = support.REPO / "skills" / "ws-update"
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td).resolve()
+            wiki = base / "wiki"
+            support.write(wiki / "index.md", "# W\n\n## Spaces\n\n"
+                          "- [projects/](projects/index.md)\n")
+            support.write(wiki / "projects" / "index.md",
+                          "# P\n\n## Spaces\n")
+            cfg_home = base / "xdg"
+            support.write(cfg_home / "wiki-spaces" / "config",
+                          f"wiki = {wiki}\n")
+            env = {"XDG_CONFIG_HOME": str(cfg_home)}
+
+            def filled(block, folder, name):
+                for placeholder, value in {
+                    "/path/to/folder": str(folder),
+                    "~/Documents/Wiki": str(wiki),
+                    "<skill-dir>": str(skill_dir),
+                    "<name>": name,
+                    "<what the space holds — one sentence, in their words>":
+                        f"What {name} knows.",
+                    "<the space it belongs under, else the root>": "projects",
+                }.items():
+                    block = block.replace(placeholder, value)
+                self.assertIsNone(re.search(r"<[^>\n]*>", block),
+                                  f"placeholder left unfilled:\n{block}")
+                return block
+
+            def run(script):
+                return subprocess.run(["sh", "-c", script],
+                                      capture_output=True, text=True,
+                                      env={**os.environ, **env})
+
+            def paste_missing_entry(audit_stdout):
+                lines = [line.split("add: ", 1)[1]
+                         for line in audit_stdout.splitlines()
+                         if "missing entry" in line]
+                self.assertEqual(len(lines), 1, audit_stdout)
+                index = wiki / "projects" / "index.md"
+                support.write(index, index.read_text(encoding="utf-8")
+                              + lines[0] + " — pasted\n")
+                r = support.run_ws("audit", "--wiki", str(wiki),
+                                   env_extra=env)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+            def resolves_to(folder, space):
+                r = support.run_ws("audit", cwd=folder / "src", env_extra=env)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertIn(f"wiki: {space}\n", r.stdout)
+
+            # Shape one: the space lives with the folder.
+            folder = base / "one"
+            (folder / "src").mkdir(parents=True)
+            r = run(filled(create_with, folder, "one"))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            index = folder / ws.OWN_SPACE / "index.md"
+            made = index.read_text(encoding="utf-8")
+            self.assertIn("## Spaces", made)
+            r = run(filled(create_with, folder, "one"))
+            self.assertNotEqual(r.returncode, 0, "a taken name must refuse")
+            self.assertEqual(index.read_text(encoding="utf-8"), made)
+            r = run(filled(link_from_wiki, folder, "one"))
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            paste_missing_entry(r.stdout)
+            resolves_to(folder, folder / ws.OWN_SPACE)
+            run(filled(link_from_wiki, folder, "one"))
+            self.assertEqual(sorted(os.listdir(folder / ws.OWN_SPACE)),
+                             ["index.md"], "a second link must not land "
+                             "inside the space")
+
+            # Shape two: the space lives in the wiki, the folder links.
+            folder = base / "two"
+            (folder / "src").mkdir(parents=True)
+            r = run(filled(create_in, folder, "two"))
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            paste_missing_entry(r.stdout)
+            space = wiki / "projects" / "two"
+            made = (space / "index.md").read_text(encoding="utf-8")
+            resolves_to(folder, space)
+            run(filled(create_in, folder, "two"))
+            self.assertEqual((space / "index.md").read_text(encoding="utf-8"),
+                             made)
+            self.assertEqual(sorted(os.listdir(space)), ["index.md"])
+            ignore = (folder / ".gitignore").read_text(encoding="utf-8")
+            self.assertEqual(ignore.count("/.wiki-spaces"), 1)
+            if shutil.which("git") is None:
+                self.skipTest("git not installed")
+            git = ["git", "-C", str(folder)]
+            subprocess.run([*git, "init", "-q"], check=True,
+                           capture_output=True)
+            r = subprocess.run([*git, "status", "--porcelain"],
+                               capture_output=True, text=True)
+            self.assertNotIn(ws.OWN_SPACE, r.stdout)
+            r = subprocess.run([*git, "check-ignore", "-q", ws.OWN_SPACE])
+            self.assertEqual(r.returncode, 0, "git must ignore the link")
+
+    def test_prose_states_the_own_space_name(self):
+        """The name of a folder's own space lives in code once
+        (ws.OWN_SPACE) and is restated wherever prose teaches it —
+        the spec, the core block, CONVENTIONS.md, README.md, ws-update's
+        own steps, and the references that set one up or mount one. Pin
+        every restatement to the code."""
+        ws = support.load_ws()
+        needle = f"`{ws.OWN_SPACE}/`"
+        core = CORE_RE.search(
+            support.SKILLS[0].read_text(encoding="utf-8")).group(1)
+        self.assertIn(needle, core)
+        for name in ("AGENTS.md", "CONVENTIONS.md", "README.md",
+                     "skills/ws-update/SKILL.md",
+                     "skills/ws-update/references/own-space.md",
+                     "skills/ws-update/references/mount.md"):
+            text = CORE_RE.sub("", (support.REPO / name).read_text(
+                encoding="utf-8"))        # the core block is pinned above
+            self.assertIn(needle, text,
+                          f"{name} drifted from ws.OWN_SPACE")
 
     def test_prose_cap_tables_state_the_code_defaults(self):
         """The caps live in code once (ws.DEFAULT_CAPS) but are restated in

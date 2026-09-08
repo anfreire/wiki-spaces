@@ -108,7 +108,7 @@ The rewrite drops any previous `wiki` line and keeps everything else: the resolv
 
 ## 4. Verify and confirm
 
-Run `python3 <skill-dir>/scripts/ws.py audit --wiki "$WIKI"` — a fresh scaffold is clean in milliseconds; an adoption may surface findings (over-cap imports, contract drift). Present findings with the skill's overflow procedure (distill the page or reshape the space; `_meta/limits.md` override only when a page is intentionally that size). Close with: "Your wiki is at `<path>` — ask me to search it, save to it, or audit it from anywhere."
+Run `python3 <skill-dir>/scripts/ws.py audit --wiki "$WIKI"` — a fresh scaffold is clean in milliseconds; an adoption may surface findings (over-cap imports, contract drift). Present findings with the skill's overflow procedure (distill the page, reshape the space, or promote; a cap is the user's to change). Close with: "Your wiki is at `<path>` — ask me to search it, save to it, or audit it from anywhere."
 
 In the same close, offer the companions once: `npx skills add kepano/obsidian-skills --skill obsidian-markdown --skill obsidian-bases` adds Obsidian syntax depth (callouts, embeds, Bases) — run it only on a yes. The ws skills work fully without it.
 
@@ -119,7 +119,7 @@ cat > "$WIKI/AGENTS.md" <<'EOF'
 # This folder is a wiki-spaces wiki
 
 - Navigation: every `index.md` carries a `## Spaces` heading exhaustively listing the spaces (sub-wikis) directly inside. Keep it true when you add, move, or remove a space.
-- Size caps, UTF-8 bytes (defaults; `_meta/limits.md` overrides): `index.md` 5,000; content pages 15,000; `log.md`/`hot.md` 100,000. Over the cap: distill the page or reshape the space — never truncate.
+- Size caps, UTF-8 bytes (defaults; the user's `_meta/limits.md` overrides): `index.md` 5,000; content pages 15,000; `log.md`/`hot.md` 100,000. Over the cap: distill the page, reshape the space, or promote — never truncate, never raise the cap.
 - Anything under `shared/` is someone else's space: read it on request, write only on explicit instruction.
 - Dialect: Obsidian-flavored markdown (wikilinks, frontmatter, callouts); plain CommonMark is always valid.
 - Spec, conventions, and skills: https://github.com/anfreire/wiki-spaces

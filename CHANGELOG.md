@@ -4,6 +4,102 @@ All notable changes to wiki-spaces are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [4.3.0] — 2026-09-08
+
+The wording that steered models toward raising a cap instead of curating
+now steers the other way, and any folder can keep a space of its own.
+Caps gain an owner — the user — and the override mechanics leave the
+block every skill invocation pays for; promotion stops being "the
+riskiest manual operation" and reads as the routine move it is. A
+`.wiki-spaces/` folder at a folder's root resolves as the wiki from
+anywhere inside that folder — a project's knowledge beside its code —
+a symlink joins it to the personal wiki in whichever direction the
+user keeps it, and trust scope lets placement decide for symlinks as it
+already did for clones.
+
+### Added
+
+- A folder's own space: `.wiki-spaces/` at a folder's root is an
+  ordinary space and the wiki the resolver finds from anywhere inside
+  the folder. A folder answers by its own contract, else by the space
+  it carries — as a CWD ancestor or as the explicit `--wiki` path — and
+  the space is returned resolved, so a link names the space it points
+  at. Dot-prefixed, it never enters another wiki's walk as a child. The
+  space lives with the folder or in the personal wiki — one question,
+  does it ship with the repo, answered by the user and never assumed —
+  and a symlink joins the two: a folder-held space is registered in the
+  wiki like any space and owned by placement; a wiki-held one is an
+  ordinary space there, and the folder's link stays out of the repo
+  (`/.wiki-spaces` in its `.gitignore` — anchored, no trailing slash,
+  since git matches a link by its bare name; never a global exclude,
+  which would hide every folder-held space too). own-space.md carries
+  the setup — on the user's ask, or offered once when a sync targets a
+  folder that has none — and looks before creating: an existing space
+  is reused, a `.wiki-spaces` already on disk is a stop, a folder that
+  is itself a wiki needs none, and every block refuses a taken name.
+  A dot-folder on disk that is not a wiki (a link gone stale, an index
+  without the heading) is noted on stderr before resolution moves on,
+  so a folder never loses its space in silence.
+- A configured-wiki advisory: every command notes the configured wiki
+  whenever the resolved root is not it — a folder's own space, a nested
+  space re-rooted — so the canonical root has an address wherever the
+  caller stands. The note states the fact; what "my wiki" means stays
+  the core block's. ws-update's placement step and ws-search say what
+  to do with it: what concerns the folder stays in its space; what is
+  reusable beyond it belongs with its topic in the configured wiki — a
+  second root the skill names and writes to on a yes, never on its own
+  say-so.
+- The identity suite pins the folder name to `ws.OWN_SPACE` wherever
+  prose restates it, and runs own-space.md's blocks as written — both
+  shapes, the paste of the audit's `missing entry` line, the resolver
+  from inside the folder, git ignoring the link, and a second run
+  changing nothing the first made.
+
+### Changed
+
+- Caps belong to the user. The spec, CONVENTIONS.md, init.md, and the
+  core block say so, and say what an overflow is answered with —
+  distill, reshape, promote — never a raised cap. The core block no
+  longer teaches the `*.md` re-cap: the tool reads limits, and
+  CONVENTIONS.md teaches writing them. init.md's verify step no longer
+  offers "intentionally that size" as the reason to move one. The
+  shrinking allowance is taught where the tool grants it — planned
+  content piped before the write; a file checked on disk answers to
+  the cap alone.
+- Promotion is routine. promote.md and restructure.md drop "riskiest"
+  and "defensive"; inventory now precedes the snapshot; a no-git
+  snapshot is a tar of the files the operation touches — the page, the
+  worklist, the index that registers the result, in a restructure the
+  receiving space too — paths kept, and a git snapshot sends the
+  worklist files the wiki's git does not track to the same tar; the
+  restore step removes what the operation created, so a rollback
+  leaves no half-promoted page behind. ws-update's operations list
+  reads the same way.
+- Trust scope: a symlink whose target lies outside the tree answers to
+  where it sits, like a clone — under `shared/` external, elsewhere
+  owned. One whose target sits inside the tree, as named or as
+  resolved, answers to that position, so an alias into `shared/`
+  cannot lift the fence — the named position fences even when the
+  `shared/` mount is itself a link to a folder outside the tree, which
+  the realpath alone would have let placement own. A link at an owned
+  position to an outside folder is walked by default now, its whole
+  target with it, plain folders included, where it was skipped with a
+  note before; `_meta/ignore.md` silences a name. mount.md's "there is
+  no owned symlink mount" went with the rule, the spec's
+  company-repository example reads the same way, and the six tests
+  that pinned escaping symlinks as external moved on purpose.
+- ws-update's placement step speaks abstractly — knowledge about a
+  source belongs with the source's space, knowledge reusable beyond it
+  with its topic — presuming no `projects/`.
+
+### Fixed
+
+- A symlink loop inside the wiki no longer crashes `check-size` with a
+  recursion error on Python 3.13+, where `resolve()` follows a loop "as
+  far as possible" instead of raising: the scope memo answers a link
+  that asks about itself with its parent's state, and the walk names
+  the entry stale as before.
+
 ## [4.2.0] — 2026-07-16
 
 A precision pass over the balance — what the tool provides, what the

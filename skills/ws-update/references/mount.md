@@ -10,9 +10,8 @@ Someone shares a space — their whole wiki or a subtree; both are just folders 
 
 Mount under `shared/<name>/` by convention — a `shared/` segment classifies as external at any depth, which is what gives the read-only-by-default semantics, and it works the same inside a nested space (`projects/x/shared/<name>/`). Per mechanism:
 
-- A **clone** placed outside any `shared/` (say `projects/<name>/`) classifies as owned and writable — only do that deliberately.
+- A **clone** or a **symlink** answers to where it sits: outside any `shared/` (say `projects/<name>/`) it classifies as owned and writable — do that deliberately; a folder's own `.wiki-spaces/` linked from your wiki is the owned case ([own-space.md](own-space.md)). A symlink whose target sits inside the tree, as named or as resolved, answers to that position — an alias into `shared/` is external, whatever `shared/` links onward to.
 - A **submodule** classifies external wherever it sits: it names another repository by definition, so its content answers to that repository, not to this wiki. An owned mount of your own second repo is a clone, not a submodule.
-- A **symlink** whose target lives outside the tree classifies external wherever it sits — there is no owned symlink mount; to own the content, move it into the tree or clone it.
 
 ## Before mounting
 

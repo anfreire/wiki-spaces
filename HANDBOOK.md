@@ -65,7 +65,7 @@ What the tool may contain comes before how it is written: **the script parses th
 - There is no write path to make safe — that is The line. What replaces write-safety is convergence: every run re-derives from disk, a lost race between concurrent editors is just drift, and the next audit names the repair.
 - Refuse, never truncate. A breached cap or invariant is an error with a clear cause, never a silent cut.
 - Handle failures at boundaries like the filesystem or a parse. Never swallow an exception to limp onward.
-- Errors go to stderr with a cause and a meaningful exit code. Stdout is pure data; what a walk skipped, and the enclosing wiki when the root is nested, rides stderr `note:` advisories — silence speaks for the walk's reach, never the whole disk.
+- Errors go to stderr with a cause and a meaningful exit code. Stdout is pure data; what a walk skipped, the enclosing wiki when the root is nested, and the configured wiki when the root is another, ride stderr `note:` advisories — silence speaks for the walk's reach, never the whole disk.
 
 ### Change and refactor
 

@@ -284,10 +284,12 @@ class AuditTests(unittest.TestCase):
         self.assertNotIn("over-cap shared/team/tiny.md", out)
         self.assertNotIn("over-cap shared/team/wide.md", out)
 
-    def test_symlink_mount_caps_never_inherit_the_hosts_limits(self):
-        # Same fence, third rule: a symlink-mounted space answers to its
-        # own limits (m1) or the defaults (m2, whose tiny.md the host's
-        # 10-byte override must not reach) — never the host's table.
+    def test_symlink_mount_caps_follow_the_fence(self):
+        # A symlink answers to where it sits, like a clone. Under `shared/`
+        # it is external: its own limits (m1) or the defaults (m2, whose
+        # tiny.md the host's 10-byte override must not reach). Outside
+        # `shared/` it is owned, and the host's table reaches it: the same
+        # shape mounted as mine/ is over-cap by the host's rule.
         with tempfile.TemporaryDirectory() as outside:
             m1 = Path(outside).resolve() / "m1"
             support.write(m1 / "index.md", "# M1\n\n## Spaces\n")
@@ -297,11 +299,17 @@ class AuditTests(unittest.TestCase):
             support.write(m2 / "index.md", "# M2\n\n## Spaces\n")
             support.write(m2 / "tiny.md",
                           "# Well over ten bytes, fine by the defaults\n")
-            os.symlink(m1, self.root / "mnt")
-            os.symlink(m2, self.root / "mnt2")
+            m3 = Path(outside).resolve() / "m3"
+            support.write(m3 / "index.md", "# M3\n\n## Spaces\n")
+            support.write(m3 / "tiny.md",
+                          "# Well over ten bytes, over by the host's\n")
+            os.symlink(m1, self.root / "shared" / "mnt")
+            os.symlink(m2, self.root / "shared" / "mnt2")
+            os.symlink(m3, self.root / "mine")
             out = self.audit("--external").stdout
-            self.assertNotIn("over-cap mnt/wide.md", out)
-            self.assertNotIn("over-cap mnt2/tiny.md", out)
+            self.assertNotIn("over-cap shared/mnt/wide.md", out)
+            self.assertNotIn("over-cap shared/mnt2/tiny.md", out)
+            self.assertIn("over-cap mine/tiny.md", out)
 
     def test_external_findings_are_marked(self):
         support.write(self.root / "shared" / "team" / "big.md",

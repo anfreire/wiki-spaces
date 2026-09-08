@@ -1,19 +1,19 @@
 # Restructure a space: rename, move, merge, demote
 
-Promotion's siblings — each operation relocates a space that other pages link into. Reuse [promote.md](promote.md)'s defensive skeleton: snapshot, inventory, move, rewrite, verify, and stop at the first surprise. Never restructure inside an external space, and when a reshape would touch more than the space the user named, confirm scope first.
+Promotion's siblings — each operation relocates a space that other pages link into. Reuse [promote.md](promote.md)'s skeleton: inventory, snapshot, move, rewrite, verify, and stop at the first surprise. Never restructure inside an external space, and when a reshape would touch more than the space the user named, confirm scope first.
 
 ## The shared skeleton
 
-1. **Snapshot** exactly as [promote.md](promote.md) step 1 — no restore path, no restructure.
-2. **Inventory incoming links** before moving anything — one sweep per name the operation changes (the space's own name, and each page whose path moves):
+1. **Inventory incoming links** before moving anything — one sweep per name the operation changes (the space's own name, and each page whose path moves):
    ```sh
    python3 <skill-dir>/scripts/ws.py grep -F '<name>' --wiki <root>
    ```
    Judge each `rel:line:` hit and keep the real links — wikilinks, markdown links, embeds; a code example or a prose mention is not one. The kept union is the rewrite worklist and the verification baseline.
+2. **Snapshot** exactly as [promote.md](promote.md) step 2, over the worklist, the space that moves, the space that receives it, and every parent index step 3 touches — no restore path, no restructure.
 3. **Move** with `git mv` (a git wiki) or `mv`, then make every touched parent true again: the losing parent's `## Spaces` drops the entry, the gaining parent's adds it — the audit's `missing entry` finding prints the exact line to paste. Carry the entry's description along; update it if the reshape changed what the space holds.
 4. **Rewrite links** from the worklist, one file at a time — only the listed occurrences (the worklist carries line numbers; a code example is not on it). When the space's depth changed, its own pages' relative links shift too (`../` per level, in both directions) — wikilinks resolve by name and usually survive.
-5. **Verify:** `audit` must report no drift, every touched parent true; then re-run step 2's sweeps — each worklist occurrence must now speak the new name or path, and a hit still carrying an old form outside a code example is a miss to fix. `check-size` any index you grew.
-6. **On any surprise, restore the snapshot and report** — a half-moved space is worse than an ill-named one.
+5. **Verify:** `audit` must report no drift, every touched parent true; then re-run step 1's sweeps — each worklist occurrence must now speak the new name or path, and a hit still carrying an old form outside a code example is a miss to fix. `check-size` any index you grew.
+6. **On any surprise, restore the snapshot, remove what the operation created, and report** — a half-moved space is worse than an ill-named one.
 
 ## Rename (same parent, new name)
 

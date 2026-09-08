@@ -40,19 +40,19 @@ Caps are measured in UTF-8 bytes, including frontmatter. The default limits are 
 - `hot.md`: 100,000 bytes
 - Any other `*.md` file: 15,000 bytes
 
-You can override these defaults via `_meta/limits.md` using plain `basename: bytes` lines. Any space can carry its own `_meta/limits.md`; the nearest one at or above a file governs it — closest ancestor wins, the same rule `_template.md` uses — and the lookup never crosses a trust boundary, so an external space answers to its own limits or the defaults, never the host's, and a path outside the wiki answers to the defaults alone. The literal name `*.md` re-caps the catch-all for content pages — it is a reserved name, not a glob; patterns and paths are not supported.
+Caps belong to the user. A wiki that wants different ones sets them in `_meta/limits.md`, plain `basename: bytes` lines; a skill reads that file and never raises a cap to fit a write. Any space can carry its own `_meta/limits.md`; the nearest one at or above a file governs it — closest ancestor wins, the same rule `_template.md` uses — and the lookup never crosses a trust boundary, so an external space answers to its own limits or the defaults, never the host's, and a path outside the wiki answers to the defaults alone. The literal name `*.md` re-caps the catch-all for content pages — it is a reserved name, not a glob; patterns and paths are not supported.
 
-Skills check caps with `scripts/ws.py check-size` — planned content piped via `--stdin` before a write, or the file on disk right after an edit; convention appends (`log.md`) lean on the audit backstop instead. An overflow is a signal about shape, not just size: distill the page or reshape the space that holds it — never truncate. A write that shrinks an over-cap file toward its cap is progress, not a new violation — `check-size` reports it `ok` and says so. The audit tool catches any size violations that slip through. This is a detect-and-repair model, not write-time CLI enforcement.
+Skills check caps with `scripts/ws.py check-size` — planned content piped via `--stdin` before a write, or the file on disk right after an edit; convention appends (`log.md`) lean on the audit backstop instead. An overflow is a signal about shape, not just size: distill the page, reshape the space that holds it, or promote a page that has grown into one — never truncate, never raise the cap. A write that shrinks an over-cap file toward its cap is progress, not a new violation — piped before the write, `check-size` reports it `ok` and says so; a file checked on disk answers to the cap alone. The audit tool catches any size violations that slip through. This is a detect-and-repair model, not write-time CLI enforcement.
 
 ## Discovery
 
 Skills locate the active wiki using a specific resolution order:
 
-1. An explicit path provided by the user.
-2. The nearest ancestor of the current working directory that contains a wiki.
+1. An explicit path provided by the user — a wiki, or a folder carrying one at `.wiki-spaces/`.
+2. The nearest ancestor of the current working directory that is a wiki, or that carries a `.wiki-spaces/` folder that is one — a folder's own space; a folder's own contract wins when both exist.
 3. The optional `wiki` key in `~/.config/wiki-spaces/config` (under `$XDG_CONFIG_HOME` when that is set), which defines your canonical personal wiki.
 
-When a current working directory wiki and the canonical wiki both exist but differ, skills announce the resolved root. They'll ask for clarification if there's ambiguity.
+When a current working directory wiki and the canonical wiki both exist but differ, skills announce the resolved root. They'll ask for clarification if there's ambiguity. The script notes the configured wiki whenever the resolved root is not it.
 
 ## Sharing & nesting
 
@@ -60,12 +60,14 @@ What you share is always a space. Your whole wiki is just the top-most space, an
 
 Detached spaces are first-class. Any folder anywhere can be a wiki, such as a company repository keeping one at its root. Wikis relate via mounts.
 
-**Trust scope.** Trust scope is relative to the resolved root. Tools distinguish owned spaces from external spaces. External spaces are defined as anything under a folder named exactly `shared/` (lowercase) at any depth, a git submodule (a submodule names another repository by definition; an owned mount of your own second repo is a clone), or a symlink whose realpath escapes the resolved root or lands in external scope. All three rules apply at any depth — every space is a wiki one level down, so a nested space's mounts get the same fence the root's do.
+**A folder's own space.** Any folder can keep one: `.wiki-spaces/` at its root is an ordinary space, and the wiki every command resolves from anywhere inside the folder — a project's knowledge beside its code, say. Dot-prefixed, it never enters another wiki's walk as a child. The space lives with the folder or in your wiki — the user's call — and a symlink joins the two; on the wiki's side it is registered in `## Spaces` like any space of yours and owned by placement.
+
+**Trust scope.** Trust scope is relative to the resolved root. Tools distinguish owned spaces from external spaces. External spaces are defined as anything under a folder named exactly `shared/` (lowercase) at any depth, a git submodule (a submodule names another repository by definition; an owned mount of your own second repo is a clone), or a symlink whose target, as named or as resolved, sits inside the resolved root at an external position — an alias into `shared/` fences whatever `shared/` links onward to. A symlink whose target lies outside the root has no position to judge, so it answers to where it sits, like a clone: under `shared/` external, elsewhere owned. All three rules apply at any depth — every space is a wiki one level down, so a nested space's mounts get the same fence the root's do.
 
 - **Read operations**: Search, audit, and status cross owned spaces by default. External spaces are visited only when the user explicitly asks.
 - **Write operations**: Writes stay within the targeted space by default. Other spaces, whether owned or external, are written to only with explicit instruction.
 
-This makes auditing reach project knowledge in `projects/<name>/` automatically, while leaving a teammate's space at `shared/team-foo/` untouched. The same company repository is owned when resolved as your root, but external when reached through a mount from your personal wiki.
+This makes auditing reach project knowledge in `projects/<name>/` automatically, while leaving a teammate's space at `shared/team-foo/` untouched. The same company repository is owned when resolved as your root; mounted from your personal wiki, it answers to where it sits — external under `shared/` or as a submodule.
 
 ## Optional conventions
 
